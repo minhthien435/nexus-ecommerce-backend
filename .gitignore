@@ -5,3 +5,7 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Local BMad workflow artifacts
+_bmad/
+_bmad-output/

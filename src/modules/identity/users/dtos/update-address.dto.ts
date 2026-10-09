@@ -10,6 +10,11 @@ export class UpdateAddressDto {
   @ValidateIf((_, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()
+  recipientName?: string;
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @IsNotEmpty()
   provinceCode?: string;
 
   @ValidateIf((_, value) => value !== undefined)
