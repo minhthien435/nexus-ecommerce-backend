@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
-import { CreateAddressDto } from '../dto/create-address.dto.js';
-import { UpdateAddressDto } from '../dto/update-address.dto.js';
+import { CreateAddressDto } from '../dtos/create-address.dto.js';
+import { UpdateAddressDto } from '../dtos/update-address.dto.js';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 
 const MAX_ADDRESSES = 5;

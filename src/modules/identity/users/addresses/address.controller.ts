@@ -11,9 +11,9 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { CurrentUserId } from '../../../common/auth/current-user-id.decorator.js';
-import { CreateAddressDto } from '../dto/create-address.dto.js';
-import { UpdateAddressDto } from '../dto/update-address.dto.js';
+import { CurrentUserId } from '../../../../common/auth/current-user-id.decorator.js';
+import { CreateAddressDto } from '../dtos/create-address.dto.js';
+import { UpdateAddressDto } from '../dtos/update-address.dto.js';
 import { AddressService } from './address.service.js';
 
 @Controller('users/addresses')

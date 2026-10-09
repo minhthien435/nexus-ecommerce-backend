@@ -6,8 +6,8 @@ import {
 import { Test } from '@nestjs/testing';
 import type { NextFunction, Request, Response } from 'express';
 import request from 'supertest';
-import { AddressController } from '../src/modules/identity/address/address.controller.js';
-import { AddressService } from '../src/modules/identity/address/address.service.js';
+import { AddressController } from '../src/modules/identity/users/addresses/address.controller.js';
+import { AddressService } from '../src/modules/identity/users/addresses/address.service.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const addressId = '22222222-2222-4222-8222-222222222222';
