@@ -4,6 +4,7 @@ import { CreateAddressDto } from './create-address.dto.js';
 import { UpdateAddressDto } from './update-address.dto.js';
 
 const validCreatePayload = {
+  recipientName: 'Nguyen Van A',
   provinceCode: '001',
   districtCode: '007',
   wardCode: '00031',
@@ -24,6 +25,7 @@ describe('address DTOs', () => {
 
   it.each([
     'provinceCode',
+    'recipientName',
     'districtCode',
     'wardCode',
     'addressLine',
@@ -78,6 +80,7 @@ describe('address DTOs', () => {
 
   it.each([
     'provinceCode',
+    'recipientName',
     'districtCode',
     'wardCode',
     'addressLine',
