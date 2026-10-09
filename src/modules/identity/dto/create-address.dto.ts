@@ -4,6 +4,10 @@ import { IsBoolean, IsNotEmpty, IsString, Matches } from 'class-validator';
 export class CreateAddressDto {
   @IsString()
   @IsNotEmpty()
+  recipientName: string;
+
+  @IsString()
+  @IsNotEmpty()
   provinceCode: string;
 
   @IsString()

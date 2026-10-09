@@ -9,3 +9,15 @@ after = []
 hitl = false
 risk = "medium"
 refine = true
+
+[[entry]]
+id = 2
+type = "story"
+title = "NEX-106: Xây dựng API CRUD sổ địa chỉ giao hàng"
+description = "Cung cấp API để người dùng đã xác thực xem, tạo, cập nhật và xóa sổ địa chỉ của chính mình với giới hạn năm địa chỉ và duy nhất một địa chỉ mặc định."
+verify = "Các endpoint CRUD chỉ thao tác địa chỉ thuộc user hiện tại; create bắt buộc recipientName; PATCH rỗng bị từ chối; request đồng thời không thể tạo địa chỉ thứ sáu hoặc nhiều hơn một địa chỉ mặc định."
+covers = []
+after = [1]
+hitl = false
+risk = "high"
+refine = true
