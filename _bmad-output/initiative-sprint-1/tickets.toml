@@ -1,0 +1,11 @@
+[[entry]]
+id = 1
+type = "story"
+title = "NEX-105: Xây dựng Entity và DTO cho sổ địa chỉ người dùng"
+description = "Tạo mô hình lưu trữ địa chỉ người dùng và các DTO tạo, cập nhật với dữ liệu hành chính Việt Nam cùng quy tắc kiểm tra số điện thoại người nhận."
+verify = "Entity ánh xạ đúng bảng identity.user_addresses và lưu đủ các trường địa chỉ; CreateAddressDto bắt buộc dữ liệu địa chỉ cùng recipientPhone, UpdateAddressDto cho phép cập nhật từng phần, và số điện thoại sai định dạng bị từ chối."
+covers = []
+after = []
+hitl = false
+risk = "medium"
+refine = true
