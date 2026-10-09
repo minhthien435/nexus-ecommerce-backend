@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { createTypeOrmOptions } from './config/typeorm.config.js';
+import { IdentityModule } from './modules/identity/identity.module.js';
 import { AddressModule } from './modules/identity/users/addresses/address.module.js';
 
 @Module({
@@ -14,6 +15,7 @@ import { AddressModule } from './modules/identity/users/addresses/address.module
       useFactory: createTypeOrmOptions,
     }),
     AddressModule,
+    IdentityModule,
   ],
   controllers: [AppController],
   providers: [AppService],
