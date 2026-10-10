@@ -15,6 +15,8 @@ import { AccessTokenGuard } from './auth/guards/access-token.guard.js';
 import { ProfileUserEntity } from './users/entities/profile-user.entity.js';
 import { ProfileController } from './users/profile/profile.controller.js';
 import { ProfileService } from './users/profile/profile.service.js';
+import { PasswordController } from './users/password/password.controller.js';
+import { PasswordService } from './users/password/password.service.js';
 
 @Module({
   imports: [
@@ -33,8 +35,14 @@ import { ProfileService } from './users/profile/profile.service.js';
       }),
     }),
   ],
-  controllers: [AuthController, ProfileController],
-  providers: [AuthService, TokenService, AccessTokenGuard, ProfileService],
+  controllers: [AuthController, ProfileController, PasswordController],
+  providers: [
+    AuthService,
+    TokenService,
+    AccessTokenGuard,
+    ProfileService,
+    PasswordService,
+  ],
   exports: [AuthService, TokenService],
 })
 export class IdentityModule {}

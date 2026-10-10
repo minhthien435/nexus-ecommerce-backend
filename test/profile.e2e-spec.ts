@@ -1,10 +1,12 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { AccessTokenGuard } from '../src/modules/identity/auth/guards/access-token.guard.js';
 import { ProfileController } from '../src/modules/identity/users/profile/profile.controller.js';
 import { ProfileService } from '../src/modules/identity/users/profile/profile.service.js';
+import { UserEntity } from '../src/modules/identity/domain/user.entity.js';
 
 const secret = 'profile-test-secret';
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -35,6 +37,12 @@ describe('Profile API (e2e)', () => {
       controllers: [ProfileController],
       providers: [
         AccessTokenGuard,
+        {
+          provide: getRepositoryToken(UserEntity),
+          useValue: {
+            findOne: vi.fn().mockResolvedValue({ id: userId, tokenVersion: 0 }),
+          },
+        },
         { provide: ProfileService, useValue: profiles },
       ],
     }).compile();
@@ -47,7 +55,9 @@ describe('Profile API (e2e)', () => {
       }),
     );
     await app.init();
-    token = await module.get(JwtService).signAsync({ sub: userId });
+    token = await module
+      .get(JwtService)
+      .signAsync({ sub: userId, tokenVersion: 0 });
   });
 
   beforeEach(() => vi.clearAllMocks());

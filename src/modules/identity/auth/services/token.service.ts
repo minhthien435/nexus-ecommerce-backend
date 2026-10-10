@@ -1,7 +1,7 @@
 // src/modules/identity/auth/services/token.service.ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import type { Response } from 'express';
@@ -14,6 +14,7 @@ export class TokenService {
     @InjectRepository(RefreshTokenEntity)
     private readonly tokenRepo: Repository<RefreshTokenEntity>,
     private readonly jwtService: JwtService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private hashToken(token: string): string {
@@ -21,20 +22,25 @@ export class TokenService {
   }
 
   async generateAccessToken(user: UserEntity): Promise<string> {
-    const payload = { sub: user.id, email: user.email };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      tokenVersion: user.tokenVersion,
+    };
     return this.jwtService.signAsync(payload, { expiresIn: '15m' });
   }
 
   async createRefreshToken(
     userId: string,
     metadata: { ipAddress?: string; userAgent?: string; familyId?: string },
+    tokens: Repository<RefreshTokenEntity> = this.tokenRepo,
   ): Promise<string> {
     const rawToken = randomBytes(64).toString('hex');
     const tokenHash = this.hashToken(rawToken);
     const familyId = metadata.familyId || randomUUID();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 ngày
 
-    const entity = this.tokenRepo.create({
+    const entity = tokens.create({
       userId,
       tokenHash,
       familyId,
@@ -43,7 +49,7 @@ export class TokenService {
       userAgent: metadata.userAgent || null,
     });
 
-    await this.tokenRepo.save(entity);
+    await tokens.save(entity);
     return rawToken;
   }
 
@@ -56,57 +62,79 @@ export class TokenService {
     newAccessToken: string;
   }> {
     const tokenHash = this.hashToken(rawToken);
-    const foundToken = await this.tokenRepo.findOne({
+    const tokenIdentity = await this.tokenRepo.findOne({
       where: { tokenHash },
-      relations: { user: true },
+      select: { id: true, userId: true },
     });
 
-    if (!foundToken) {
+    if (!tokenIdentity) {
       throw new UnauthorizedException('Refresh Token không tồn tại');
     }
 
-    // Reuse Detection: Token đã bị thu hồi trước đó nhưng lại được dùng lại
-    if (foundToken.revokedAt) {
-      // HỦY TOÀN BỘ TOKEN CÙNG FAMILY_ID NGAY LẬP TỨC
-      await this.tokenRepo.update(
-        { familyId: foundToken.familyId },
-        { revokedAt: new Date() },
+    const result = await this.dataSource.transaction(async (manager) => {
+      const user = await manager
+        .getRepository(UserEntity)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId: tokenIdentity.userId })
+        .andWhere('user.deleted_at IS NULL')
+        .andWhere('user.status = :status', { status: 'ACTIVE' })
+        .getOne();
+      if (!user) throw new UnauthorizedException();
+      const tokens = manager.getRepository(RefreshTokenEntity);
+      const foundToken = await tokens.findOne({ where: { tokenHash } });
+      if (!foundToken)
+        throw new UnauthorizedException('Refresh Token không tồn tại');
+      if (foundToken.revokedAt) {
+        await tokens.update(
+          { familyId: foundToken.familyId, revokedAt: IsNull() },
+          { revokedAt: new Date() },
+        );
+        return { reused: true as const };
+      }
+      if (new Date() > foundToken.expiresAt) {
+        throw new UnauthorizedException('Refresh Token đã hết hạn');
+      }
+      foundToken.revokedAt = new Date();
+      await tokens.save(foundToken);
+      const newRawRefreshToken = await this.createRefreshToken(
+        foundToken.userId,
+        { ...metadata, familyId: foundToken.familyId },
+        tokens,
       );
+      return {
+        reused: false as const,
+        user,
+        newRawRefreshToken,
+        newAccessToken: await this.generateAccessToken(user),
+      };
+    });
+    if (result.reused) {
       throw new UnauthorizedException(
         'Phát hiện token bị đánh cắp. Vui lòng đăng nhập lại',
       );
     }
-
-    // Hết hạn thông thường
-    if (new Date() > foundToken.expiresAt) {
-      throw new UnauthorizedException('Refresh Token đã hết hạn');
-    }
-
-    // Thu hồi token hiện tại
-    foundToken.revokedAt = new Date();
-    await this.tokenRepo.save(foundToken);
-
-    // Kế thừa family_id và cấp token mới
-    const newRawRefreshToken = await this.createRefreshToken(
-      foundToken.userId,
-      {
-        ...metadata,
-        familyId: foundToken.familyId,
-      },
-    );
-
-    const newAccessToken = await this.generateAccessToken(foundToken.user);
-
-    return {
-      user: foundToken.user,
-      newRawRefreshToken,
-      newAccessToken,
-    };
+    return result;
   }
 
   async revokeToken(rawToken: string): Promise<void> {
     const tokenHash = this.hashToken(rawToken);
-    await this.tokenRepo.update({ tokenHash }, { revokedAt: new Date() });
+    const tokenIdentity = await this.tokenRepo.findOne({
+      where: { tokenHash },
+      select: { userId: true },
+    });
+    if (!tokenIdentity) return;
+    await this.dataSource.transaction(async (manager) => {
+      await manager
+        .getRepository(UserEntity)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId: tokenIdentity.userId })
+        .getOne();
+      await manager
+        .getRepository(RefreshTokenEntity)
+        .update({ tokenHash }, { revokedAt: new Date() });
+    });
   }
 
   setRefreshTokenCookie(res: Response, token: string): void {

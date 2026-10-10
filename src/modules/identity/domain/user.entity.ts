@@ -41,6 +41,9 @@ export class UserEntity {
   @Column({ type: 'varchar', name: 'password_hash' })
   passwordHash: string;
 
+  @Column({ type: 'integer', default: 0, name: 'token_version' })
+  tokenVersion: number;
+
   @Column({ type: 'varchar', default: 'ACTIVE' })
   status: string;
 
