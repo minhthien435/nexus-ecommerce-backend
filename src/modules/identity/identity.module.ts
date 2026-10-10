@@ -11,6 +11,13 @@ import { PasswordResetTokenEntity } from './domain/password-reset-token.entity.j
 import { AuthService } from './auth/services/auth.service.js';
 import { TokenService } from './auth/services/token.service.js';
 import { AuthController } from './auth/controllers/auth.controller.js';
+import { AccessTokenGuard } from './auth/guards/access-token.guard.js';
+import { ProfileUserEntity } from './users/entities/profile-user.entity.js';
+import {
+  CurrentProfileController,
+  ProfileController,
+} from './users/profile/profile.controller.js';
+import { ProfileService } from './users/profile/profile.service.js';
 
 @Module({
   imports: [
@@ -18,6 +25,7 @@ import { AuthController } from './auth/controllers/auth.controller.js';
       UserEntity,
       RefreshTokenEntity,
       PasswordResetTokenEntity,
+      ProfileUserEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -28,8 +36,8 @@ import { AuthController } from './auth/controllers/auth.controller.js';
       }),
     }),
   ],
-  controllers: [AuthController],
-  providers: [AuthService, TokenService],
+  controllers: [AuthController, CurrentProfileController, ProfileController],
+  providers: [AuthService, TokenService, AccessTokenGuard, ProfileService],
   exports: [AuthService, TokenService],
 })
 export class IdentityModule {}
