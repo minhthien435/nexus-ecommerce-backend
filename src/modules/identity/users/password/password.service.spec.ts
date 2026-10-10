@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as argon2 from 'argon2';
 import { UserEntity } from '../../domain/user.entity.js';
 import { PasswordService } from './password.service.js';
@@ -11,12 +13,12 @@ vi.mock('argon2', () => ({
 }));
 
 type State = {
-  user: { id: string; passwordHash: string; tokenVersion: number };
+  user: { id: string; passwordHash: string; tokenVersion: number } | null;
   tokens: Array<{ userId: string; revokedAt: Date | null }>;
 };
 
 const clone = (state: State): State => ({
-  user: { ...state.user },
+  user: state.user ? { ...state.user } : null,
   tokens: state.tokens.map((token) => ({ ...token })),
 });
 
@@ -56,7 +58,9 @@ function statefulDataSource(initial: State) {
             firstReadSeen();
             await firstReadGate;
           }
-          return Object.assign(new UserEntity(), draft.user);
+          return draft.user
+            ? Object.assign(new UserEntity(), draft.user)
+            : null;
         }),
       };
       const users = {
@@ -176,22 +180,37 @@ describe('PasswordService', () => {
     expect(results[1].status === 'rejected' && results[1].reason.message).toBe(
       'Current password is incorrect',
     );
-    expect(fake.state().user.tokenVersion).toBe(5);
+    expect(fake.state().user?.tokenVersion).toBe(5);
   });
 
-  it('does not write on incorrect current or identical new password', async () => {
-    for (const input of [
-      { currentPassword: 'WrongPassword1!', newPassword: 'NewPassword2!' },
-      { currentPassword: 'OldPassword1!', newPassword: 'OldPassword1!' },
-    ]) {
-      const fake = statefulDataSource(initial);
-      await expect(
-        new PasswordService(fake.dataSource as never).changePassword(
-          'user-1',
-          input,
-        ),
-      ).rejects.toThrow();
-      expect(fake.state()).toEqual(initial);
-    }
+  it('throws BadRequestException when user does not exist or is inactive', async () => {
+    const fake = statefulDataSource({ user: null, tokens: [] });
+    await expect(
+      new PasswordService(fake.dataSource as never).changePassword('user-99', {
+        currentPassword: 'OldPassword1!',
+        newPassword: 'NewPassword2!',
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('throws BadRequestException with exact message when new password is identical to current password', async () => {
+    const fake = statefulDataSource(initial);
+    await expect(
+      new PasswordService(fake.dataSource as never).changePassword('user-1', {
+        currentPassword: 'OldPassword1!',
+        newPassword: 'OldPassword1!',
+      }),
+    ).rejects.toThrow('New password must be different from current password');
+  });
+
+  it('does not write on incorrect current password', async () => {
+    const fake = statefulDataSource(initial);
+    await expect(
+      new PasswordService(fake.dataSource as never).changePassword('user-1', {
+        currentPassword: 'WrongPassword1!',
+        newPassword: 'NewPassword2!',
+      }),
+    ).rejects.toThrow('Current password is incorrect');
+    expect(fake.state()).toEqual(initial);
   });
 });
