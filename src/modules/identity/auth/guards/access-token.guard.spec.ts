@@ -1,68 +1,66 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { AccessTokenGuard } from './access-token.guard.js';
 
+const id = '11111111-1111-4111-8111-111111111111';
 const context = (authorization?: string) => {
-  const request: {
-    headers: { authorization: string | undefined };
-    user?: { id: string };
-  } = { headers: { authorization } };
+  const request: any = { headers: { authorization } };
   return {
     request,
-    context: {
-      switchToHttp: () => ({ getRequest: () => request }),
-    } as never,
+    value: { switchToHttp: () => ({ getRequest: () => request }) } as never,
   };
 };
 
 describe('AccessTokenGuard', () => {
-  it('verifies the token and assigns a valid subject', async () => {
-    const jwt = {
-      verifyAsync: vi.fn().mockResolvedValue({
-        sub: '11111111-1111-4111-8111-111111111111',
-      }),
-    };
-    const guard = new AccessTokenGuard(jwt as never);
-    const test = context('Bearer valid-token');
+  const users = { findOne: vi.fn() };
+  beforeEach(() => vi.clearAllMocks());
 
-    await expect(guard.canActivate(test.context)).resolves.toBe(true);
-    expect(test.request.user).toEqual({
-      id: '11111111-1111-4111-8111-111111111111',
-    });
+  it('accepts only a matching version for an active, non-deleted user', async () => {
+    users.findOne.mockResolvedValue({ id, tokenVersion: 3 });
+    const test = context('Bearer valid');
+    await expect(
+      new AccessTokenGuard(
+        {
+          verifyAsync: vi.fn().mockResolvedValue({ sub: id, tokenVersion: 3 }),
+        } as never,
+        users as never,
+      ).canActivate(test.value),
+    ).resolves.toBe(true);
+    expect(users.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'ACTIVE' }),
+      }),
+    );
+    expect(test.request.user).toEqual({ id });
   });
 
   it.each([
-    undefined,
-    'Basic token',
-    'Bearer',
-    'Bearer token garbage',
-    'Bearer ',
-  ])('rejects malformed authorization header %s', async (authorization) => {
-    const jwt = { verifyAsync: vi.fn() };
+    { sub: id },
+    { sub: id, tokenVersion: '3' },
+    { sub: id, tokenVersion: 3.5 },
+    { sub: 'invalid', tokenVersion: 3 },
+  ])('rejects invalid or legacy claims %#', async (claims) => {
     await expect(
-      new AccessTokenGuard(jwt as never).canActivate(
-        context(authorization).context,
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(jwt.verifyAsync).not.toHaveBeenCalled();
-  });
-
-  it('rejects invalid tokens and invalid subjects', async () => {
-    const invalidToken = {
-      verifyAsync: vi.fn().mockRejectedValue(new Error('invalid')),
-    };
-    await expect(
-      new AccessTokenGuard(invalidToken as never).canActivate(
-        context('Bearer token').context,
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-
-    const invalidSubject = {
-      verifyAsync: vi.fn().mockResolvedValue({ sub: 'not-a-uuid' }),
-    };
-    await expect(
-      new AccessTokenGuard(invalidSubject as never).canActivate(
-        context('Bearer token').context,
-      ),
+      new AccessTokenGuard(
+        { verifyAsync: vi.fn().mockResolvedValue(claims) } as never,
+        users as never,
+      ).canActivate(context('Bearer token').value),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
+
+  it.each([null, { id, tokenVersion: 4 }])(
+    'rejects absent/inactive/deleted or stale-version users',
+    async (user) => {
+      users.findOne.mockResolvedValue(user);
+      await expect(
+        new AccessTokenGuard(
+          {
+            verifyAsync: vi
+              .fn()
+              .mockResolvedValue({ sub: id, tokenVersion: 3 }),
+          } as never,
+          users as never,
+        ).canActivate(context('Bearer token').value),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    },
+  );
 });

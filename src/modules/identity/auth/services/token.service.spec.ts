@@ -1,103 +1,134 @@
 import { UnauthorizedException } from '@nestjs/common';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TokenService } from './token.service.js';
-import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
 import { UserEntity } from '../../domain/user.entity.js';
+import { TokenService } from './token.service.js';
 
-describe('TokenService (Token Family & Reuse Detection)', () => {
-  let tokenService: TokenService;
+describe('TokenService', () => {
+  let service: TokenService;
   let tokenRepo: any;
-  let jwtService: any;
+  let txTokens: any;
+  let userQuery: any;
+  let jwt: any;
+  const user = Object.assign(new UserEntity(), {
+    id: 'user-1',
+    email: 'user@example.com',
+    tokenVersion: 6,
+  });
 
   beforeEach(() => {
     tokenRepo = {
-      create: vi.fn((data) => ({ id: 'token-uuid', ...data })),
-      save: vi.fn((token) => Promise.resolve(token)),
       findOne: vi.fn(),
-      update: vi.fn().mockResolvedValue({ affected: 1 }),
+      create: vi.fn((value) => value),
+      save: vi.fn(async (value) => value),
+      update: vi.fn(),
     };
-
-    jwtService = {
-      signAsync: vi.fn().mockResolvedValue('jwt-access-token-15m'),
+    txTokens = {
+      findOne: vi.fn(),
+      create: vi.fn((value) => value),
+      save: vi.fn(async (value) => value),
+      update: vi.fn(),
     };
-
-    tokenService = new TokenService(tokenRepo, jwtService);
+    userQuery = {
+      setLock: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      getOne: vi.fn().mockResolvedValue(user),
+    };
+    const manager = {
+      getRepository: vi.fn((entity) =>
+        entity === UserEntity
+          ? { createQueryBuilder: vi.fn(() => userQuery) }
+          : txTokens,
+      ),
+    };
+    jwt = { signAsync: vi.fn().mockResolvedValue('access') };
+    service = new TokenService(tokenRepo, jwt, {
+      transaction: vi.fn(async (work) => work(manager)),
+    } as never);
   });
 
-  describe('createRefreshToken', () => {
-    it('tạo refresh token mới với family_id và hạn 7 ngày', async () => {
-      const rawToken = await tokenService.createRefreshToken('user-1', {
-        ipAddress: '127.0.0.1',
-        userAgent: 'Mozilla',
-      });
-
-      expect(typeof rawToken).toBe('string');
-      expect(tokenRepo.create).toHaveBeenCalled();
-      expect(tokenRepo.save).toHaveBeenCalled();
-    });
+  it('adds current tokenVersion and retains 15 minute access expiry', async () => {
+    await service.generateAccessToken(user);
+    expect(jwt.signAsync).toHaveBeenCalledWith(
+      { sub: user.id, email: user.email, tokenVersion: 6 },
+      { expiresIn: '15m' },
+    );
   });
 
-  describe('rotateRefreshToken (Rotation & Reuse Detection)', () => {
-    it('báo UnauthorizedException nếu token không tồn tại', async () => {
-      tokenRepo.findOne.mockResolvedValueOnce(null);
+  it('uses a provided transaction repository for refresh creation', async () => {
+    await service.createRefreshToken(user.id, {}, txTokens);
+    expect(txTokens.save).toHaveBeenCalled();
+    expect(tokenRepo.save).not.toHaveBeenCalled();
+  });
 
-      await expect(
-        tokenService.rotateRefreshToken('non-existent-token', {}),
-      ).rejects.toThrow(UnauthorizedException);
+  it('locks the active user then rereads and rotates the token atomically', async () => {
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    txTokens.findOne.mockResolvedValue({
+      userId: user.id,
+      familyId: 'family',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 60_000),
     });
-
-    it('PHÁT HIỆN REUSE DETECTION: thu hồi toàn bộ family_id khi token đã bị revoke bị dùng lại', async () => {
-      const reusedToken = new RefreshTokenEntity();
-      reusedToken.familyId = 'family-uuid-123';
-      reusedToken.revokedAt = new Date(Date.now() - 3600000); // Đã bị thu hồi 1 tiếng trước
-
-      tokenRepo.findOne.mockResolvedValueOnce(reusedToken);
-
-      await expect(
-        tokenService.rotateRefreshToken('stolen-reused-token', {}),
-      ).rejects.toThrow('Phát hiện token bị đánh cắp. Vui lòng đăng nhập lại');
-
-      // Phải gọi update thu hồi toàn bộ token cùng family_id
-      expect(tokenRepo.update).toHaveBeenCalledWith(
-        { familyId: 'family-uuid-123' },
-        expect.objectContaining({ revokedAt: expect.any(Date) }),
-      );
+    await expect(service.rotateRefreshToken('raw', {})).resolves.toMatchObject({
+      user,
+      newAccessToken: 'access',
     });
-
-    it('báo UnauthorizedException nếu token đã quá hạn 7 ngày', async () => {
-      const expiredToken = new RefreshTokenEntity();
-      expiredToken.revokedAt = null;
-      expiredToken.expiresAt = new Date(Date.now() - 1000); // Hết hạn
-
-      tokenRepo.findOne.mockResolvedValueOnce(expiredToken);
-
-      await expect(
-        tokenService.rotateRefreshToken('expired-token', {}),
-      ).rejects.toThrow('Refresh Token đã hết hạn');
+    expect(userQuery.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(userQuery.andWhere).toHaveBeenCalledWith('user.status = :status', {
+      status: 'ACTIVE',
     });
+    expect(txTokens.save).toHaveBeenCalledTimes(2);
+  });
 
-    it('xoay vòng hợp lệ: thu hồi token cũ, cấp token mới cùng family_id', async () => {
-      const user = new UserEntity();
-      user.id = 'user-1';
-      user.email = 'test@example.com';
-
-      const validToken = new RefreshTokenEntity();
-      validToken.userId = 'user-1';
-      validToken.familyId = 'family-uuid-123';
-      validToken.revokedAt = null;
-      validToken.expiresAt = new Date(Date.now() + 6 * 24 * 3600000);
-      validToken.user = user;
-
-      tokenRepo.findOne.mockResolvedValueOnce(validToken);
-
-      const result = await tokenService.rotateRefreshToken('valid-raw-token', {
-        ipAddress: '127.0.0.1',
-      });
-
-      expect(validToken.revokedAt).toBeInstanceOf(Date);
-      expect(result.newAccessToken).toBe('jwt-access-token-15m');
-      expect(typeof result.newRawRefreshToken).toBe('string');
-      expect(result.user).toBe(user);
+  it('keeps reuse detection and commits family revocation before throwing', async () => {
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    txTokens.findOne.mockResolvedValue({
+      familyId: 'family',
+      revokedAt: new Date(),
     });
+    await expect(service.rotateRefreshToken('raw', {})).rejects.toThrow(
+      'Phát hiện token bị đánh cắp. Vui lòng đăng nhập lại',
+    );
+    expect(txTokens.update).toHaveBeenCalled();
+  });
+
+  it('creates no successor when password change revokes refresh while rotation waits for the user lock', async () => {
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    txTokens.findOne.mockResolvedValue({
+      familyId: 'family',
+      revokedAt: new Date(),
+    });
+    await expect(service.rotateRefreshToken('concurrent', {})).rejects.toThrow(
+      'Phát hiện token bị đánh cắp. Vui lòng đăng nhập lại',
+    );
+    expect(userQuery.getOne.mock.invocationCallOrder[0]).toBeLessThan(
+      txTokens.findOne.mock.invocationCallOrder[0],
+    );
+    expect(txTokens.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown, expired, and inactive-user refresh attempts', async () => {
+    tokenRepo.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.rotateRefreshToken('missing', {}),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    txTokens.findOne.mockResolvedValue({
+      revokedAt: null,
+      expiresAt: new Date(Date.now() - 1),
+    });
+    await expect(service.rotateRefreshToken('expired', {})).rejects.toThrow(
+      'Refresh Token đã hết hạn',
+    );
+    userQuery.getOne.mockResolvedValueOnce(null);
+    await expect(
+      service.rotateRefreshToken('inactive', {}),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('serializes logout revocation with the same user lock', async () => {
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    await service.revokeToken('raw');
+    expect(userQuery.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(txTokens.update).toHaveBeenCalled();
   });
 });

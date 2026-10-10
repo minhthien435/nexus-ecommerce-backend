@@ -5,9 +5,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as argon2 from 'argon2';
 import { UserEntity } from '../../domain/user.entity.js';
+import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
 import { RegisterDto } from '../dtos/register.dto.js';
 import { LoginDto } from '../dtos/login.dto.js';
 import { TokenService } from './token.service.js';
@@ -18,6 +19,7 @@ export class AuthService {
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
     private readonly tokenService: TokenService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async register(dto: RegisterDto): Promise<Omit<UserEntity, 'passwordHash'>> {
@@ -59,59 +61,60 @@ export class AuthService {
     accessToken: string;
     rawRefreshToken: string;
   }> {
-    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+    const result = await this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(UserEntity);
+      const user = await users
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.email = :email', { email: dto.email })
+        .andWhere('user.deleted_at IS NULL')
+        .andWhere('user.status = :status', { status: 'ACTIVE' })
+        .getOne();
+      if (!user) return { unauthorized: true as const };
 
-    if (!user) {
-      throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
-    }
-
-    // 1. Kiểm tra khóa tài khoản (locked_until > now)
-    const now = new Date();
-    if (user.lockedUntil && user.lockedUntil > now) {
-      const remainingMinutes = Math.ceil(
-        (user.lockedUntil.getTime() - now.getTime()) / 60000,
-      );
-      throw new ForbiddenException(
-        `Tài khoản đang tạm khóa do nhập sai nhiều lần. Vui lòng thử lại sau ${remainingMinutes} phút`,
-      );
-    }
-
-    // 2. Xác thực Argon2id
-    const isPasswordValid = await argon2.verify(
-      user.passwordHash,
-      dto.password,
-    );
-
-    if (!isPasswordValid) {
-      const attempts = user.failedLoginAttempts + 1;
-      if (attempts >= 5) {
-        user.failedLoginAttempts = 0;
-        user.lockedUntil = new Date(now.getTime() + 15 * 60000); // Khóa 15 phút
-      } else {
-        user.failedLoginAttempts = attempts;
+      const now = new Date();
+      if (user.lockedUntil && user.lockedUntil > now) {
+        const remainingMinutes = Math.ceil(
+          (user.lockedUntil.getTime() - now.getTime()) / 60000,
+        );
+        throw new ForbiddenException(
+          `Tài khoản đang tạm khóa do nhập sai nhiều lần. Vui lòng thử lại sau ${remainingMinutes} phút`,
+        );
       }
-      await this.userRepo.save(user);
+      if (!(await argon2.verify(user.passwordHash, dto.password))) {
+        const attempts = user.failedLoginAttempts + 1;
+        if (attempts >= 5) {
+          user.failedLoginAttempts = 0;
+          user.lockedUntil = new Date(now.getTime() + 15 * 60000);
+        } else {
+          user.failedLoginAttempts = attempts;
+        }
+        await users.save(user);
+        return { unauthorized: true as const };
+      }
+
+      user.failedLoginAttempts = 0;
+      user.lockedUntil = null;
+      user.lastLoginAt = now;
+      await users.save(user);
+      const accessToken = await this.tokenService.generateAccessToken(user);
+      const rawRefreshToken = await this.tokenService.createRefreshToken(
+        user.id,
+        metadata,
+        manager.getRepository(RefreshTokenEntity),
+      );
+      const { passwordHash: _, ...safeUser } = user;
+      return {
+        unauthorized: false as const,
+        user: safeUser as Omit<UserEntity, 'passwordHash'>,
+        accessToken,
+        rawRefreshToken,
+      };
+    });
+    if (result.unauthorized) {
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
-
-    // 3. Đăng nhập thành công -> Reset lockout
-    user.failedLoginAttempts = 0;
-    user.lockedUntil = null;
-    user.lastLoginAt = now;
-    await this.userRepo.save(user);
-
-    // 4. Tạo Tokens
-    const accessToken = await this.tokenService.generateAccessToken(user);
-    const rawRefreshToken = await this.tokenService.createRefreshToken(
-      user.id,
-      metadata,
-    );
-
-    const { passwordHash: _, ...safeUser } = user;
-    return {
-      user: safeUser as Omit<UserEntity, 'passwordHash'>,
-      accessToken,
-      rawRefreshToken,
-    };
+    const { unauthorized: _, ...authenticated } = result;
+    return authenticated;
   }
 }
