@@ -25,9 +25,7 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "db:test": "node scripts/test-db.mjs",
-    "migration:run": "npm run build && typeorm migration:run -d dist/database/data-source.js",
-    "migration:revert": "npm run build && typeorm migration:revert -d dist/database/data-source.js"
+    "db:test": "node scripts/test-db.mjs"
   },
   "lint-staged": {
     "*.ts": [
