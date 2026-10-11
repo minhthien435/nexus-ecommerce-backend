@@ -23,6 +23,7 @@ describe('AuthService', () => {
   let query: any;
   let tokenService: any;
   let refreshTokens: any;
+  let manager: any;
   let service: AuthService;
 
   beforeEach(() => {
@@ -43,6 +44,7 @@ describe('AuthService', () => {
 
     users = {
       createQueryBuilder: vi.fn(() => query),
+      create: vi.fn((value) => ({ id: 'new-user', tokenVersion: 0, ...value })),
       save: vi.fn(async (value) => value),
     };
 
@@ -52,6 +54,7 @@ describe('AuthService', () => {
       getRepository: vi.fn((entity) =>
         entity === UserEntity ? users : refreshTokens,
       ),
+      query: vi.fn().mockResolvedValue([{ role_id: 'buyer-role' }]),
     };
 
     tokenService = {

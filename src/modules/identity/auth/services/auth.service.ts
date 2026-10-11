@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   ForbiddenException,
+  InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -40,15 +41,32 @@ export class AuthService {
       timeCost: 3,
     });
 
-    const user = this.userRepo.create({
-      email: dto.email,
-      phone: dto.phone || null,
-      passwordHash,
-      fullName: dto.fullName,
-      status: 'ACTIVE',
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(UserEntity);
+      const user = users.create({
+        email: dto.email,
+        phone: dto.phone || null,
+        passwordHash,
+        fullName: dto.fullName,
+        status: 'ACTIVE',
+      });
+      const created = await users.save(user);
+      const assignments = await manager.query<Array<{ role_id: string }>>(
+        `INSERT INTO identity.user_roles (user_id, role_id)
+         SELECT $1, id
+           FROM identity.roles
+          WHERE code = 'BUYER' AND deleted_at IS NULL
+         ON CONFLICT (user_id, role_id) DO NOTHING
+         RETURNING role_id`,
+        [created.id],
+      );
+      if (assignments.length !== 1) {
+        throw new InternalServerErrorException(
+          'Default BUYER role is not configured',
+        );
+      }
+      return created;
     });
-
-    const saved = await this.userRepo.save(user);
     const { passwordHash: _, ...result } = saved;
     return result as Omit<UserEntity, 'passwordHash'>;
   }

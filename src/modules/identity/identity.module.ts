@@ -17,6 +17,17 @@ import { ProfileController } from './users/profile/profile.controller.js';
 import { ProfileService } from './users/profile/profile.service.js';
 import { PasswordController } from './users/password/password.controller.js';
 import { PasswordService } from './users/password/password.service.js';
+import { PrivilegeEntity } from './rbac/entities/privilege.entity.js';
+import { RolePrivilegeEntity } from './rbac/entities/role-privilege.entity.js';
+import { RoleEntity } from './rbac/entities/role.entity.js';
+import { UserRoleEntity } from './rbac/entities/user-role.entity.js';
+import { PermissionsGuard } from './rbac/guards/permissions.guard.js';
+import { RolesGuard } from './rbac/guards/roles.guard.js';
+import { RbacService } from './rbac/rbac.service.js';
+import { AdminUserController } from './admin/admin-user.controller.js';
+import { AdminUserService } from './admin/admin-user.service.js';
+import { IdentityPublicApi } from './identity-public.api.js';
+import { IdentityPublicApiService } from './identity-public-api.service.js';
 
 @Module({
   imports: [
@@ -25,6 +36,10 @@ import { PasswordService } from './users/password/password.service.js';
       RefreshTokenEntity,
       PasswordResetTokenEntity,
       ProfileUserEntity,
+      RoleEntity,
+      PrivilegeEntity,
+      UserRoleEntity,
+      RolePrivilegeEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -35,14 +50,34 @@ import { PasswordService } from './users/password/password.service.js';
       }),
     }),
   ],
-  controllers: [AuthController, ProfileController, PasswordController],
+  controllers: [
+    AuthController,
+    ProfileController,
+    PasswordController,
+    AdminUserController,
+  ],
   providers: [
     AuthService,
     TokenService,
     AccessTokenGuard,
     ProfileService,
     PasswordService,
+    RbacService,
+    RolesGuard,
+    PermissionsGuard,
+    AdminUserService,
+    {
+      provide: IdentityPublicApi,
+      useClass: IdentityPublicApiService,
+    },
   ],
-  exports: [AuthService, TokenService],
+  exports: [
+    AuthService,
+    TokenService,
+    RbacService,
+    RolesGuard,
+    PermissionsGuard,
+    IdentityPublicApi,
+  ],
 })
 export class IdentityModule {}

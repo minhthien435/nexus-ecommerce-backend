@@ -27,7 +27,8 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "db:test": "node scripts/test-db.mjs",
     "migration:run": "npm run build && typeorm migration:run -d dist/database/data-source.js",
-    "migration:revert": "npm run build && typeorm migration:revert -d dist/database/data-source.js"
+    "migration:revert": "npm run build && typeorm migration:revert -d dist/database/data-source.js",
+    "seed:rbac": "npm run build && node dist/database/seeds/run-rbac-seed.js"
   },
   "lint-staged": {
     "*.ts": [

@@ -6,6 +6,7 @@ import {
   DeleteDateColumn,
   CreateDateColumn,
 } from 'typeorm';
+import type { UserStatus } from './user-status.js';
 
 @Entity({ name: 'users', schema: 'identity' })
 export class UserEntity {
@@ -45,7 +46,7 @@ export class UserEntity {
   tokenVersion: number;
 
   @Column({ type: 'varchar', default: 'ACTIVE' })
-  status: string;
+  status: UserStatus;
 
   @Column({ type: 'integer', default: 0, name: 'failed_login_attempts' })
   failedLoginAttempts: number;
