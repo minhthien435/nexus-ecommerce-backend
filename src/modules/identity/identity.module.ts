@@ -26,6 +26,8 @@ import { RolesGuard } from './rbac/guards/roles.guard.js';
 import { RbacService } from './rbac/rbac.service.js';
 import { AdminUserController } from './admin/admin-user.controller.js';
 import { AdminUserService } from './admin/admin-user.service.js';
+import { IdentityPublicApi } from './identity-public.api.js';
+import { IdentityPublicApiService } from './identity-public-api.service.js';
 
 @Module({
   imports: [
@@ -64,6 +66,10 @@ import { AdminUserService } from './admin/admin-user.service.js';
     RolesGuard,
     PermissionsGuard,
     AdminUserService,
+    {
+      provide: IdentityPublicApi,
+      useClass: IdentityPublicApiService,
+    },
   ],
   exports: [
     AuthService,
@@ -71,6 +77,7 @@ import { AdminUserService } from './admin/admin-user.service.js';
     RbacService,
     RolesGuard,
     PermissionsGuard,
+    IdentityPublicApi,
   ],
 })
 export class IdentityModule {}
