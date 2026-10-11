@@ -1,7 +1,21 @@
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as argon2 from 'argon2';
 import { UserEntity } from '../../domain/user.entity.js';
+import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
 import { AuthService } from './auth.service.js';
+
+vi.mock('argon2', () => ({
+  argon2id: 2,
+  verify: vi.fn(
+    async (hash: string, password: string) => hash === `hash:${password}`,
+  ),
+  hash: vi.fn(async (password: string) => `hash:${password}`),
+}));
 
 describe('AuthService', () => {
   let userRepo: any;
@@ -13,118 +27,267 @@ describe('AuthService', () => {
   let service: AuthService;
 
   beforeEach(() => {
+    vi.clearAllMocks();
+
     userRepo = {
       findOne: vi.fn(),
       create: vi.fn((value) => ({ id: 'new-user', tokenVersion: 0, ...value })),
       save: vi.fn(async (value) => value),
     };
+
     query = {
       setLock: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       andWhere: vi.fn().mockReturnThis(),
       getOne: vi.fn(),
     };
+
     users = {
       createQueryBuilder: vi.fn(() => query),
       create: vi.fn((value) => ({ id: 'new-user', tokenVersion: 0, ...value })),
       save: vi.fn(async (value) => value),
     };
+
     refreshTokens = {};
-    manager = {
+
+    const manager = {
       getRepository: vi.fn((entity) =>
         entity === UserEntity ? users : refreshTokens,
       ),
       query: vi.fn().mockResolvedValue([{ role_id: 'buyer-role' }]),
     };
+
     tokenService = {
-      generateAccessToken: vi.fn().mockResolvedValue('access'),
-      createRefreshToken: vi.fn().mockResolvedValue('refresh'),
+      generateAccessToken: vi.fn().mockResolvedValue('access-token'),
+      createRefreshToken: vi.fn().mockResolvedValue('refresh-token'),
     };
+
     service = new AuthService(userRepo, tokenService, {
       transaction: vi.fn(async (work) => work(manager)),
     } as never);
   });
 
-  it('preserves registration behavior and omits passwordHash', async () => {
-    userRepo.findOne.mockResolvedValue(null);
-    const result = await service.register({
-      email: 'user@example.com',
-      password: 'Password1!',
-      fullName: 'User',
-    });
-    expect(result).not.toHaveProperty('passwordHash');
-    expect(manager.query).toHaveBeenCalledWith(
-      expect.stringContaining("code = 'BUYER'"),
-      ['new-user'],
-    );
-    userRepo.findOne.mockResolvedValue(new UserEntity());
-    await expect(
-      service.register({
-        email: 'user@example.com',
+  describe('register', () => {
+    it('registers user successfully with phone and omits passwordHash from response', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+      const dto = {
+        email: 'newuser@example.com',
         password: 'Password1!',
-        fullName: 'User',
-      }),
-    ).rejects.toBeInstanceOf(ConflictException);
+        fullName: 'New User',
+        phone: '0912345678',
+      };
+
+      const result = await service.register(dto);
+
+      expect(userRepo.findOne).toHaveBeenCalledWith({
+        where: [{ email: dto.email }, { phone: dto.phone }],
+      });
+      expect(argon2.hash).toHaveBeenCalledWith(
+        'Password1!',
+        expect.objectContaining({ type: 2 }),
+      );
+      expect(userRepo.create).toHaveBeenCalledWith({
+        email: dto.email,
+        phone: dto.phone,
+        passwordHash: 'hash:Password1!',
+        fullName: dto.fullName,
+        status: 'ACTIVE',
+      });
+      expect(result).not.toHaveProperty('passwordHash');
+      expect(result).toEqual(
+        expect.objectContaining({
+          id: 'new-user',
+          email: dto.email,
+          fullName: dto.fullName,
+          phone: dto.phone,
+        }),
+      );
+    });
+
+    it('registers user successfully without phone (phone is null)', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+      const dto = {
+        email: 'nophone@example.com',
+        password: 'Password1!',
+        fullName: 'No Phone User',
+      };
+
+      const result = await service.register(dto);
+
+      expect(userRepo.findOne).toHaveBeenCalledWith({
+        where: [{ email: dto.email }],
+      });
+      expect(userRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phone: null,
+        }),
+      );
+      expect(result).not.toHaveProperty('passwordHash');
+    });
+
+    it('throws ConflictException if email or phone already exists', async () => {
+      userRepo.findOne.mockResolvedValue(new UserEntity());
+      const dto = {
+        email: 'existing@example.com',
+        password: 'Password1!',
+        fullName: 'Existing User',
+      };
+
+      await expect(service.register(dto)).rejects.toThrow(
+        new ConflictException('Email hoặc số điện thoại đã được đăng ký'),
+      );
+    });
   });
 
-  it('locks and filters ACTIVE users before credential validation and token issuance', async () => {
-    const user = Object.assign(new UserEntity(), {
-      id: 'user-1',
-      email: 'user@example.com',
-      fullName: 'User',
-      passwordHash: await argon2.hash('NewPassword2!'),
-      tokenVersion: 8,
-      failedLoginAttempts: 0,
-      lockedUntil: null,
-    });
-    query.getOne.mockResolvedValue(user);
-    await expect(
-      service.login(
-        { email: user.email, password: 'NewPassword2!' },
-        { ipAddress: '127.0.0.1' },
-      ),
-    ).resolves.toMatchObject({
-      accessToken: 'access',
-      rawRefreshToken: 'refresh',
-    });
-    expect(query.setLock).toHaveBeenCalledWith('pessimistic_write');
-    expect(query.andWhere).toHaveBeenCalledWith('user.status = :status', {
-      status: 'ACTIVE',
-    });
-    expect(tokenService.generateAccessToken).toHaveBeenCalledWith(user);
-    expect(tokenService.createRefreshToken).toHaveBeenCalledWith(
-      user.id,
-      { ipAddress: '127.0.0.1' },
-      refreshTokens,
-    );
-  });
-
-  it('treats non-active/missing locked-query results as unauthorized without issuing tokens', async () => {
-    query.getOne.mockResolvedValue(null);
-    await expect(
-      service.login(
-        { email: 'suspended@example.com', password: 'Password1!' },
-        {},
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
-    expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
-  });
-
-  it('revalidates the password from the locked row and cannot issue an old session', async () => {
-    query.getOne.mockResolvedValue(
-      Object.assign(new UserEntity(), {
-        passwordHash: await argon2.hash('NewPassword2!'),
-        failedLoginAttempts: 0,
+  describe('login', () => {
+    it('logs in successfully with valid credentials and resets failed attempts', async () => {
+      const activeUser = Object.assign(new UserEntity(), {
+        id: 'user-1',
+        email: 'user@example.com',
+        fullName: 'Active User',
+        passwordHash: 'hash:CorrectPassword1!',
+        failedLoginAttempts: 3,
         lockedUntil: null,
-      }),
-    );
-    await expect(
-      service.login(
-        { email: 'user@example.com', password: 'OldPassword1!' },
-        {},
-      ),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
+      });
+      query.getOne.mockResolvedValue(activeUser);
+
+      const metadata = { ipAddress: '127.0.0.1', userAgent: 'test-agent' };
+      const result = await service.login(
+        { email: 'user@example.com', password: 'CorrectPassword1!' },
+        metadata,
+      );
+
+      expect(query.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(query.where).toHaveBeenCalledWith('user.email = :email', {
+        email: 'user@example.com',
+      });
+      expect(query.andWhere).toHaveBeenCalledWith('user.deleted_at IS NULL');
+      expect(query.andWhere).toHaveBeenCalledWith('user.status = :status', {
+        status: 'ACTIVE',
+      });
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          lastLoginAt: expect.any(Date),
+        }),
+      );
+      expect(tokenService.generateAccessToken).toHaveBeenCalledWith(activeUser);
+      expect(tokenService.createRefreshToken).toHaveBeenCalledWith(
+        'user-1',
+        metadata,
+        refreshTokens,
+      );
+      expect(result).not.toHaveProperty('unauthorized');
+      expect(result.user).not.toHaveProperty('passwordHash');
+      expect(result).toEqual({
+        user: expect.objectContaining({
+          id: 'user-1',
+          email: 'user@example.com',
+        }),
+        accessToken: 'access-token',
+        rawRefreshToken: 'refresh-token',
+      });
+    });
+
+    it('throws UnauthorizedException when user is not found or inactive', async () => {
+      query.getOne.mockResolvedValue(null);
+
+      await expect(
+        service.login(
+          { email: 'nonexistent@example.com', password: 'Password1!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        new UnauthorizedException('Email hoặc mật khẩu không chính xác'),
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+      expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when account is currently locked', async () => {
+      const futureTime = new Date(Date.now() + 10 * 60 * 1000);
+      const lockedUser = Object.assign(new UserEntity(), {
+        id: 'user-locked',
+        email: 'locked@example.com',
+        passwordHash: 'hash:Password1!',
+        lockedUntil: futureTime,
+      });
+      query.getOne.mockResolvedValue(lockedUser);
+
+      await expect(
+        service.login(
+          { email: 'locked@example.com', password: 'Password1!' },
+          {},
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      await expect(
+        service.login(
+          { email: 'locked@example.com', password: 'Password1!' },
+          {},
+        ),
+      ).rejects.toThrow(/Tài khoản đang tạm khóa do nhập sai nhiều lần/);
+    });
+
+    it('increments failedLoginAttempts on incorrect password (attempts 1 to 4)', async () => {
+      const activeUser = Object.assign(new UserEntity(), {
+        id: 'user-1',
+        email: 'user@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        failedLoginAttempts: 2,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(activeUser);
+
+      await expect(
+        service.login(
+          { email: 'user@example.com', password: 'WrongPassword!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        new UnauthorizedException('Email hoặc mật khẩu không chính xác'),
+      );
+
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedLoginAttempts: 3,
+        }),
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('locks account for 15 minutes on the 5th failed login attempt', async () => {
+      const activeUser = Object.assign(new UserEntity(), {
+        id: 'user-1',
+        email: 'user@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        failedLoginAttempts: 4,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(activeUser);
+
+      const beforeTime = Date.now();
+      await expect(
+        service.login(
+          { email: 'user@example.com', password: 'WrongPassword!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        new UnauthorizedException('Email hoặc mật khẩu không chính xác'),
+      );
+
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedLoginAttempts: 0,
+          lockedUntil: expect.any(Date),
+        }),
+      );
+
+      const savedUser = users.save.mock.calls[0][0];
+      const lockedTime = savedUser.lockedUntil.getTime();
+      expect(lockedTime).toBeGreaterThanOrEqual(beforeTime + 14 * 60 * 1000);
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
   });
 });

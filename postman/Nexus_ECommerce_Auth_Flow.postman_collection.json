@@ -1,0 +1,847 @@
+{
+  "info": {
+    "_postman_id": "nexus-auth-flow-collection-v1",
+    "name": "Nexus E-Commerce - Auth Flow Automation",
+    "description": "Automated Postman test suite for Authentication and User Profile lifecycle in Nexus E-Commerce Backend (NEX-116).\n\nCovers:\n- User Registration (Success, Conflict 409, Validation 400)\n- Authentication / Login (Success 200, Invalid Credentials 401)\n- Current User Profile /me (Success 200, Missing Token 401)\n- Profile Update (Success 200, Empty Body 400)\n- Token Rotation / Refresh (Success 200, HttpOnly Cookie)\n- Change Password & Invalidation (Success 200, Wrong Current Password 400, Old Token Revocation 401)\n- Logout & Post-Logout Revocation (Success 200, Refresh After Logout 401)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Register",
+      "item": [
+        {
+          "name": "01.1 - Register Success [201]",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Generate unique dynamic test user parameters to avoid collisions across runs",
+                  "const timestamp = Date.now();",
+                  "const randomDigits = Math.floor(10000000 + Math.random() * 90000000);",
+                  "const testEmail = `runner_user_${timestamp}@nexus-test.com`;",
+                  "const testPassword = `Nexus@Pass${timestamp.toString().slice(-4)}!`;",
+                  "const testFullName = `Runner Test User ${timestamp.toString().slice(-4)}`;",
+                  "const testPhone = `09${randomDigits}`;",
+                  "const newPassword = `Nexus@NewPass${timestamp.toString().slice(-4)}!`;",
+                  "",
+                  "pm.environment.set('testEmail', testEmail);",
+                  "pm.environment.set('testPassword', testPassword);",
+                  "pm.environment.set('testFullName', testFullName);",
+                  "pm.environment.set('testPhone', testPhone);",
+                  "pm.environment.set('newPassword', newPassword);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response matches standard envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('object');",
+                  "    pm.expect(json.data.message).to.equal('Đăng ký tài khoản thành công');",
+                  "});",
+                  "",
+                  "pm.test('User registration payload is sanitized and accurate', function () {",
+                  "    const user = pm.response.json().data.data;",
+                  "    pm.expect(user.id).to.be.a('string');",
+                  "    pm.expect(user.email).to.equal(pm.environment.get('testEmail'));",
+                  "    pm.expect(user.fullName).to.equal(pm.environment.get('testFullName'));",
+                  "    pm.expect(user.phone).to.equal(pm.environment.get('testPhone'));",
+                  "    pm.expect(user.status).to.equal('ACTIVE');",
+                  "    pm.expect(user).to.not.have.property('passwordHash');",
+                  "    pm.environment.set('userId', user.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"fullName\": \"{{testFullName}}\",\n  \"phone\": \"{{testPhone}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "01.2 - Register Duplicate Email [409 Conflict]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 409 Conflict', function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "pm.test('Response matches standard error envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(409);",
+                  "    pm.expect(json.message).to.include('đã được đăng ký');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"fullName\": \"{{testFullName}}\",\n  \"phone\": \"{{testPhone}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "register"]
+            }
+          }
+        },
+        {
+          "name": "01.3 - Register Weak Password [400 Bad Request]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Response returns validation error message', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(400);",
+                  "    pm.expect(json.error).to.equal('Bad Request');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"weak_pass_{{$timestamp}}@nexus-test.com\",\n  \"password\": \"123\",\n  \"fullName\": \"Weak Password User\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "register"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Login",
+      "item": [
+        {
+          "name": "02.1 - Login Incorrect Credentials [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Error message informs invalid credentials', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(401);",
+                  "    pm.expect(json.message).to.equal('Email hoặc mật khẩu không chính xác');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"WrongPassword@999\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "02.2 - Login Success [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response envelope contains accessToken and user info', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.message).to.equal('Đăng nhập thành công');",
+                  "",
+                  "    const authData = json.data.data;",
+                  "    pm.expect(authData.accessToken).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(authData.user.email).to.equal(pm.environment.get('testEmail'));",
+                  "",
+                  "    // Store accessToken for subsequent authenticated calls",
+                  "    pm.environment.set('accessToken', authData.accessToken);",
+                  "});",
+                  "",
+                  "pm.test('Set-Cookie header sets HttpOnly refreshToken', function () {",
+                  "    const setCookie = pm.response.headers.get('Set-Cookie');",
+                  "    pm.expect(setCookie).to.be.a('string');",
+                  "    pm.expect(setCookie).to.include('refreshToken=');",
+                  "    pm.expect(setCookie.toLowerCase()).to.include('httponly');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Profile",
+      "item": [
+        {
+          "name": "03.1 - Get Profile Me Success [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Profile schema matches authenticated user', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "",
+                  "    const profile = json.data;",
+                  "    pm.expect(profile.id).to.equal(pm.environment.get('userId'));",
+                  "    pm.expect(profile.email).to.equal(pm.environment.get('testEmail'));",
+                  "    pm.expect(profile.fullName).to.equal(pm.environment.get('testFullName'));",
+                  "    pm.expect(profile.phone).to.equal(pm.environment.get('testPhone'));",
+                  "    pm.expect(profile.roles).to.be.an('array');",
+                  "    pm.expect(profile.trustLevel).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "03.2 - Get Profile Me Missing Token [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Error envelope structure is valid', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "03.3 - Update Profile Success [200 OK]",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const timestamp = Date.now();",
+                  "const randomDigits = Math.floor(10000000 + Math.random() * 90000000);",
+                  "const updatedFullName = `Updated User ${timestamp.toString().slice(-4)}`;",
+                  "const updatedPhone = `08${randomDigits}`;",
+                  "",
+                  "pm.environment.set('updatedFullName', updatedFullName);",
+                  "pm.environment.set('updatedPhone', updatedPhone);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Profile updated successfully', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "",
+                  "    const profile = json.data;",
+                  "    pm.expect(profile.fullName).to.equal(pm.environment.get('updatedFullName'));",
+                  "    pm.expect(profile.phone).to.equal(pm.environment.get('updatedPhone'));",
+                  "    pm.expect(profile.avatarUrl).to.equal('https://example.com/avatar_test.png');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"{{updatedFullName}}\",\n  \"phone\": \"{{updatedPhone}}\",\n  \"avatarUrl\": \"https://example.com/avatar_test.png\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "profile"]
+            }
+          }
+        },
+        {
+          "name": "03.4 - Update Profile Empty Body [400 Bad Request]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Error message requires at least one field', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(400);",
+                  "    pm.expect(json.message).to.equal('At least one update field is required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "profile"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Refresh Token",
+      "item": [
+        {
+          "name": "04.1 - Refresh Token Success [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response returns rotated accessToken', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.message).to.equal('Làm mới token thành công');",
+                  "",
+                  "    const newAccessToken = json.data.data.accessToken;",
+                  "    pm.expect(newAccessToken).to.be.a('string').that.is.not.empty;",
+                  "",
+                  "    // Update accessToken in environment with rotated token",
+                  "    pm.environment.set('accessToken', newAccessToken);",
+                  "});",
+                  "",
+                  "pm.test('Set-Cookie sets new rotated refreshToken', function () {",
+                  "    const setCookie = pm.response.headers.get('Set-Cookie');",
+                  "    pm.expect(setCookie).to.be.a('string');",
+                  "    pm.expect(setCookie).to.include('refreshToken=');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "refresh"]
+            }
+          }
+        },
+        {
+          "name": "04.2 - Get Profile With Refreshed Token [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK with refreshed access token', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Profile reflects previously updated fullName', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.fullName).to.equal(pm.environment.get('updatedFullName'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Password Change",
+      "item": [
+        {
+          "name": "05.1 - Change Password Wrong Current Password [400 Bad Request]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Error message informs incorrect current password', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(400);",
+                  "    pm.expect(json.message).to.equal('Current password is incorrect');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"WrongCurrentPassword@999\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "change-password"]
+            }
+          }
+        },
+        {
+          "name": "05.2 - Change Password Success [200 OK]",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Preserve active access token as oldAccessToken to test invalidation downstream",
+                  "pm.environment.set('oldAccessToken', pm.environment.get('accessToken'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response confirms password change success', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.message).to.equal('Password changed successfully. Please sign in again');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{testPassword}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "change-password"]
+            }
+          }
+        },
+        {
+          "name": "05.3 - Verify Old Access Token Invalidated [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized (tokenVersion mismatch)', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Old access token is successfully rejected after password change', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{oldAccessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "05.4 - Login With New Password [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Login succeeds with new password', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "",
+                  "    const authData = json.data.data;",
+                  "    pm.expect(authData.accessToken).to.be.a('string').that.is.not.empty;",
+                  "    pm.environment.set('accessToken', authData.accessToken);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Logout & Invalidation",
+      "item": [
+        {
+          "name": "06.1 - Logout Success [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Logout response confirms success', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.message).to.equal('Đăng xuất thành công');",
+                  "});",
+                  "",
+                  "pm.test('Set-Cookie clears the refreshToken cookie', function () {",
+                  "    const setCookie = pm.response.headers.get('Set-Cookie');",
+                  "    pm.expect(setCookie).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "logout"]
+            }
+          }
+        },
+        {
+          "name": "06.2 - Refresh Token After Logout [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized after logout', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test('Refresh attempt rejected when token is cleared or revoked', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "refresh"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

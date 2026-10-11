@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { describe, it, expect, vi } from 'vitest';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressService } from './address.service.js';
@@ -244,8 +245,8 @@ describe('AddressService', () => {
     expect(transactionRepository.save).not.toHaveBeenCalled();
   });
 
-  it('updates only the fields supplied by a partial update', async () => {
-    const { service, transactionRepository, saved } = setup();
+  it('updates only the fields supplied by a partial update without locking user when isDefault is not true', async () => {
+    const { service, manager, transactionRepository, saved } = setup();
 
     await expect(
       service.update(userId, addressId, { recipientName: 'B' }),
@@ -254,6 +255,7 @@ describe('AddressService', () => {
     expect(saved.recipientName).toBe('B');
     expect(saved.addressLine).toBe('12 Street');
     expect(saved.recipientPhone).toBe('0912345678');
+    expect(manager.query).not.toHaveBeenCalled();
     expect(transactionRepository.update).not.toHaveBeenCalled();
   });
 
