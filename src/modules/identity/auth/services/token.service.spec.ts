@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UserEntity } from '../../domain/user.entity.js';
 import { TokenService } from './token.service.js';
 
@@ -60,6 +61,20 @@ describe('TokenService', () => {
     expect(tokenRepo.save).not.toHaveBeenCalled();
   });
 
+  it('uses default tokenRepo and generates familyId when not provided', async () => {
+    const rawToken = await service.createRefreshToken(user.id, {});
+    expect(tokenRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: user.id,
+        ipAddress: null,
+        userAgent: null,
+        familyId: expect.any(String),
+      }),
+    );
+    expect(tokenRepo.save).toHaveBeenCalled();
+    expect(typeof rawToken).toBe('string');
+  });
+
   it('locks the active user then rereads and rotates the token atomically', async () => {
     tokenRepo.findOne.mockResolvedValue({ userId: user.id });
     txTokens.findOne.mockResolvedValue({
@@ -111,6 +126,7 @@ describe('TokenService', () => {
     await expect(
       service.rotateRefreshToken('missing', {}),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+
     tokenRepo.findOne.mockResolvedValue({ userId: user.id });
     txTokens.findOne.mockResolvedValue({
       revokedAt: null,
@@ -119,10 +135,20 @@ describe('TokenService', () => {
     await expect(service.rotateRefreshToken('expired', {})).rejects.toThrow(
       'Refresh Token đã hết hạn',
     );
+
     userQuery.getOne.mockResolvedValueOnce(null);
     await expect(
       service.rotateRefreshToken('inactive', {}),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('rejects rotation if token is missing inside transaction', async () => {
+    tokenRepo.findOne.mockResolvedValue({ userId: user.id });
+    txTokens.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.rotateRefreshToken('missing-in-tx', {}),
+    ).rejects.toThrow('Refresh Token không tồn tại');
   });
 
   it('serializes logout revocation with the same user lock', async () => {
@@ -130,5 +156,46 @@ describe('TokenService', () => {
     await service.revokeToken('raw');
     expect(userQuery.setLock).toHaveBeenCalledWith('pessimistic_write');
     expect(txTokens.update).toHaveBeenCalled();
+  });
+
+  it('does nothing on revokeToken if token does not exist', async () => {
+    tokenRepo.findOne.mockResolvedValue(null);
+    await service.revokeToken('non-existing-token');
+    expect(txTokens.update).not.toHaveBeenCalled();
+  });
+
+  describe('Cookie management helpers', () => {
+    let mockResponse: any;
+
+    beforeEach(() => {
+      mockResponse = {
+        cookie: vi.fn(),
+        clearCookie: vi.fn(),
+      };
+    });
+
+    it('sets refresh token cookie with httpOnly and strict sameSite', () => {
+      service.setRefreshTokenCookie(mockResponse, 'my-refresh-token');
+      expect(mockResponse.cookie).toHaveBeenCalledWith(
+        'refreshToken',
+        'my-refresh-token',
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        }),
+      );
+    });
+
+    it('clears refresh token cookie with correct options', () => {
+      service.clearRefreshTokenCookie(mockResponse);
+      expect(mockResponse.clearCookie).toHaveBeenCalledWith(
+        'refreshToken',
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+        }),
+      );
+    });
   });
 });

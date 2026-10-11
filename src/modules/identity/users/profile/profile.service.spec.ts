@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { describe, it, expect, vi } from 'vitest';
 import { ProfileService } from './profile.service.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -102,5 +103,13 @@ describe('ProfileService', () => {
       deleted.service.updateProfile(userId, { fullName: 'New name' }),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(deleted.users.findOne).not.toHaveBeenCalled();
+  });
+
+  it('re-throws unexpected database errors during updateProfile', async () => {
+    const dbError = setup();
+    dbError.execute.mockRejectedValue(new Error('Unexpected DB Error'));
+    await expect(
+      dbError.service.updateProfile(userId, { fullName: 'Test Name' }),
+    ).rejects.toThrow('Unexpected DB Error');
   });
 });
