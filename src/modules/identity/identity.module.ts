@@ -21,6 +21,9 @@ import { PrivilegeEntity } from './rbac/entities/privilege.entity.js';
 import { RolePrivilegeEntity } from './rbac/entities/role-privilege.entity.js';
 import { RoleEntity } from './rbac/entities/role.entity.js';
 import { UserRoleEntity } from './rbac/entities/user-role.entity.js';
+import { PermissionsGuard } from './rbac/guards/permissions.guard.js';
+import { RolesGuard } from './rbac/guards/roles.guard.js';
+import { RbacService } from './rbac/rbac.service.js';
 
 @Module({
   imports: [
@@ -50,7 +53,16 @@ import { UserRoleEntity } from './rbac/entities/user-role.entity.js';
     AccessTokenGuard,
     ProfileService,
     PasswordService,
+    RbacService,
+    RolesGuard,
+    PermissionsGuard,
   ],
-  exports: [AuthService, TokenService],
+  exports: [
+    AuthService,
+    TokenService,
+    RbacService,
+    RolesGuard,
+    PermissionsGuard,
+  ],
 })
 export class IdentityModule {}
