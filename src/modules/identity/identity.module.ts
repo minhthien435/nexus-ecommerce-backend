@@ -17,6 +17,10 @@ import { ProfileController } from './users/profile/profile.controller.js';
 import { ProfileService } from './users/profile/profile.service.js';
 import { PasswordController } from './users/password/password.controller.js';
 import { PasswordService } from './users/password/password.service.js';
+import { PrivilegeEntity } from './rbac/entities/privilege.entity.js';
+import { RolePrivilegeEntity } from './rbac/entities/role-privilege.entity.js';
+import { RoleEntity } from './rbac/entities/role.entity.js';
+import { UserRoleEntity } from './rbac/entities/user-role.entity.js';
 
 @Module({
   imports: [
@@ -25,6 +29,10 @@ import { PasswordService } from './users/password/password.service.js';
       RefreshTokenEntity,
       PasswordResetTokenEntity,
       ProfileUserEntity,
+      RoleEntity,
+      PrivilegeEntity,
+      UserRoleEntity,
+      RolePrivilegeEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

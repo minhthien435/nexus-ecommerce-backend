@@ -9,6 +9,7 @@ describe('AuthService', () => {
   let query: any;
   let tokenService: any;
   let refreshTokens: any;
+  let manager: any;
   let service: AuthService;
 
   beforeEach(() => {
@@ -25,13 +26,15 @@ describe('AuthService', () => {
     };
     users = {
       createQueryBuilder: vi.fn(() => query),
+      create: vi.fn((value) => ({ id: 'new-user', tokenVersion: 0, ...value })),
       save: vi.fn(async (value) => value),
     };
     refreshTokens = {};
-    const manager = {
+    manager = {
       getRepository: vi.fn((entity) =>
         entity === UserEntity ? users : refreshTokens,
       ),
+      query: vi.fn().mockResolvedValue([{ role_id: 'buyer-role' }]),
     };
     tokenService = {
       generateAccessToken: vi.fn().mockResolvedValue('access'),
@@ -50,6 +53,10 @@ describe('AuthService', () => {
       fullName: 'User',
     });
     expect(result).not.toHaveProperty('passwordHash');
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining("code = 'BUYER'"),
+      ['new-user'],
+    );
     userRepo.findOne.mockResolvedValue(new UserEntity());
     await expect(
       service.register({
