@@ -24,6 +24,8 @@ import { UserRoleEntity } from './rbac/entities/user-role.entity.js';
 import { PermissionsGuard } from './rbac/guards/permissions.guard.js';
 import { RolesGuard } from './rbac/guards/roles.guard.js';
 import { RbacService } from './rbac/rbac.service.js';
+import { AdminUserController } from './admin/admin-user.controller.js';
+import { AdminUserService } from './admin/admin-user.service.js';
 
 @Module({
   imports: [
@@ -46,7 +48,12 @@ import { RbacService } from './rbac/rbac.service.js';
       }),
     }),
   ],
-  controllers: [AuthController, ProfileController, PasswordController],
+  controllers: [
+    AuthController,
+    ProfileController,
+    PasswordController,
+    AdminUserController,
+  ],
   providers: [
     AuthService,
     TokenService,
@@ -56,6 +63,7 @@ import { RbacService } from './rbac/rbac.service.js';
     RbacService,
     RolesGuard,
     PermissionsGuard,
+    AdminUserService,
   ],
   exports: [
     AuthService,

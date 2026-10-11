@@ -88,15 +88,16 @@ export async function seedInitialAdmin(
     adminId = inserted[0].id;
   }
 
-  const result: { rowCount?: number } = await manager.query(
+  const assignments = await manager.query<Array<{ role_id: string }>>(
     `INSERT INTO identity.user_roles (user_id, role_id)
      SELECT $1, id
        FROM identity.roles
       WHERE code = 'ADMIN' AND deleted_at IS NULL
-     ON CONFLICT (user_id, role_id) DO NOTHING`,
+     ON CONFLICT (user_id, role_id) DO UPDATE SET user_id = EXCLUDED.user_id
+     RETURNING role_id`,
     [adminId],
   );
-  if (result.rowCount === 0 && existingUsers.length === 0) {
+  if (assignments.length !== 1) {
     throw new Error('ADMIN role is missing; RBAC seed cannot be completed');
   }
 

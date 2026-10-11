@@ -28,7 +28,7 @@ describe('RBAC seed', () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce([{ id: 'admin-id', deleted_at: null }])
-      .mockResolvedValueOnce({ rowCount: 0 });
+      .mockResolvedValueOnce([{ role_id: 'admin-role' }]);
 
     await expect(
       seedInitialAdmin({ query } as never, {
