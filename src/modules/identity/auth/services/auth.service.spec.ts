@@ -86,7 +86,7 @@ describe('AuthService', () => {
         'Password1!',
         expect.objectContaining({ type: 2 }),
       );
-      expect(userRepo.create).toHaveBeenCalledWith({
+      expect(users.create).toHaveBeenCalledWith({
         email: dto.email,
         phone: dto.phone,
         passwordHash: 'hash:Password1!',
@@ -117,7 +117,7 @@ describe('AuthService', () => {
       expect(userRepo.findOne).toHaveBeenCalledWith({
         where: [{ email: dto.email }],
       });
-      expect(userRepo.create).toHaveBeenCalledWith(
+      expect(users.create).toHaveBeenCalledWith(
         expect.objectContaining({
           phone: null,
         }),
