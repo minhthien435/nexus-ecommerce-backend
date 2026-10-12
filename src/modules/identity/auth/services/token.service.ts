@@ -27,7 +27,7 @@ export class TokenService {
       email: user.email,
       tokenVersion: user.tokenVersion,
     };
-    return this.jwtService.signAsync(payload, { expiresIn: '15m' });
+    return this.jwtService.signAsync(payload, { expiresIn: '60m' });
   }
 
   async createRefreshToken(

@@ -12,7 +12,7 @@ Bộ kiểm thử được thiết kế để tự động hóa toàn bộ vòng
 - **Tổng số request:** 26 HTTP requests có kịch bản tuần tự.
 - **Cơ chế dữ liệu động:** Tự động sinh `testEmail`, `testPhone`, `testPassword`, `newPassword` ngẫu nhiên qua timestamp trong Pre-request Script để đảm bảo chạy lặp lại nhiều lần không bị lỗi trùng lặp dữ liệu (`409 Conflict`).
 - **Cơ chế token:**
-  - `accessToken` (JWT 15m) được lưu và truyền tự động qua biến môi trường `{{accessToken}}` trong header `Authorization: Bearer {{accessToken}}`.
+  - `accessToken` (JWT 60m) được lưu và truyền tự động qua biến môi trường `{{accessToken}}` trong header `Authorization: Bearer {{accessToken}}`.
   - `refreshToken` (HttpOnly Cookie 7 ngày) được quản lý tự động bởi Postman Native Cookie Jar. Tuyệt đối không đọc hoặc lưu lộ giá trị cookie bảo mật.
   - Kiểm thử cơ chế **Token Rotation** và **Token Invalidation** (khi đổi mật khẩu `tokenVersion` tăng làm vô hiệu hóa token cũ, và sau khi logout refresh token không thể tái sử dụng).
 - **Vòng đời Address:** Kiểm tra xác thực, tạo/list/cập nhật/xóa, payload cập nhật rỗng, UUID không tồn tại, xóa lặp lại và xác nhận dữ liệu test đã được dọn trước khi logout.
