@@ -46,7 +46,7 @@ import { IdentityPublicApiService } from './identity-public-api.service.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET', 'super-secret-key-15m'),
-        signOptions: { expiresIn: '15m' },
+        signOptions: { expiresIn: '60m' },
       }),
     }),
   ],

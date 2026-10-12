@@ -47,11 +47,11 @@ describe('TokenService', () => {
     } as never);
   });
 
-  it('adds current tokenVersion and retains 15 minute access expiry', async () => {
+  it('adds current tokenVersion and uses a 60 minute access expiry', async () => {
     await service.generateAccessToken(user);
     expect(jwt.signAsync).toHaveBeenCalledWith(
       { sub: user.id, email: user.email, tokenVersion: 6 },
-      { expiresIn: '15m' },
+      { expiresIn: '60m' },
     );
   });
 

@@ -5,6 +5,7 @@ import {
   ManyToOne,
   PrimaryColumn,
 } from 'typeorm';
+import type { Relation } from 'typeorm';
 import { UserEntity } from '../../domain/user.entity.js';
 import { RoleEntity } from './role.entity.js';
 
@@ -21,11 +22,11 @@ export class UserRoleEntity {
 
   @ManyToOne(() => UserEntity, { onDelete: 'NO ACTION' })
   @JoinColumn({ name: 'user_id' })
-  user: UserEntity;
+  user: Relation<UserEntity>;
 
   @ManyToOne(() => RoleEntity, (role) => role.userRoles, {
     onDelete: 'NO ACTION',
   })
   @JoinColumn({ name: 'role_id' })
-  role: RoleEntity;
+  role: Relation<RoleEntity>;
 }

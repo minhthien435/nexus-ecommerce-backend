@@ -5,6 +5,7 @@ import {
   ManyToOne,
   PrimaryColumn,
 } from 'typeorm';
+import type { Relation } from 'typeorm';
 import { PrivilegeEntity } from './privilege.entity.js';
 import { RoleEntity } from './role.entity.js';
 
@@ -23,11 +24,11 @@ export class RolePrivilegeEntity {
     onDelete: 'NO ACTION',
   })
   @JoinColumn({ name: 'role_id' })
-  role: RoleEntity;
+  role: Relation<RoleEntity>;
 
   @ManyToOne(() => PrivilegeEntity, (privilege) => privilege.rolePrivileges, {
     onDelete: 'NO ACTION',
   })
   @JoinColumn({ name: 'privilege_id' })
-  privilege: PrivilegeEntity;
+  privilege: Relation<PrivilegeEntity>;
 }

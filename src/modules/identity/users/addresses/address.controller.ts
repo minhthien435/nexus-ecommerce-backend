@@ -10,12 +10,15 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { CurrentUserId } from '../../../../common/auth/current-user-id.decorator.js';
+import { AccessTokenGuard } from '../../auth/guards/access-token.guard.js';
 import { CreateAddressDto } from '../dtos/create-address.dto.js';
 import { UpdateAddressDto } from '../dtos/update-address.dto.js';
 import { AddressService } from './address.service.js';
 
+@UseGuards(AccessTokenGuard)
 @Controller('users/addresses')
 export class AddressController {
   constructor(private readonly addresses: AddressService) {}
