@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "nexus-auth-flow-collection-v1",
     "name": "Nexus E-Commerce - Auth Flow Automation",
-    "description": "Automated Postman test suite for Authentication and User Profile lifecycle in Nexus E-Commerce Backend (NEX-116).\n\nCovers:\n- User Registration (Success, Conflict 409, Validation 400)\n- Authentication / Login (Success 200, Invalid Credentials 401)\n- Current User Profile /me (Success 200, Missing Token 401)\n- Profile Update (Success 200, Empty Body 400)\n- Token Rotation / Refresh (Success 200, HttpOnly Cookie)\n- Change Password & Invalidation (Success 200, Wrong Current Password 400, Old Token Revocation 401)\n- Logout & Post-Logout Revocation (Success 200, Refresh After Logout 401)",
+    "description": "Automated Postman test suite for Authentication, User Profile, and Address lifecycle in Nexus E-Commerce Backend (NEX-116 / NEX-106).\n\nCovers:\n- User Registration (Success, Conflict 409, Validation 400)\n- Authentication / Login (Success 200, Invalid Credentials 401)\n- Current User Profile /me (Success 200, Missing Token 401)\n- Profile Update (Success 200, Empty Body 400)\n- Token Rotation / Refresh (Success 200, HttpOnly Cookie)\n- Change Password & Invalidation (Success 200, Wrong Current Password 400, Old Token Revocation 401)\n- Address CRUD lifecycle (Authentication 401, Create 201, List/Update 200, Validation 400, Missing 404, Delete 204)\n- Logout & Post-Logout Revocation (Success 200, Refresh After Logout 401)",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -772,10 +772,305 @@
       ]
     },
     {
-      "name": "06 - Logout & Invalidation",
+      "name": "06 - Addresses",
       "item": [
         {
-          "name": "06.1 - Logout Success [200 OK]",
+          "name": "06.1 - List Addresses Missing Token [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Response matches standard error envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(401);",
+                  "    pm.expect(json.error).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.timestamp).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.path).to.equal('/users/addresses');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/users/addresses"
+          }
+        },
+        {
+          "name": "06.2 - Create Address [201 Created]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Created address matches the request and standard envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('object');",
+                  "    pm.expect(json.data.id).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.data.userId).to.equal(pm.environment.get('userId'));",
+                  "    pm.expect(json.data.recipientName).to.equal('Postman Address Recipient');",
+                  "    pm.expect(json.data.recipientPhone).to.equal('0912345678');",
+                  "    pm.expect(json.data.provinceCode).to.equal('79');",
+                  "    pm.expect(json.data.districtCode).to.equal('760');",
+                  "    pm.expect(json.data.wardCode).to.equal('26734');",
+                  "    pm.expect(json.data.addressLine).to.equal('123 Postman Test Street');",
+                  "    pm.expect(json.data.isDefault).to.be.true;",
+                  "    pm.environment.set('addressId', json.data.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"recipientName\": \"Postman Address Recipient\",\n  \"recipientPhone\": \"0912345678\",\n  \"provinceCode\": \"79\",\n  \"districtCode\": \"760\",\n  \"wardCode\": \"26734\",\n  \"addressLine\": \"123 Postman Test Street\",\n  \"isDefault\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/users/addresses"
+          }
+        },
+        {
+          "name": "06.3 - List Addresses With Created Address [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Created address appears in the authenticated user list', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "    const address = json.data.find((item) => item.id === pm.environment.get('addressId'));",
+                  "    pm.expect(address).to.be.an('object');",
+                  "    pm.expect(address.userId).to.equal(pm.environment.get('userId'));",
+                  "    pm.expect(address.recipientName).to.equal('Postman Address Recipient');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": "{{baseUrl}}/users/addresses"
+          }
+        },
+        {
+          "name": "06.4 - Update Address Partially [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Only supplied address fields are updated', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.id).to.equal(pm.environment.get('addressId'));",
+                  "    pm.expect(json.data.recipientName).to.equal('Updated Postman Recipient');",
+                  "    pm.expect(json.data.addressLine).to.equal('456 Updated Test Street');",
+                  "    pm.expect(json.data.recipientPhone).to.equal('0912345678');",
+                  "    pm.expect(json.data.provinceCode).to.equal('79');",
+                  "    pm.expect(json.data.districtCode).to.equal('760');",
+                  "    pm.expect(json.data.wardCode).to.equal('26734');",
+                  "    pm.expect(json.data.isDefault).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"recipientName\": \"Updated Postman Recipient\",\n  \"addressLine\": \"456 Updated Test Street\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/users/addresses/{{addressId}}"
+          }
+        },
+        {
+          "name": "06.5 - Update Address Empty Body [400 Bad Request]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400 Bad Request', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Empty update returns the standard validation error envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(400);",
+                  "    pm.expect(json.message).to.equal('At least one update field is required');",
+                  "    pm.expect(json.error).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.timestamp).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.path).to.equal('/users/addresses/' + pm.environment.get('addressId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/users/addresses/{{addressId}}"
+          }
+        },
+        {
+          "name": "06.6 - Update Unknown Address [404 Not Found]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404 Not Found', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Unknown address returns the ownership-safe error envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(404);",
+                  "    pm.expect(json.message).to.equal('Address not found');",
+                  "    pm.expect(json.error).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.timestamp).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.path).to.equal('/users/addresses/00000000-0000-4000-8000-000000000000');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"recipientName\": \"Must Not Exist\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/users/addresses/00000000-0000-4000-8000-000000000000"
+          }
+        },
+        {
+          "name": "06.7 - Delete Address [204 No Content]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 204 No Content', function () { pm.response.to.have.status(204); });",
+                  "pm.test('Delete response has no body', function () { pm.expect(pm.response.text()).to.equal(''); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": "{{baseUrl}}/users/addresses/{{addressId}}"
+          }
+        },
+        {
+          "name": "06.8 - Delete Address Again [404 Not Found]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404 Not Found', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Repeated delete returns the standard error envelope', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.statusCode).to.equal(404);",
+                  "    pm.expect(json.message).to.equal('Address not found');",
+                  "    pm.expect(json.error).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.timestamp).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(json.path).to.equal('/users/addresses/' + pm.environment.get('addressId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": "{{baseUrl}}/users/addresses/{{addressId}}"
+          }
+        },
+        {
+          "name": "06.9 - List Addresses After Delete [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Deleted address is absent from the final list', function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "    pm.expect(json.data.some((item) => item.id === pm.environment.get('addressId'))).to.be.false;",
+                  "    pm.environment.unset('addressId');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": "{{baseUrl}}/users/addresses"
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Logout & Invalidation",
+      "item": [
+        {
+          "name": "07.1 - Logout Success [200 OK]",
           "event": [
             {
               "listen": "test",
@@ -811,7 +1106,7 @@
           }
         },
         {
-          "name": "06.2 - Refresh Token After Logout [401 Unauthorized]",
+          "name": "07.2 - Refresh Token After Logout [401 Unauthorized]",
           "event": [
             {
               "listen": "test",

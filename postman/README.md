@@ -1,6 +1,6 @@
-# Nexus E-Commerce - Auth Flow Postman Test Suite (NEX-116)
+# Nexus E-Commerce - Auth & Address Flow Postman Test Suite (NEX-116 / NEX-106)
 
-Tài liệu hướng dẫn sử dụng bộ kiểm thử tự động Postman Collection Runner cho luồng Authentication & User Profile trong hệ thống Nexus E-Commerce Backend.
+Tài liệu hướng dẫn sử dụng bộ kiểm thử tự động Postman Collection Runner cho luồng Authentication, User Profile và Address trong hệ thống Nexus E-Commerce Backend.
 
 ---
 
@@ -8,13 +8,14 @@ Tài liệu hướng dẫn sử dụng bộ kiểm thử tự động Postman Co
 
 Bộ kiểm thử được thiết kế để tự động hóa toàn bộ vòng đời xác thực của người dùng, kiểm tra cả các trường hợp thành công (Positive) và các trường hợp lỗi biên/bảo mật (Negative):
 
-- **Tổng số folder:** 6 modules logic.
-- **Tổng số request:** 17 HTTP requests có kịch bản tuần tự.
+- **Tổng số folder:** 7 modules logic.
+- **Tổng số request:** 26 HTTP requests có kịch bản tuần tự.
 - **Cơ chế dữ liệu động:** Tự động sinh `testEmail`, `testPhone`, `testPassword`, `newPassword` ngẫu nhiên qua timestamp trong Pre-request Script để đảm bảo chạy lặp lại nhiều lần không bị lỗi trùng lặp dữ liệu (`409 Conflict`).
 - **Cơ chế token:**
   - `accessToken` (JWT 15m) được lưu và truyền tự động qua biến môi trường `{{accessToken}}` trong header `Authorization: Bearer {{accessToken}}`.
   - `refreshToken` (HttpOnly Cookie 7 ngày) được quản lý tự động bởi Postman Native Cookie Jar. Tuyệt đối không đọc hoặc lưu lộ giá trị cookie bảo mật.
   - Kiểm thử cơ chế **Token Rotation** và **Token Invalidation** (khi đổi mật khẩu `tokenVersion` tăng làm vô hiệu hóa token cũ, và sau khi logout refresh token không thể tái sử dụng).
+- **Vòng đời Address:** Kiểm tra xác thực, tạo/list/cập nhật/xóa, payload cập nhật rỗng, UUID không tồn tại, xóa lặp lại và xác nhận dữ liệu test đã được dọn trước khi logout.
 
 ---
 
@@ -42,9 +43,19 @@ Nexus E-Commerce - Auth Flow Automation
 │   ├── 05.2 - Change Password Success [200 OK]
 │   ├── 05.3 - Verify Old Access Token Invalidated [401 Unauthorized]
 │   └── 05.4 - Login With New Password [200 OK]
-└── 06 - Logout & Invalidation
-    ├── 06.1 - Logout Success [200 OK]
-    └── 06.2 - Refresh Token After Logout [401 Unauthorized]
+├── 06 - Addresses
+│   ├── 06.1 - List Addresses Missing Token [401 Unauthorized]
+│   ├── 06.2 - Create Address [201 Created]
+│   ├── 06.3 - List Addresses With Created Address [200 OK]
+│   ├── 06.4 - Update Address Partially [200 OK]
+│   ├── 06.5 - Update Address Empty Body [400 Bad Request]
+│   ├── 06.6 - Update Unknown Address [404 Not Found]
+│   ├── 06.7 - Delete Address [204 No Content]
+│   ├── 06.8 - Delete Address Again [404 Not Found]
+│   └── 06.9 - List Addresses After Delete [200 OK]
+└── 07 - Logout & Invalidation
+    ├── 07.1 - Logout Success [200 OK]
+    └── 07.2 - Refresh Token After Logout [401 Unauthorized]
 ```
 
 ---
@@ -53,8 +64,8 @@ Nexus E-Commerce - Auth Flow Automation
 
 | File                                                        | Mô tả                                                                                        |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `postman/Nexus_ECommerce_Auth_Flow.postman_collection.json` | Postman Collection Schema v2.1.0 chứa 17 requests, pre-request scripts và test assertions    |
-| `postman/Nexus_ECommerce_Local.postman_environment.json`    | Environment cấu hình biến `baseUrl` và các biến lưu runtime (`accessToken`, `testEmail`,...) |
+| `postman/Nexus_ECommerce_Auth_Flow.postman_collection.json` | Postman Collection Schema v2.1.0 chứa 26 requests, pre-request scripts và test assertions    |
+| `postman/Nexus_ECommerce_Local.postman_environment.json`    | Environment cấu hình `baseUrl` và biến runtime (`accessToken`, `addressId`, `testEmail`,...) |
 
 ---
 
@@ -101,7 +112,7 @@ Nexus E-Commerce - Auth Flow Automation
    - Nhấp chuột vào collection **"Nexus E-Commerce - Auth Flow Automation"**.
    - Nhấn nút **Run** (hoặc biểu tượng `...` -> **Run collection**).
 4. **Cấu hình Runner:**
-   - Chọn tất cả 17 requests theo đúng thứ tự mặc định.
+   - Chọn tất cả 26 requests theo đúng thứ tự mặc định.
    - **Run configuration:**
      - Iterations: `1`
      - Delay: `50 ms` (khuyến nghị để database hoàn tất các async transaction)
@@ -147,4 +158,6 @@ npx newman run postman/Nexus_ECommerce_Auth_Flow.postman_collection.json \
 3. **Kiểm tra Token Invalidation (`tokenVersion`):**
    Tại bước 05.2, `oldAccessToken` được lưu lại trước khi đổi mật khẩu. Tại bước 05.3, request gửi `oldAccessToken` tới `/api/v1/auth/me` và bắt buộc nhận về `401 Unauthorized`. Điều này chứng minh backend đã tăng `user.tokenVersion` và hủy quyền truy cập của token cũ thành công.
 4. **Kiểm tra Refresh Token Revocation:**
-   Sau khi gọi `/api/v1/auth/logout` ở bước 06.1, backend xóa cookie và cập nhật `revokedAt` trong bảng `identity.refresh_tokens`. Tại bước 06.2, khi cố gắng refresh lại, request sẽ bị từ chối với `401 Unauthorized`.
+   Sau khi gọi `/api/v1/auth/logout` ở bước 07.1, backend xóa cookie và cập nhật `revokedAt` trong bảng `identity.refresh_tokens`. Tại bước 07.2, khi cố gắng refresh lại, request sẽ bị từ chối với `401 Unauthorized`.
+5. **Kiểm tra Address và dọn dữ liệu:**
+   Folder 06 dùng access token mới từ bước 05.4, lưu duy nhất `addressId` được backend sinh ra để chạy cập nhật/xóa, kiểm tra các envelope lỗi `401`/`400`/`404`, sau đó xác nhận địa chỉ không còn trong danh sách. Biến `addressId` được xóa khỏi environment ở request cuối để lần chạy sau bắt đầu sạch.
