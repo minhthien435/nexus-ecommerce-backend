@@ -19,6 +19,7 @@ describe('AuthController', () => {
       {} as never,
       captcha as never,
       {} as never,
+      {} as never,
     );
     await expect(
       controller.login(
@@ -48,6 +49,7 @@ describe('AuthController', () => {
       auth as never,
       tokens as never,
       captcha as never,
+      {} as never,
       {} as never,
     );
     const dto = {
@@ -97,6 +99,7 @@ describe('AuthController', () => {
       tokens as never,
       {} as never,
       google as never,
+      {} as never,
     );
     await expect(
       controller.googleLogin({ credential: 'credential' }, request, response),
@@ -122,6 +125,7 @@ describe('AuthController', () => {
       tokens as never,
       {} as never,
       google as never,
+      {} as never,
     );
 
     await expect(
@@ -129,5 +133,58 @@ describe('AuthController', () => {
     ).rejects.toThrow(UnauthorizedException);
     expect(auth.loginWithGoogle).not.toHaveBeenCalled();
     expect(tokens.setRefreshTokenCookie).not.toHaveBeenCalled();
+  });
+
+  it('delegates forgotPassword, verifyResetOtp, and resetPassword to PasswordResetService', async () => {
+    const passwordReset = {
+      forgotPassword: vi
+        .fn()
+        .mockResolvedValue({
+          email: 'user@example.com',
+          expiresIn: 900,
+          devOtp: '123456',
+        }),
+      verifyResetOtp: vi.fn().mockResolvedValue({ resetToken: 'token-abc' }),
+      resetPassword: vi.fn().mockResolvedValue(null),
+    };
+    const controller = new AuthController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      passwordReset as never,
+    );
+
+    await expect(
+      controller.forgotPassword({ email: 'user@example.com' }),
+    ).resolves.toEqual({
+      email: 'user@example.com',
+      expiresIn: 900,
+      devOtp: '123456',
+    });
+    expect(passwordReset.forgotPassword).toHaveBeenCalledWith({
+      email: 'user@example.com',
+    });
+
+    await expect(
+      controller.verifyResetOtp({ email: 'user@example.com', otp: '123456' }),
+    ).resolves.toEqual({
+      resetToken: 'token-abc',
+    });
+    expect(passwordReset.verifyResetOtp).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      otp: '123456',
+    });
+
+    await expect(
+      controller.resetPassword({
+        resetToken: 'token-abc',
+        newPassword: 'NewPassword123@',
+      }),
+    ).resolves.toBeNull();
+    expect(passwordReset.resetPassword).toHaveBeenCalledWith({
+      resetToken: 'token-abc',
+      newPassword: 'NewPassword123@',
+    });
   });
 });
