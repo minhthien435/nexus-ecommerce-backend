@@ -31,9 +31,11 @@ import { IdentityPublicApiService } from './identity-public-api.service.js';
 import { PasswordResetService } from './auth/services/password-reset.service.js';
 import { RecaptchaService } from './auth/services/recaptcha.service.js';
 import { GoogleIdTokenService } from './auth/services/google-id-token.service.js';
+import { EmailModule } from '../../common/email/email.module.js';
 
 @Module({
   imports: [
+    EmailModule,
     TypeOrmModule.forFeature([
       UserEntity,
       RefreshTokenEntity,

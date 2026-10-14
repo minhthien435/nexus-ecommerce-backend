@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   NotFoundException,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -25,6 +26,9 @@ describe('PasswordResetService (BMAD TDD)', () => {
   };
   let refreshTokenRepo: { update: ReturnType<typeof vi.fn> };
   let dataSource: { transaction: ReturnType<typeof vi.fn> };
+  let emailService: {
+    sendPasswordResetOtp: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     userRepo = {
@@ -39,6 +43,9 @@ describe('PasswordResetService (BMAD TDD)', () => {
     };
     refreshTokenRepo = {
       update: vi.fn().mockResolvedValue({ affected: 1 }),
+    };
+    emailService = {
+      sendPasswordResetOtp: vi.fn().mockResolvedValue(undefined),
     };
     dataSource = {
       transaction: vi.fn(async (cb) => {
@@ -59,6 +66,7 @@ describe('PasswordResetService (BMAD TDD)', () => {
       resetTokenRepo as never,
       refreshTokenRepo as never,
       dataSource as never,
+      emailService as never,
     );
   });
 
@@ -90,10 +98,15 @@ describe('PasswordResetService (BMAD TDD)', () => {
       );
       expect(resetTokenRepo.save).toHaveBeenCalled();
       expect(result).toMatchObject({
-        email: 'test@nexus.vn',
+        message: 'Mã xác minh đã được gửi đến email.',
         expiresIn: 900,
-        devOtp: expect.stringMatching(/^\d{6}$/),
       });
+      expect(result).not.toHaveProperty('devOtp');
+      expect(emailService.sendPasswordResetOtp).toHaveBeenCalledWith(
+        'test@nexus.vn',
+        expect.stringMatching(/^\d{6}$/),
+        15,
+      );
     });
 
     it('throws NotFoundException when email is not found in database', async () => {
@@ -102,6 +115,29 @@ describe('PasswordResetService (BMAD TDD)', () => {
       await expect(
         service.forgotPassword({ email: 'unknown@nexus.vn' }),
       ).rejects.toThrow(NotFoundException);
+      expect(emailService.sendPasswordResetOtp).not.toHaveBeenCalled();
+    });
+
+    it('invalidates the newly created OTP when email delivery fails', async () => {
+      const existingUser = Object.assign(new UserEntity(), {
+        id: 'user-1',
+        email: 'test@nexus.vn',
+        status: 'ACTIVE',
+        deletedAt: null,
+      });
+      userRepo.findOne.mockResolvedValue(existingUser);
+      emailService.sendPasswordResetOtp.mockRejectedValue(
+        new ServiceUnavailableException('SMTP unavailable'),
+      );
+
+      await expect(
+        service.forgotPassword({ email: 'test@nexus.vn' }),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(resetTokenRepo.save).toHaveBeenCalledTimes(2);
+      expect(resetTokenRepo.save).toHaveBeenLastCalledWith(
+        expect.objectContaining({ usedAt: expect.any(Date) }),
+      );
     });
   });
 

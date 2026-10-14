@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -15,20 +14,18 @@ import { UserEntity } from '../../domain/user.entity.js';
 import { ForgotPasswordDto } from '../dtos/forgot-password.dto.js';
 import { VerifyResetOtpDto } from '../dtos/verify-reset-otp.dto.js';
 import { ResetPasswordDto } from '../dtos/reset-password.dto.js';
+import { EmailService } from '../../../../common/email/email.service.js';
 
 const OTP_TTL_SECONDS = 900; // 15 phút
 const RESET_TOKEN_TTL_SECONDS = 900; // 15 phút
 
 export type ForgotPasswordResult = {
-  email: string;
+  message: string;
   expiresIn: number;
-  devOtp?: string;
 };
 
 @Injectable()
 export class PasswordResetService {
-  private readonly logger = new Logger(PasswordResetService.name);
-
   constructor(
     @InjectRepository(UserEntity)
     private readonly userRepo: Repository<UserEntity>,
@@ -37,6 +34,7 @@ export class PasswordResetService {
     @InjectRepository(RefreshTokenEntity)
     private readonly refreshTokenRepo: Repository<RefreshTokenEntity>,
     private readonly dataSource: DataSource,
+    private readonly emailService: EmailService,
   ) {}
 
   async forgotPassword(dto: ForgotPasswordDto): Promise<ForgotPasswordResult> {
@@ -55,7 +53,7 @@ export class PasswordResetService {
       });
     }
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = crypto.randomInt(100000, 1_000_000).toString();
     const tokenHash = this.hashOtp(user.id, otp);
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
 
@@ -73,14 +71,21 @@ export class PasswordResetService {
     });
     await this.resetTokenRepo.save(tokenRecord);
 
-    this.logger.log(
-      `[Forgot-Password] Generated OTP for ${user.email}: ${otp}`,
-    );
+    try {
+      await this.emailService.sendPasswordResetOtp(
+        user.email,
+        otp,
+        OTP_TTL_SECONDS / 60,
+      );
+    } catch (error) {
+      tokenRecord.usedAt = new Date();
+      await this.resetTokenRepo.save(tokenRecord);
+      throw error;
+    }
 
     return {
-      email: user.email,
+      message: 'Mã xác minh đã được gửi đến email.',
       expiresIn: OTP_TTL_SECONDS,
-      devOtp: otp,
     };
   }
 
