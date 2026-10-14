@@ -80,6 +80,7 @@ describe('Auth DTOs Validation', () => {
       const dto = plainToInstance(LoginDto, {
         email: 'user@example.com',
         password: 'Password123!',
+        captchaToken: 'captcha-token',
       });
 
       const errors = await validate(dto);
@@ -90,6 +91,7 @@ describe('Auth DTOs Validation', () => {
       const dto = plainToInstance(LoginDto, {
         email: 'notanemail',
         password: 'Password123!',
+        captchaToken: 'captcha-token',
       });
 
       const errors = await validate(dto);
@@ -100,10 +102,24 @@ describe('Auth DTOs Validation', () => {
       const dto = plainToInstance(LoginDto, {
         email: 'user@example.com',
         password: '',
+        captchaToken: 'captcha-token',
       });
 
       const errors = await validate(dto);
       expect(errors.some((e) => e.property === 'password')).toBe(true);
+    });
+
+    it('từ chối captchaToken trống và chấp nhận rememberMe', async () => {
+      const dto = plainToInstance(LoginDto, {
+        email: 'user@example.com',
+        password: 'Password123!',
+        captchaToken: '',
+        rememberMe: true,
+      });
+
+      const errors = await validate(dto);
+      expect(errors.some((e) => e.property === 'captchaToken')).toBe(true);
+      expect(errors.some((e) => e.property === 'rememberMe')).toBe(false);
     });
   });
 });

@@ -28,6 +28,8 @@ import { AdminUserController } from './admin/admin-user.controller.js';
 import { AdminUserService } from './admin/admin-user.service.js';
 import { IdentityPublicApi } from './identity-public.api.js';
 import { IdentityPublicApiService } from './identity-public-api.service.js';
+import { RecaptchaService } from './auth/services/recaptcha.service.js';
+import { GoogleIdTokenService } from './auth/services/google-id-token.service.js';
 
 @Module({
   imports: [
@@ -59,6 +61,8 @@ import { IdentityPublicApiService } from './identity-public-api.service.js';
   providers: [
     AuthService,
     TokenService,
+    RecaptchaService,
+    GoogleIdTokenService,
     AccessTokenGuard,
     ProfileService,
     PasswordService,

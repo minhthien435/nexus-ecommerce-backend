@@ -24,6 +24,7 @@ export class PasswordService {
         .getOne();
       if (
         !user ||
+        !user.passwordHash ||
         !(await argon2.verify(user.passwordHash, input.currentPassword))
       ) {
         throw new BadRequestException('Current password is incorrect');

@@ -6,7 +6,6 @@ import {
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as argon2 from 'argon2';
 import { UserEntity } from '../../domain/user.entity.js';
-import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
 import { AuthService } from './auth.service.js';
 
 vi.mock('argon2', () => ({
@@ -44,13 +43,14 @@ describe('AuthService', () => {
 
     users = {
       createQueryBuilder: vi.fn(() => query),
+      findOne: vi.fn(),
       create: vi.fn((value) => ({ id: 'new-user', tokenVersion: 0, ...value })),
       save: vi.fn(async (value) => value),
     };
 
     refreshTokens = {};
 
-    const manager = {
+    manager = {
       getRepository: vi.fn((entity) =>
         entity === UserEntity ? users : refreshTokens,
       ),
@@ -288,6 +288,145 @@ describe('AuthService', () => {
       const lockedTime = savedUser.lockedUntil.getTime();
       expect(lockedTime).toBeGreaterThanOrEqual(beforeTime + 14 * 60 * 1000);
       expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('loginWithGoogle', () => {
+    const identity = {
+      subject: 'google-sub',
+      email: 'user@example.com',
+      fullName: 'Google User',
+    };
+
+    it('creates an ACTIVE passwordless BUYER and issues tokens', async () => {
+      users.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+
+      const result = await service.loginWithGoogle(identity, {
+        ipAddress: '127.0.0.1',
+      });
+
+      expect(users.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: identity.email,
+          googleSub: identity.subject,
+          passwordHash: null,
+          status: 'ACTIVE',
+        }),
+      );
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining("code = 'BUYER'"),
+        ['new-user'],
+      );
+      expect(result).toEqual(
+        expect.objectContaining({
+          accessToken: 'access-token',
+          rawRefreshToken: 'refresh-token',
+        }),
+      );
+      expect(result.user).not.toHaveProperty('passwordHash');
+    });
+
+    it('links an existing eligible account by verified email', async () => {
+      const existing = Object.assign(new UserEntity(), {
+        id: 'existing-user',
+        email: identity.email,
+        passwordHash: 'hash:Password1!',
+        googleSub: null,
+        status: 'ACTIVE',
+        deletedAt: null,
+      });
+      users.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(existing);
+
+      await service.loginWithGoogle(identity, {});
+
+      expect(existing.googleSub).toBe(identity.subject);
+      expect(users.save).toHaveBeenCalledWith(
+        expect.objectContaining({ googleSub: identity.subject }),
+      );
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it('resolves an existing mixed-case email case-insensitively', async () => {
+      const existing = Object.assign(new UserEntity(), {
+        id: 'existing-user',
+        email: 'User@Example.com',
+        passwordHash: 'hash:Password1!',
+        googleSub: null,
+        status: 'ACTIVE',
+        deletedAt: null,
+      });
+      users.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(existing);
+
+      await service.loginWithGoogle(identity, {});
+
+      expect(users.findOne).toHaveBeenNthCalledWith(2, {
+        where: {
+          email: expect.objectContaining({
+            _type: 'ilike',
+            _value: 'user@example.com',
+          }),
+        },
+        withDeleted: true,
+      });
+      expect(existing.googleSub).toBe(identity.subject);
+      expect(users.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects conflicting identities without issuing tokens', async () => {
+      const bySubject = Object.assign(new UserEntity(), {
+        id: 'one',
+        status: 'ACTIVE',
+      });
+      const byEmail = Object.assign(new UserEntity(), {
+        id: 'two',
+        status: 'ACTIVE',
+      });
+      users.findOne
+        .mockResolvedValueOnce(bySubject)
+        .mockResolvedValueOnce(byEmail);
+
+      await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
+        ConflictException,
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+      expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects inactive accounts without issuing tokens', async () => {
+      const inactive = Object.assign(new UserEntity(), {
+        id: 'inactive',
+        email: identity.email,
+        googleSub: identity.subject,
+        status: 'SUSPENDED',
+        deletedAt: null,
+      });
+      users.findOne
+        .mockResolvedValueOnce(inactive)
+        .mockResolvedValueOnce(inactive);
+
+      await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects deleted Google-linked accounts without issuing tokens', async () => {
+      const deleted = Object.assign(new UserEntity(), {
+        id: 'deleted',
+        email: identity.email,
+        googleSub: identity.subject,
+        status: 'ACTIVE',
+        deletedAt: new Date(),
+      });
+      users.findOne
+        .mockResolvedValueOnce(deleted)
+        .mockResolvedValueOnce(deleted);
+
+      await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+      expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
     });
   });
 });
