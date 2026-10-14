@@ -62,6 +62,17 @@ describe('Auth DTOs Validation', () => {
       expect(errors.some((e) => e.property === 'password')).toBe(true);
     });
 
+    it('từ chối mật khẩu không có ký tự đặc biệt (BR-01)', async () => {
+      const dto = plainToInstance(RegisterDto, {
+        email: 'user@example.com',
+        password: 'Abcdefg1',
+        fullName: 'Nguyễn Văn A',
+      });
+
+      const errors = await validate(dto);
+      expect(errors.some((e) => e.property === 'password')).toBe(true);
+    });
+
     it('từ chối số điện thoại sai định dạng (không phải 10 số)', async () => {
       const dto = plainToInstance(RegisterDto, {
         email: 'user@example.com',

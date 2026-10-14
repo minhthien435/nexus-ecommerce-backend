@@ -62,6 +62,21 @@ export class TransformInterceptor<T> implements NestInterceptor<
           return data as unknown as StandardResponse<T>;
         }
 
+        // Do not double-wrap if controller returned { message, data }
+        if (
+          data !== null &&
+          typeof data === 'object' &&
+          !Array.isArray(data) &&
+          'message' in (data as Record<string, unknown>) &&
+          'data' in (data as Record<string, unknown>)
+        ) {
+          const { data: innerData } = data as Record<string, unknown>;
+          return {
+            success: true,
+            data: innerData === undefined ? null : innerData,
+          } as unknown as StandardResponse<T>;
+        }
+
         // Handle undefined -> null, normal data -> wrap
         const normalizedData = data === undefined ? null : data;
 

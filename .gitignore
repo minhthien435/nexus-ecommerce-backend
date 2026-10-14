@@ -9,3 +9,6 @@ coverage/
 # Local BMad workflow artifacts
 _bmad/
 _bmad-output/
+
+# Frontend test clone
+frontend/

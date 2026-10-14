@@ -71,9 +71,11 @@ describe('AddressController (e2e)', () => {
   afterAll(async () => app.close());
 
   it('returns 401 when the bearer token is missing or invalid', async () => {
-    await request(app.getHttpServer()).get('/users/addresses').expect(401);
     await request(app.getHttpServer())
-      .get('/users/addresses')
+      .get('/api/v1/users/addresses')
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/v1/users/addresses')
       .set('Authorization', 'Bearer invalid')
       .expect(401);
     expect(service.list).not.toHaveBeenCalled();
@@ -81,7 +83,7 @@ describe('AddressController (e2e)', () => {
 
   it('passes the current user to list', async () => {
     await request(app.getHttpServer())
-      .get('/users/addresses')
+      .get('/api/v1/users/addresses')
       .set('Authorization', `Bearer ${token}`)
       .expect(200, []);
     expect(service.list).toHaveBeenCalledWith(userId);
@@ -89,7 +91,7 @@ describe('AddressController (e2e)', () => {
 
   it('creates valid input and rejects invalid or unknown input', async () => {
     await request(app.getHttpServer())
-      .post('/users/addresses')
+      .post('/api/v1/users/addresses')
       .set('Authorization', `Bearer ${token}`)
       .send(valid)
       .expect(201);
@@ -102,12 +104,12 @@ describe('AddressController (e2e)', () => {
     );
 
     await request(app.getHttpServer())
-      .post('/users/addresses')
+      .post('/api/v1/users/addresses')
       .set('Authorization', `Bearer ${token}`)
       .send({ ...valid, recipientName: '' })
       .expect(400);
     await request(app.getHttpServer())
-      .post('/users/addresses')
+      .post('/api/v1/users/addresses')
       .set('Authorization', `Bearer ${token}`)
       .send({ ...valid, surprise: true })
       .expect(400);
@@ -115,7 +117,7 @@ describe('AddressController (e2e)', () => {
 
   it('rejects an empty patch and returns 204 for delete', async () => {
     await request(app.getHttpServer())
-      .patch(`/users/addresses/${addressId}`)
+      .patch(`/api/v1/users/addresses/${addressId}`)
       .set('Authorization', `Bearer ${token}`)
       .send({ addressLine: '34 Le Loi' })
       .expect(200);
@@ -124,13 +126,13 @@ describe('AddressController (e2e)', () => {
     });
 
     await request(app.getHttpServer())
-      .patch(`/users/addresses/${addressId}`)
+      .patch(`/api/v1/users/addresses/${addressId}`)
       .set('Authorization', `Bearer ${token}`)
       .send({})
       .expect(400);
 
     await request(app.getHttpServer())
-      .delete(`/users/addresses/${addressId}`)
+      .delete(`/api/v1/users/addresses/${addressId}`)
       .set('Authorization', `Bearer ${token}`)
       .expect(204);
     expect(service.remove).toHaveBeenCalledWith(userId, addressId);

@@ -30,10 +30,7 @@ export class AuthController {
   @Post('register')
   async register(@Body() dto: RegisterDto) {
     const user = await this.authService.register(dto);
-    return {
-      message: 'Đăng ký tài khoản thành công',
-      data: user,
-    };
+    return user;
   }
 
   @Post('login')
@@ -98,11 +95,8 @@ export class AuthController {
       this.tokenService.setRefreshTokenCookie(res, newRawRefreshToken);
 
       return {
-        message: 'Làm mới token thành công',
-        data: {
-          accessToken: newAccessToken,
-          user: { id: user.id, email: user.email, fullName: user.fullName },
-        },
+        accessToken: newAccessToken,
+        user: { id: user.id, email: user.email, fullName: user.fullName },
       };
     } catch (err) {
       this.tokenService.clearRefreshTokenCookie(res);
@@ -119,8 +113,6 @@ export class AuthController {
     }
     this.tokenService.clearRefreshTokenCookie(res);
 
-    return {
-      message: 'Đăng xuất thành công',
-    };
+    return null;
   }
 }

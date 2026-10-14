@@ -19,7 +19,7 @@ import { UpdateAddressDto } from '../dtos/update-address.dto.js';
 import { AddressService } from './address.service.js';
 
 @UseGuards(AccessTokenGuard)
-@Controller('users/addresses')
+@Controller('api/v1/users/addresses')
 export class AddressController {
   constructor(private readonly addresses: AddressService) {}
 

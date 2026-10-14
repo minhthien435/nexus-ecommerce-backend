@@ -99,9 +99,17 @@ export class AuthService {
         const remainingMinutes = Math.ceil(
           (user.lockedUntil.getTime() - now.getTime()) / 60000,
         );
-        throw new ForbiddenException(
-          `Tài khoản đang tạm khóa do nhập sai nhiều lần. Vui lòng thử lại sau ${remainingMinutes} phút`,
+        const remainingSeconds = Math.ceil(
+          (user.lockedUntil.getTime() - now.getTime()) / 1000,
         );
+        throw new ForbiddenException({
+          errorCode: 'ACCOUNT_TEMPORARILY_LOCKED',
+          message: `Tài khoản đang tạm khóa do nhập sai nhiều lần. Vui lòng thử lại sau ${remainingMinutes} phút`,
+          data: {
+            lockedUntil: user.lockedUntil.toISOString(),
+            remainingSeconds,
+          },
+        });
       }
       if (
         !user.passwordHash ||
