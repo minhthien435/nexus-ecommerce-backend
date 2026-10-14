@@ -13,7 +13,11 @@ vi.mock('argon2', () => ({
 }));
 
 type State = {
-  user: { id: string; passwordHash: string; tokenVersion: number } | null;
+  user: {
+    id: string;
+    passwordHash: string | null;
+    tokenVersion: number;
+  } | null;
   tokens: Array<{ userId: string; revokedAt: Date | null }>;
 };
 

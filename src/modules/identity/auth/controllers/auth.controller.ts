@@ -14,12 +14,17 @@ import { AuthService } from '../services/auth.service.js';
 import { TokenService } from '../services/token.service.js';
 import { RegisterDto } from '../dtos/register.dto.js';
 import { LoginDto } from '../dtos/login.dto.js';
+import { GoogleLoginDto } from '../dtos/google-login.dto.js';
+import { RecaptchaService } from '../services/recaptcha.service.js';
+import { GoogleIdTokenService } from '../services/google-id-token.service.js';
 
 @Controller('api/v1/auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly tokenService: TokenService,
+    private readonly recaptchaService: RecaptchaService,
+    private readonly googleIdTokenService: GoogleIdTokenService,
   ) {}
 
   @Post('register')
@@ -38,6 +43,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
+    await this.recaptchaService.verify(dto.captchaToken, req.ip);
     const metadata = {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
@@ -49,13 +55,24 @@ export class AuthController {
     );
     this.tokenService.setRefreshTokenCookie(res, rawRefreshToken);
 
-    return {
-      message: 'Đăng nhập thành công',
-      data: {
-        accessToken,
-        user,
-      },
-    };
+    return { accessToken, expiresIn: 3600, user };
+  }
+
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  async googleLogin(
+    @Body() dto: GoogleLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const identity = await this.googleIdTokenService.verify(dto.credential);
+    const { user, accessToken, rawRefreshToken } =
+      await this.authService.loginWithGoogle(identity, {
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+    this.tokenService.setRefreshTokenCookie(res, rawRefreshToken);
+    return { accessToken, expiresIn: 3600, user };
   }
 
   @Post('refresh')
