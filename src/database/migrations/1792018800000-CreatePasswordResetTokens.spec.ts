@@ -8,9 +8,15 @@ describe('CreatePasswordResetTokens migration', () => {
     await new CreatePasswordResetTokens1792018800000().up({ query } as never);
 
     expect(query.mock.calls.map(([sql]) => sql)).toEqual([
-      expect.stringMatching(/CREATE TABLE "identity"\."password_reset_tokens"/),
-      expect.stringContaining('UQ_password_reset_tokens_token_hash'),
-      expect.stringContaining('IDX_password_reset_tokens_user_active'),
+      expect.stringMatching(
+        /CREATE TABLE IF NOT EXISTS "identity"\."password_reset_tokens"/,
+      ),
+      expect.stringMatching(
+        /CREATE UNIQUE INDEX IF NOT EXISTS "UQ_password_reset_tokens_token_hash"/,
+      ),
+      expect.stringMatching(
+        /CREATE INDEX IF NOT EXISTS "IDX_password_reset_tokens_user_active"/,
+      ),
     ]);
     expect(query.mock.calls[0][0]).toContain(
       'REFERENCES "identity"."users"("id") ON DELETE CASCADE',
@@ -20,14 +26,11 @@ describe('CreatePasswordResetTokens migration', () => {
     );
   });
 
-  it('drops the reset-token table on rollback', async () => {
+  it('preserves an adopted reset-token table on rollback', async () => {
     const query = vi.fn().mockResolvedValue(undefined);
 
     await new CreatePasswordResetTokens1792018800000().down({ query } as never);
 
-    expect(query).toHaveBeenCalledOnce();
-    expect(query).toHaveBeenCalledWith(
-      'DROP TABLE "identity"."password_reset_tokens"',
-    );
+    expect(query).not.toHaveBeenCalled();
   });
 });
