@@ -6,9 +6,14 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { UserEntity } from './user.entity.js';
 
+@Index('UQ_password_reset_tokens_token_hash', ['tokenHash'], { unique: true })
+@Index('IDX_password_reset_tokens_user_active', ['userId'], {
+  where: '"used_at" IS NULL',
+})
 @Entity({ name: 'password_reset_tokens', schema: 'identity' })
 export class PasswordResetTokenEntity {
   @PrimaryGeneratedColumn('uuid')

@@ -137,13 +137,10 @@ describe('AuthController', () => {
 
   it('delegates forgotPassword, verifyResetOtp, and resetPassword to PasswordResetService', async () => {
     const passwordReset = {
-      forgotPassword: vi
-        .fn()
-        .mockResolvedValue({
-          email: 'user@example.com',
-          expiresIn: 900,
-          devOtp: '123456',
-        }),
+      forgotPassword: vi.fn().mockResolvedValue({
+        message: 'Mã xác minh đã được gửi đến email.',
+        expiresIn: 900,
+      }),
       verifyResetOtp: vi.fn().mockResolvedValue({ resetToken: 'token-abc' }),
       resetPassword: vi.fn().mockResolvedValue(null),
     };
@@ -158,9 +155,8 @@ describe('AuthController', () => {
     await expect(
       controller.forgotPassword({ email: 'user@example.com' }),
     ).resolves.toEqual({
-      email: 'user@example.com',
+      message: 'Mã xác minh đã được gửi đến email.',
       expiresIn: 900,
-      devOtp: '123456',
     });
     expect(passwordReset.forgotPassword).toHaveBeenCalledWith({
       email: 'user@example.com',
