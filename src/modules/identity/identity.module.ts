@@ -28,6 +28,7 @@ import { AdminUserController } from './admin/admin-user.controller.js';
 import { AdminUserService } from './admin/admin-user.service.js';
 import { IdentityPublicApi } from './identity-public.api.js';
 import { IdentityPublicApiService } from './identity-public-api.service.js';
+import { PasswordResetService } from './auth/services/password-reset.service.js';
 import { RecaptchaService } from './auth/services/recaptcha.service.js';
 import { GoogleIdTokenService } from './auth/services/google-id-token.service.js';
 
@@ -70,6 +71,7 @@ import { GoogleIdTokenService } from './auth/services/google-id-token.service.js
     RolesGuard,
     PermissionsGuard,
     AdminUserService,
+    PasswordResetService,
     {
       provide: IdentityPublicApi,
       useClass: IdentityPublicApiService,
@@ -82,6 +84,7 @@ import { GoogleIdTokenService } from './auth/services/google-id-token.service.js
     RolesGuard,
     PermissionsGuard,
     IdentityPublicApi,
+    PasswordResetService,
   ],
 })
 export class IdentityModule {}

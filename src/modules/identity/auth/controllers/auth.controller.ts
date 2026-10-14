@@ -15,8 +15,12 @@ import { TokenService } from '../services/token.service.js';
 import { RegisterDto } from '../dtos/register.dto.js';
 import { LoginDto } from '../dtos/login.dto.js';
 import { GoogleLoginDto } from '../dtos/google-login.dto.js';
+import { ForgotPasswordDto } from '../dtos/forgot-password.dto.js';
+import { VerifyResetOtpDto } from '../dtos/verify-reset-otp.dto.js';
+import { ResetPasswordDto } from '../dtos/reset-password.dto.js';
 import { RecaptchaService } from '../services/recaptcha.service.js';
 import { GoogleIdTokenService } from '../services/google-id-token.service.js';
+import { PasswordResetService } from '../services/password-reset.service.js';
 
 @Controller('api/v1/auth')
 export class AuthController {
@@ -25,6 +29,7 @@ export class AuthController {
     private readonly tokenService: TokenService,
     private readonly recaptchaService: RecaptchaService,
     private readonly googleIdTokenService: GoogleIdTokenService,
+    private readonly passwordResetService: PasswordResetService,
   ) {}
 
   @Post('register')
@@ -113,6 +118,25 @@ export class AuthController {
     }
     this.tokenService.clearRefreshTokenCookie(res);
 
+    return null;
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.passwordResetService.forgotPassword(dto);
+  }
+
+  @Post('verify-reset-otp')
+  @HttpCode(HttpStatus.OK)
+  async verifyResetOtp(@Body() dto: VerifyResetOtpDto) {
+    return this.passwordResetService.verifyResetOtp(dto);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.passwordResetService.resetPassword(dto);
     return null;
   }
 }
