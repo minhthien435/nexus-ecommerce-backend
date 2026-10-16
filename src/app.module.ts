@@ -9,6 +9,7 @@ import { IdentityModule } from './modules/identity/identity.module.js';
 import { AddressModule } from './modules/identity/users/addresses/address.module.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
+import { CatalogModule } from './modules/catalog/catalog.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
     }),
     AddressModule,
     IdentityModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [
