@@ -7,9 +7,9 @@ import { AppService } from './app.service.js';
 import { createTypeOrmOptions } from './config/typeorm.config.js';
 import { IdentityModule } from './modules/identity/identity.module.js';
 import { AddressModule } from './modules/identity/users/addresses/address.module.js';
+import { CatalogModule } from './modules/catalog/catalog.module.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
-import { CatalogModule } from './modules/catalog/catalog.module.js';
 
 @Module({
   imports: [
