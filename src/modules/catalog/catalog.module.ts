@@ -1,6 +1,7 @@
 import { CatalogCartApi } from './catalog-cart.api.js';
 import { CatalogCartService } from './services/catalog-cart.service.js';
 import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdentityModule } from '../identity/identity.module.js';
 import { AdminCategoryController } from './controllers/admin-category.controller.js';
@@ -29,6 +30,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
       ProductSkuEntity,
     ]),
     IdentityModule,
+    JwtModule,
   ],
   controllers: [
     CategoryController,
