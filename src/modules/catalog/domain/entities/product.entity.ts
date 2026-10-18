@@ -5,10 +5,12 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { CategoryEntity } from './category.entity.js';
+import { ProductSkuEntity } from './product-sku.entity.js';
 
 @Entity({ name: 'products', schema: 'catalog' })
 export class ProductEntity {
@@ -54,4 +56,7 @@ export class ProductEntity {
   @ManyToOne(() => CategoryEntity, { nullable: false })
   @JoinColumn({ name: 'category_id' })
   category?: CategoryEntity;
+
+  @OneToMany(() => ProductSkuEntity, (sku) => sku.product)
+  skus?: ProductSkuEntity[];
 }
