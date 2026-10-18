@@ -5,10 +5,12 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { CategoryEntity } from './category.entity.js';
+import { ProductSkuEntity } from './product-sku.entity.js';
 
 @Entity({ name: 'products', schema: 'catalog' })
 export class ProductEntity {
@@ -24,7 +26,7 @@ export class ProductEntity {
   @Column({ type: 'varchar' })
   name: string;
 
-  @Column({ type: 'varchar' })
+  @Column({ type: 'varchar', unique: true })
   slug: string;
 
   @Column({ type: 'text', nullable: true })
@@ -36,11 +38,14 @@ export class ProductEntity {
   @Column({ type: 'varchar', default: 'DRAFT' })
   status: string;
 
-  @Column({ name: 'is_auction_eligible', type: 'boolean', default: false })
+  @Column({ name: 'is_auction_eligible', type: 'boolean', default: true })
   isAuctionEligible: boolean;
 
   @Column({ type: 'jsonb', nullable: true })
   attributes: Record<string, unknown> | null;
+
+  @Column({ name: 'search_vector', type: 'tsvector', nullable: true })
+  searchVector: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
@@ -54,4 +59,7 @@ export class ProductEntity {
   @ManyToOne(() => CategoryEntity, { nullable: false })
   @JoinColumn({ name: 'category_id' })
   category?: CategoryEntity;
+
+  @OneToMany(() => ProductSkuEntity, (sku) => sku.product)
+  skus?: ProductSkuEntity[];
 }

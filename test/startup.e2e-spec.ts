@@ -11,6 +11,12 @@ import { RecaptchaService } from '../src/modules/identity/auth/services/recaptch
 import { CartMergeApi } from '../src/modules/commerce/cart-merge.api.js';
 import { CartWriteService } from '../src/modules/commerce/services/cart-write.service.js';
 import { LoginCartMergeService } from '../src/modules/auth-cart/services/login-cart-merge.service.js';
+import { CatalogCartApi } from '../src/modules/catalog/catalog-cart.api.js';
+import { CatalogCartService } from '../src/modules/catalog/services/catalog-cart.service.js';
+import { ProductSearchService } from '../src/modules/catalog/services/product-search.service.js';
+import { ProductSkuService } from '../src/modules/catalog/services/product-sku.service.js';
+import { ProductController } from '../src/modules/catalog/controllers/product.controller.js';
+import { ProductSkuController } from '../src/modules/catalog/controllers/product-sku.controller.js';
 
 describe('Application startup module graph (e2e)', () => {
   it('loads the complete AppModule without circular initialization errors', () => {
@@ -57,6 +63,11 @@ describe('Application startup module graph (e2e)', () => {
       await app.init();
       expect(module.get(CartMergeApi)).toBe(module.get(CartWriteService));
       expect(module.get(LoginCartMergeService)).toBeDefined();
+      expect(module.get(CatalogCartApi)).toBeInstanceOf(CatalogCartService);
+      expect(module.get(ProductSearchService)).toBeDefined();
+      expect(module.get(ProductSkuService)).toBeDefined();
+      expect(module.get(ProductController)).toBeDefined();
+      expect(module.get(ProductSkuController)).toBeDefined();
       const login = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
         .send({

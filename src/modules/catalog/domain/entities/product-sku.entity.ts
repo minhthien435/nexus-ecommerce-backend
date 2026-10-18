@@ -2,62 +2,79 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { Relation } from 'typeorm';
+import { ProductEntity } from './product.entity.js';
 
-@Entity({ schema: 'catalog', name: 'product_skus' })
+const decimalTransformer = {
+  from(value: string | number): number {
+    return Number(value);
+  },
+  to(value: number): number {
+    return value;
+  },
+};
+
+@Entity({ name: 'product_skus', schema: 'catalog' })
 export class ProductSkuEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column('uuid', { name: 'product_id' })
+  @Column({ name: 'product_id', type: 'uuid' })
   productId: string;
 
-  @Column('varchar', { name: 'sku_code', length: 100 })
+  @Column({ name: 'sku_code', type: 'varchar', unique: true })
   skuCode: string;
 
-  @Column('jsonb', {
-    name: 'variant_attributes',
-    nullable: true,
-    default: () => "'{}'::jsonb",
+  @Column({ name: 'variant_attributes', type: 'jsonb' })
+  attributes: Record<string, string>;
+
+  @Column({
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    transformer: decimalTransformer,
   })
-  variantAttributes: Record<string, unknown> | null;
+  price: number;
 
-  @Column('numeric', { precision: 18, scale: 2 })
-  price: string;
-
-  @Column('char', { length: 3, default: 'VND' })
+  @Column({ type: 'varchar', length: 3, default: 'VND' })
   currency: string;
 
-  @Column('int', { name: 'weight_grams', default: 0 })
+  @Column({ name: 'weight_grams', type: 'integer' })
   weightGrams: number;
 
-  @Column('numeric', {
+  @Column({
     name: 'length_cm',
+    type: 'numeric',
     precision: 8,
     scale: 2,
-    nullable: true,
+    transformer: decimalTransformer,
   })
-  lengthCm: string | null;
+  lengthCm: number;
 
-  @Column('numeric', {
+  @Column({
     name: 'width_cm',
+    type: 'numeric',
     precision: 8,
     scale: 2,
-    nullable: true,
+    transformer: decimalTransformer,
   })
-  widthCm: string | null;
+  widthCm: number;
 
-  @Column('numeric', {
+  @Column({
     name: 'height_cm',
+    type: 'numeric',
     precision: 8,
     scale: 2,
-    nullable: true,
+    transformer: decimalTransformer,
   })
-  heightCm: string | null;
+  heightCm: number;
 
-  @Column('boolean', { name: 'is_active', default: true })
+  @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
@@ -65,4 +82,10 @@ export class ProductSkuEntity {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
+
+  @ManyToOne(() => ProductEntity, (product) => product.skus, {
+    nullable: false,
+  })
+  @JoinColumn({ name: 'product_id' })
+  product?: Relation<ProductEntity>;
 }
