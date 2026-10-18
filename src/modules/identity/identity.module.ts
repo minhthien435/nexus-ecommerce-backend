@@ -10,7 +10,6 @@ import { PasswordResetTokenEntity } from './domain/password-reset-token.entity.j
 
 import { AuthService } from './auth/services/auth.service.js';
 import { TokenService } from './auth/services/token.service.js';
-import { AuthController } from './auth/controllers/auth.controller.js';
 import { AccessTokenGuard } from './auth/guards/access-token.guard.js';
 import { ProfileUserEntity } from './users/entities/profile-user.entity.js';
 import { ProfileController } from './users/profile/profile.controller.js';
@@ -55,12 +54,7 @@ import { EmailModule } from '../../common/email/email.module.js';
       }),
     }),
   ],
-  controllers: [
-    AuthController,
-    ProfileController,
-    PasswordController,
-    AdminUserController,
-  ],
+  controllers: [ProfileController, PasswordController, AdminUserController],
   providers: [
     AuthService,
     TokenService,
@@ -80,6 +74,9 @@ import { EmailModule } from '../../common/email/email.module.js';
     },
   ],
   exports: [
+    AccessTokenGuard,
+    JwtModule,
+    TypeOrmModule,
     AuthService,
     TokenService,
     RbacService,
@@ -87,6 +84,8 @@ import { EmailModule } from '../../common/email/email.module.js';
     PermissionsGuard,
     IdentityPublicApi,
     PasswordResetService,
+    RecaptchaService,
+    GoogleIdTokenService,
   ],
 })
 export class IdentityModule {}

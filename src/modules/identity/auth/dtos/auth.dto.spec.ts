@@ -1,8 +1,69 @@
+import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { describe, expect, it } from 'vitest';
 import { RegisterDto } from './register.dto.js';
 import { LoginDto } from './login.dto.js';
+import { GoogleLoginDto } from './google-login.dto.js';
+
+describe.each([
+  {
+    name: 'password',
+    dto: LoginDto,
+    base: {
+      email: 'user@example.com',
+      password: 'pass',
+      captchaToken: 'captcha',
+    },
+  },
+  { name: 'Google', dto: GoogleLoginDto, base: { credential: 'credential' } },
+])('$name guest cart validation', ({ dto, base }) => {
+  const skuId = 'BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB';
+  const check = (value: unknown) =>
+    validate(plainToInstance(dto as typeof LoginDto, value), {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
+  it.each(
+    [
+      undefined,
+      [],
+      [{ skuId, quantity: 1 }],
+      [{ skuId, quantity: 2147483647 }],
+      Array.from({ length: 100 }, () => ({ skuId, quantity: 1 })),
+    ].map((value) => [value]),
+  )('accepts optional valid input %j', async (guestCartItems) => {
+    expect(
+      await check({
+        ...base,
+        ...(guestCartItems === undefined ? {} : { guestCartItems }),
+      }),
+    ).toHaveLength(0);
+  });
+  it.each(
+    [
+      null,
+      {},
+      'bad',
+      1,
+      [null],
+      [[]],
+      [{}],
+      [{ skuId: 'bad', quantity: 1 }],
+      ...[0, -1, 1.1, 2147483648, '1', null, true].map((quantity) => [
+        { skuId, quantity },
+      ]),
+      ...['userId', 'productId', 'sellerId', 'price', 'unitPriceSnapshot'].map(
+        (key) => [{ skuId, quantity: 1, [key]: 'forged' }],
+      ),
+      Array.from({ length: 101 }, () => ({ skuId, quantity: 1 })),
+    ].map((value) => [value]),
+  )('rejects invalid nested input %j', async (guestCartItems) => {
+    expect((await check({ ...base, guestCartItems })).length).toBeGreaterThan(
+      0,
+    );
+  });
+});
 
 describe('Auth DTOs Validation', () => {
   describe('RegisterDto', () => {

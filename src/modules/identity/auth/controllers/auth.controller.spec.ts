@@ -2,6 +2,110 @@ import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthController } from './auth.controller.js';
 
+describe.each(['password', 'Google'])(
+  'AuthController $0 cart merge',
+  (kind) => {
+    const request = { ip: '127.0.0.1', headers: {} } as never;
+    const response = {} as never;
+    const input = [
+      { skuId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', quantity: 3 },
+    ];
+    function setup() {
+      const auth = { login: vi.fn(), loginWithGoogle: vi.fn() };
+      const result = {
+        user: { id: 'authenticated-user' },
+        accessToken: 'access',
+        rawRefreshToken: 'refresh',
+      };
+      auth.login.mockResolvedValue(result);
+      auth.loginWithGoogle.mockResolvedValue(result);
+      const tokens = { setRefreshTokenCookie: vi.fn() };
+      const merge = {
+        merge: vi
+          .fn()
+          .mockResolvedValue({ status: 'failed', accepted: [], skipped: [] }),
+      };
+      const controller = new AuthController(
+        auth as never,
+        tokens as never,
+        { verify: vi.fn() } as never,
+        { verify: vi.fn() } as never,
+        {} as never,
+        merge as never,
+      );
+      const login = (guestCartItems?: typeof input) =>
+        kind === 'password'
+          ? controller.login(
+              {
+                email: 'user@example.com',
+                password: 'pass',
+                captchaToken: 'captcha',
+                ...(guestCartItems === undefined ? {} : { guestCartItems }),
+              },
+              request,
+              response,
+            )
+          : controller.googleLogin(
+              {
+                credential: 'credential',
+                ...(guestCartItems === undefined ? {} : { guestCartItems }),
+              },
+              request,
+              response,
+            );
+      return { auth, tokens, merge, login };
+    }
+    it('preserves the absent-field response without a coordinator call', async () => {
+      const s = setup();
+      expect(await s.login()).toEqual({
+        user: { id: 'authenticated-user' },
+        accessToken: 'access',
+        expiresIn: 3600,
+      });
+      expect(s.merge.merge).not.toHaveBeenCalled();
+    });
+    it('awaits authentication and sets its cookie before the optional merge, preserving sanitized failure', async () => {
+      const s = setup();
+      let finish!: (value: unknown) => void;
+      const auth = kind === 'password' ? s.auth.login : s.auth.loginWithGoogle;
+      auth.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const pending = s.login(input);
+      await Promise.resolve();
+      expect(s.merge.merge).not.toHaveBeenCalled();
+      finish({
+        user: { id: 'authenticated-user' },
+        accessToken: 'access',
+        rawRefreshToken: 'refresh',
+      });
+      expect(await pending).toEqual({
+        user: { id: 'authenticated-user' },
+        accessToken: 'access',
+        expiresIn: 3600,
+        cartMerge: { status: 'failed', accepted: [], skipped: [] },
+      });
+      expect(s.merge.merge).toHaveBeenCalledWith('authenticated-user', input);
+      expect(
+        s.tokens.setRefreshTokenCookie.mock.invocationCallOrder[0],
+      ).toBeLessThan(s.merge.merge.mock.invocationCallOrder[0]);
+    });
+    it('does not merge or set cookies after authentication fails', async () => {
+      const s = setup();
+      (kind === 'password'
+        ? s.auth.login
+        : s.auth.loginWithGoogle
+      ).mockRejectedValue(new UnauthorizedException());
+      await expect(s.login(input)).rejects.toThrow(UnauthorizedException);
+      expect(s.merge.merge).not.toHaveBeenCalled();
+      expect(s.tokens.setRefreshTokenCookie).not.toHaveBeenCalled();
+    });
+  },
+);
+
 describe('AuthController', () => {
   const response = {} as never;
   const request = {
@@ -18,6 +122,7 @@ describe('AuthController', () => {
       auth as never,
       {} as never,
       captcha as never,
+      {} as never,
       {} as never,
       {} as never,
     );
@@ -49,6 +154,7 @@ describe('AuthController', () => {
       auth as never,
       tokens as never,
       captcha as never,
+      {} as never,
       {} as never,
       {} as never,
     );
@@ -100,6 +206,7 @@ describe('AuthController', () => {
       {} as never,
       google as never,
       {} as never,
+      {} as never,
     );
     await expect(
       controller.googleLogin({ credential: 'credential' }, request, response),
@@ -126,6 +233,7 @@ describe('AuthController', () => {
       {} as never,
       google as never,
       {} as never,
+      {} as never,
     );
 
     await expect(
@@ -150,6 +258,7 @@ describe('AuthController', () => {
       {} as never,
       {} as never,
       passwordReset as never,
+      {} as never,
     );
 
     await expect(
