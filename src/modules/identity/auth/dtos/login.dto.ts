@@ -5,7 +5,8 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-export class LoginDto {
+import { GuestCartInputDto } from './guest-cart-item.dto.js';
+export class LoginDto extends GuestCartInputDto {
   @IsEmail({}, { message: 'Email không hợp lệ' })
   email: string;
 

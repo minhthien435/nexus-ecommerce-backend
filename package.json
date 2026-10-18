@@ -25,6 +25,8 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+    "test:cart:db": "npm run build && node scripts/test-cart-read.mjs",
+    "test:cart:cov": "vitest run src/modules/commerce/services src/modules/catalog/services/catalog-cart.service.spec.ts src/modules/fulfillment/services src/modules/auth-cart/services --coverage --coverage.include=\"src/modules/**/services/{cart.service,cart-write.service,cart-money,catalog-cart.service,inventory-read.service,login-cart-merge.service}.ts\" --coverage.thresholds.perFile --coverage.thresholds.lines=80 --coverage.thresholds.branches=80 --coverage.thresholds.functions=80 --coverage.thresholds.statements=80 --coverage.reporter=text --coverage.reporter=json-summary",
     "db:test": "node scripts/test-db.mjs",
     "migration:run": "npm run build && typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "npm run build && typeorm migration:revert -d dist/database/data-source.js",

@@ -1,3 +1,5 @@
+import { CatalogCartApi } from './catalog-cart.api.js';
+import { CatalogCartService } from './services/catalog-cart.service.js';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdentityModule } from '../identity/identity.module.js';
@@ -39,6 +41,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
     CategoryService,
     ProductSearchService,
     ProductSkuService,
+    { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,
       useClass: UnavailableInventoryAvailabilityAdapter,
@@ -50,6 +53,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
     ProductSearchService,
     ProductSkuService,
     TypeOrmModule,
+    CatalogCartApi,
   ],
 })
 export class CatalogModule {}

@@ -8,6 +8,7 @@ import {
   HttpCode,
   HttpStatus,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from '../services/auth.service.js';
@@ -21,6 +22,8 @@ import { ResetPasswordDto } from '../dtos/reset-password.dto.js';
 import { RecaptchaService } from '../services/recaptcha.service.js';
 import { GoogleIdTokenService } from '../services/google-id-token.service.js';
 import { PasswordResetService } from '../services/password-reset.service.js';
+import { LoginCartMergeService } from '../../../auth-cart/services/login-cart-merge.service.js';
+import { GuestCartInputGuard } from '../guards/guest-cart-input.guard.js';
 
 @Controller('api/v1/auth')
 export class AuthController {
@@ -30,6 +33,7 @@ export class AuthController {
     private readonly recaptchaService: RecaptchaService,
     private readonly googleIdTokenService: GoogleIdTokenService,
     private readonly passwordResetService: PasswordResetService,
+    private readonly loginCartMerge: LoginCartMergeService,
   ) {}
 
   @Post('register')
@@ -39,6 +43,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @UseGuards(GuestCartInputGuard)
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() dto: LoginDto,
@@ -57,10 +62,23 @@ export class AuthController {
     );
     this.tokenService.setRefreshTokenCookie(res, rawRefreshToken);
 
-    return { accessToken, expiresIn: 3600, user };
+    return {
+      accessToken,
+      expiresIn: 3600,
+      user,
+      ...(dto.guestCartItems === undefined
+        ? {}
+        : {
+            cartMerge: await this.loginCartMerge.merge(
+              user.id,
+              dto.guestCartItems,
+            ),
+          }),
+    };
   }
 
   @Post('google')
+  @UseGuards(GuestCartInputGuard)
   @HttpCode(HttpStatus.OK)
   async googleLogin(
     @Body() dto: GoogleLoginDto,
@@ -74,7 +92,19 @@ export class AuthController {
         userAgent: req.headers['user-agent'],
       });
     this.tokenService.setRefreshTokenCookie(res, rawRefreshToken);
-    return { accessToken, expiresIn: 3600, user };
+    return {
+      accessToken,
+      expiresIn: 3600,
+      user,
+      ...(dto.guestCartItems === undefined
+        ? {}
+        : {
+            cartMerge: await this.loginCartMerge.merge(
+              user.id,
+              dto.guestCartItems,
+            ),
+          }),
+    };
   }
 
   @Post('refresh')

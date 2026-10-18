@@ -36,6 +36,20 @@ describe('ProductSkuEntity', () => {
       type: 'jsonb',
       isNullable: false,
     });
+    expect(
+      metadata.columns.filter(
+        (column) => column.databaseName === 'variant_attributes',
+      ),
+    ).toHaveLength(1);
+    expect(
+      metadata.findColumnWithPropertyName('variantAttributes'),
+    ).toBeUndefined();
+    expect(metadata.findColumnWithPropertyName('price')).toMatchObject({
+      type: 'numeric',
+      precision: 18,
+      scale: 2,
+      isNullable: false,
+    });
     expect(metadata.findColumnWithPropertyName('currency')).toMatchObject({
       type: 'varchar',
       length: '3',
@@ -43,6 +57,25 @@ describe('ProductSkuEntity', () => {
     expect(
       metadata.findColumnWithPropertyName('weightGrams')?.databaseName,
     ).toBe('weight_grams');
+    expect(
+      metadata.findColumnWithPropertyName('weightGrams')?.default,
+    ).toBeUndefined();
+    for (const property of ['lengthCm', 'widthCm', 'heightCm']) {
+      expect(metadata.findColumnWithPropertyName(property)).toMatchObject({
+        type: 'numeric',
+        precision: 8,
+        scale: 2,
+        isNullable: false,
+      });
+    }
+    const relation = metadata.findRelationWithPropertyPath('product');
+    expect(relation?.inverseEntityMetadata.target).toBe(ProductEntity);
+    expect(relation?.joinColumns.map((column) => column.databaseName)).toEqual([
+      'product_id',
+    ]);
+    expect(
+      metadata.columns.filter((column) => column.databaseName === 'product_id'),
+    ).toHaveLength(1);
     expect(metadata.findRelationWithPropertyPath('product')?.onDelete).toBe(
       undefined,
     );

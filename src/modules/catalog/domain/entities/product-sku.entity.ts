@@ -7,6 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { Relation } from 'typeorm';
 import { ProductEntity } from './product.entity.js';
 
 const decimalTransformer = {
@@ -86,5 +87,5 @@ export class ProductSkuEntity {
     nullable: false,
   })
   @JoinColumn({ name: 'product_id' })
-  product?: ProductEntity;
+  product?: Relation<ProductEntity>;
 }
