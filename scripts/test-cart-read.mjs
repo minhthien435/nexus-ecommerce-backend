@@ -7,6 +7,8 @@ import { AppModule } from '../dist/app.module.js';
 import { ProductEntity } from '../dist/modules/catalog/domain/entities/product.entity.js';
 import { CatalogCartService } from '../dist/modules/catalog/services/catalog-cart.service.js';
 import { InventoryReadService } from '../dist/modules/fulfillment/services/inventory-read.service.js';
+import { WarehouseEntity } from '../dist/modules/fulfillment/domain/entities/warehouse.entity.js';
+import { InventoryItemEntity } from '../dist/modules/fulfillment/domain/entities/inventory-item.entity.js';
 import { CartService } from '../dist/modules/commerce/services/cart.service.js';
 
 // Execute production SELECTs with typed CTE fixtures. No tables or persistent
@@ -85,28 +87,54 @@ try {
   });
 
   let warehouseFixture = warehouses;
-  const inventory = new InventoryReadService({
-    query: (sql, params) => {
+  // The real repositories also verify the mapped columns against the actual
+  // schema, within this READ ONLY transaction and without assuming row content.
+  await runner.manager.getRepository(WarehouseEntity).find({ take: 1 });
+  await runner.manager.getRepository(InventoryItemEntity).find({ take: 1 });
+  const fixtureRepository = (entity) => ({
+    find: async (options) => {
+      const repository = source.getRepository(entity);
+      const builder = repository
+        .createQueryBuilder('fixture')
+        .setFindOptions(options);
+      const [sql, params] = builder.getQueryAndParameters();
       const ctes = `WITH fixture_warehouses AS (
-        SELECT * FROM jsonb_to_recordset($2::jsonb)
+        SELECT * FROM jsonb_to_recordset($${params.length + 1}::jsonb)
         AS w(id uuid, is_default boolean, is_active boolean)
       ), fixture_inventory AS (
-        SELECT * FROM jsonb_to_recordset($3::jsonb)
+        SELECT * FROM jsonb_to_recordset($${params.length + 2}::jsonb)
         AS i(id uuid, warehouse_id uuid, sku_id uuid, available_qty integer)
       ) `;
-      return runner.query(
+      const rows = await runner.query(
         ctes +
           sql
-            .replaceAll('fulfillment.warehouses', 'fixture_warehouses')
-            .replaceAll('fulfillment.inventory_items', 'fixture_inventory'),
+            .replaceAll('"fulfillment"."warehouses"', 'fixture_warehouses')
+            .replaceAll('"fulfillment"."inventory_items"', 'fixture_inventory'),
         [
           ...params,
           JSON.stringify(warehouseFixture),
           JSON.stringify(inventoryRows),
         ],
       );
+      // Hydrate generated projection aliases back to entity properties.
+      return rows.map((row) =>
+        Object.fromEntries(
+          repository.metadata.columns
+            .filter((column) =>
+              Object.hasOwn(row, `fixture_${column.databaseName}`),
+            )
+            .map((column) => [
+              column.propertyName,
+              row[`fixture_${column.databaseName}`],
+            ]),
+        ),
+      );
     },
   });
+  const inventory = new InventoryReadService(
+    fixtureRepository(WarehouseEntity),
+    fixtureRepository(InventoryItemEntity),
+  );
 
   const projected = await catalog.getCartSkus([
     id(101),

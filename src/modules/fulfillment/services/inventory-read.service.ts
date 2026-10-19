@@ -1,11 +1,19 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { DataSource, EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
+import { InventoryItemEntity } from '../domain/entities/inventory-item.entity.js';
+import { WarehouseEntity } from '../domain/entities/warehouse.entity.js';
 import { InventoryReadApi } from '../inventory-read.api.js';
 import type { SkuStock } from '../inventory-read.api.js';
 
 @Injectable()
 export class InventoryReadService extends InventoryReadApi {
-  constructor(private readonly dataSource: DataSource) {
+  constructor(
+    @InjectRepository(WarehouseEntity)
+    private readonly warehouses: Repository<WarehouseEntity>,
+    @InjectRepository(InventoryItemEntity)
+    private readonly inventoryItems: Repository<InventoryItemEntity>,
+  ) {
     super();
   }
 
@@ -14,38 +22,41 @@ export class InventoryReadService extends InventoryReadApi {
     manager?: EntityManager,
   ): Promise<SkuStock[]> {
     if (skuIds.length === 0) return [];
-    // A statement snapshot keeps warehouse selection and stock reads consistent.
-    const rows: Array<{
-      warehouseId: string;
-      skuId: string;
-      availableQuantity: number | null;
-    }> = await (manager ?? this.dataSource).query(
-      `SELECT warehouse.id AS "warehouseId", requested.sku_id AS "skuId",
-                CASE WHEN inventory.id IS NULL THEN 0 ELSE inventory.available_qty END AS "availableQuantity"
-         FROM fulfillment.warehouses warehouse
-         CROSS JOIN unnest($1::uuid[]) AS requested(sku_id)
-         LEFT JOIN fulfillment.inventory_items inventory
-           ON inventory.warehouse_id = warehouse.id AND inventory.sku_id = requested.sku_id
-         WHERE warehouse.is_default = true AND warehouse.is_active = true`,
-      [[...new Set(skuIds)]],
-    );
-    const warehouses = new Set(rows.map((row) => row.warehouseId));
-    if (warehouses.size !== 1) {
+    const uniqueSkuIds = [
+      ...new Set(skuIds.map((skuId) => skuId.toLowerCase())),
+    ];
+    const warehouses = manager
+      ? manager.getRepository(WarehouseEntity)
+      : this.warehouses;
+    const inventoryItems = manager
+      ? manager.getRepository(InventoryItemEntity)
+      : this.inventoryItems;
+    const candidates = await warehouses.find({
+      select: { id: true },
+      where: { isDefault: true, isActive: true },
+    });
+    if (candidates.length !== 1) {
       throw new ServiceUnavailableException({
         errorCode: 'DEFAULT_WAREHOUSE_NOT_CONFIGURED',
         message: 'Expected exactly one active default warehouse',
       });
     }
-    return rows.map((row) => {
-      if (!Number.isInteger(row.availableQuantity)) {
+    const rows = await inventoryItems.find({
+      select: { skuId: true, availableQuantity: true },
+      where: { warehouseId: candidates[0].id, skuId: In(uniqueSkuIds) },
+    });
+    const stockBySku = new Map(rows.map((row) => [row.skuId, row]));
+    return uniqueSkuIds.map((skuId) => {
+      const row = stockBySku.get(skuId);
+      if (row && !Number.isInteger(row.availableQuantity)) {
         throw new ServiceUnavailableException({
           errorCode: 'INVALID_INVENTORY_DATA',
           message: 'Available stock cannot be determined',
         });
       }
       return {
-        skuId: row.skuId,
-        availableQuantity: Math.max(0, row.availableQuantity!),
+        skuId,
+        availableQuantity: row ? Math.max(0, row.availableQuantity!) : 0,
       };
     });
   }
