@@ -14,6 +14,10 @@ describe('CreateKaggleImportAndAuctions migration', () => {
     expect(sql).toContain(
       'UNIQUE ("source_system", "dataset_name", "entity_type", "external_id")',
     );
+    expect(sql).toContain(
+      'ALTER TABLE "auction"."auctions" ADD COLUMN "reserve_price"',
+    );
+    expect(sql).not.toContain('CREATE TABLE "auction"."auctions"');
     expect(sql).toContain('CREATE UNIQUE INDEX "UQ_auction_one_open_per_sku"');
     expect(sql).toContain("WHERE \"status\" IN ('SCHEDULED', 'ACTIVE')");
   });

@@ -16,7 +16,8 @@ export class AuctionEntity {
   @Column({ name: 'seller_id', type: 'uuid' }) sellerId: string;
   @Column({ name: 'product_id', type: 'uuid' }) productId: string;
   @Column({ name: 'sku_id', type: 'uuid' }) skuId: string;
-  @Column({ name: 'start_price', type: 'numeric', precision: 18, scale: 2 })
+  @Column({ name: 'title_snapshot', type: 'varchar' }) titleSnapshot: string;
+  @Column({ name: 'starting_price', type: 'numeric', precision: 18, scale: 2 })
   startPrice: string;
   @Column({ name: 'reserve_price', type: 'numeric', precision: 18, scale: 2 })
   reservePrice: string;
@@ -25,8 +26,10 @@ export class AuctionEntity {
   @Column({ name: 'current_price', type: 'numeric', precision: 18, scale: 2 })
   currentPrice: string;
   @Column({ type: 'varchar', length: 3 }) currency: string;
-  @Column({ name: 'starts_at', type: 'timestamptz' }) startsAt: Date;
-  @Column({ name: 'ends_at', type: 'timestamptz' }) endsAt: Date;
+  @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
+  @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
+  @Column({ name: 'original_end_at', type: 'timestamptz' })
+  originalEndsAt: Date;
   @Column({ type: 'varchar', length: 20 }) status: AuctionStatus;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

@@ -45,6 +45,9 @@ export function normalizeAmazonRow(
   const issues: ImportIssue[] = [];
   const name = clean(pick(row, ['product_name', 'name', 'title']));
   const categoryName = clean(pick(row, ['category', 'category_name']));
+  const categorySlug = categoryName
+    ? (mapping[categoryName] ?? mapping[categoryName.split('|')[0]])
+    : undefined;
   const price = priceString(
     pick(row, ['discounted_price', 'actual_price', 'price']),
   );
@@ -56,7 +59,7 @@ export function normalizeAmazonRow(
       errorCode: 'REQUIRED',
       message: 'Tên sản phẩm là bắt buộc',
     });
-  if (!categoryName || !mapping[categoryName])
+  if (!categoryName || !categorySlug)
     issues.push({
       row: rowNumber,
       externalId,
@@ -112,7 +115,7 @@ export function normalizeAmazonRow(
       externalId,
       name: name!,
       categoryName: categoryName!,
-      categorySlug: mapping[categoryName!],
+      categorySlug: categorySlug!,
       brand,
       description: clean(pick(row, ['about_product', 'description'])),
       isAuctionEligible: true,

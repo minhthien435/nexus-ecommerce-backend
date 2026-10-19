@@ -53,4 +53,18 @@ describe('Amazon dataset normalizer', () => {
       }),
     ).toBe(first);
   });
+  it('maps a category path through its top-level Amazon category', () => {
+    const result = normalizeAmazonRow(
+      {
+        product_id: 'P-002',
+        product_name: 'Cable',
+        category: 'Computers&Accessories|Accessories&Peripherals|Cables',
+        discounted_price: '₹399',
+      },
+      2,
+      'amazon',
+      { 'Computers&Accessories': 'computers-accessories' },
+    );
+    expect(result.product?.categorySlug).toBe('computers-accessories');
+  });
 });

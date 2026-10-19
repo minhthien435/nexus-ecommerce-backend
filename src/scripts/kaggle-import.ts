@@ -1,8 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { AppModule } from '../src/app.module.js';
-import { KaggleImportService } from '../src/modules/integrations/kaggle/kaggle-import.service.js';
+import { AppModule } from '../app.module.js';
+import { KaggleImportService } from '../modules/integrations/kaggle/kaggle-import.service.js';
 
 const args = process.argv.slice(2);
 const command = args.shift() ?? 'dry-run';
@@ -16,6 +16,7 @@ const required = (name: string) => {
   if (!value) throw new Error(`Thiếu --${name}`);
   return value;
 };
+
 async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: ['error', 'warn'],
@@ -73,6 +74,7 @@ async function main() {
     await app.close();
   }
 }
+
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

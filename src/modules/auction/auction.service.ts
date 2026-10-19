@@ -69,11 +69,13 @@ export class AuctionService {
         sellerId: product.sellerId,
         productId: product.id,
         skuId: sku.id,
+        titleSnapshot: product.name,
         ...prices,
         currentPrice: prices.startPrice,
         currency: sku.currency,
         startsAt: options.startsAt,
         endsAt,
+        originalEndsAt: endsAt,
         status: options.startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
       }),
     );
