@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -22,6 +23,12 @@ import { CategoryService } from '../services/category.service.js';
 @Controller('api/v1/admin/categories')
 export class AdminCategoryController {
   constructor(private readonly categoryService: CategoryService) {}
+
+  @Permissions('CATEGORY.LIST')
+  @Get()
+  async getCategoryTree() {
+    return this.categoryService.getCategoryTree(true);
+  }
 
   @Permissions('CATEGORY.CREATE')
   @Post()
