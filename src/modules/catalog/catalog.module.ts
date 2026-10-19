@@ -20,6 +20,8 @@ import { CatalogCacheService } from './services/catalog-cache.service.js';
 import { CategoryService } from './services/category.service.js';
 import { ProductSearchService } from './services/product-search.service.js';
 import { ProductSkuService } from './services/product-sku.service.js';
+import { ProductImportService } from './services/product-import.service.js';
+import { ExternalReferenceEntity } from '../integrations/entities/external-reference.entity.js';
 
 @Module({
   imports: [
@@ -28,6 +30,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
       ProductEntity,
       ProductImageEntity,
       ProductSkuEntity,
+      ExternalReferenceEntity,
     ]),
     IdentityModule,
     JwtModule,
@@ -43,6 +46,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
     CategoryService,
     ProductSearchService,
     ProductSkuService,
+    ProductImportService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,
@@ -54,6 +58,7 @@ import { ProductSkuService } from './services/product-sku.service.js';
     CategoryService,
     ProductSearchService,
     ProductSkuService,
+    ProductImportService,
     TypeOrmModule,
     CatalogCartApi,
   ],

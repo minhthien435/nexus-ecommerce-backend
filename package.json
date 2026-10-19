@@ -30,7 +30,12 @@
     "db:test": "node scripts/test-db.mjs",
     "migration:run": "npm run build && typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "npm run build && typeorm migration:revert -d dist/database/data-source.js",
-    "seed:rbac": "npm run build && node dist/database/seeds/run-rbac-seed.js"
+    "seed:rbac": "npm run build && node dist/database/seeds/run-rbac-seed.js",
+    "kaggle:inspect": "npm run build && node dist/scripts/kaggle-import.js inspect",
+    "kaggle:transform": "npm run build && node dist/scripts/kaggle-import.js transform",
+    "kaggle:import": "npm run build && node dist/scripts/kaggle-import.js import",
+    "kaggle:dry-run": "npm run build && node dist/scripts/kaggle-import.js dry-run",
+    "kaggle:generate-auctions": "npm run build && node dist/scripts/kaggle-import.js generate-auctions"
   },
   "lint-staged": {
     "*.ts": [

@@ -1,0 +1,25 @@
+[
+  {
+    "sourceSystem": "KAGGLE",
+    "datasetName": "amazon",
+    "externalId": "P-BAD",
+    "name": "Bad canonical product",
+    "categoryName": "Electronics",
+    "categorySlug": "electronics",
+    "brand": null,
+    "description": null,
+    "isAuctionEligible": true,
+    "attributes": {},
+    "skus": [
+      { "externalId": "", "attributes": {}, "price": "-1", "currency": "XX" }
+    ],
+    "images": [
+      {
+        "externalId": "image-1",
+        "url": "file:///bad",
+        "isPrimary": true,
+        "sortOrder": 0
+      }
+    ]
+  }
+]
