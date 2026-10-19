@@ -79,7 +79,11 @@ export function normalizeAmazonRow(
   const images = [];
   if (imageRaw) {
     try {
-      const url = new URL(imageRaw);
+      const sanitizedUrl = imageRaw.replace(
+        /\/images\/W\/[^/]+\/images\//,
+        '/images/',
+      );
+      const url = new URL(sanitizedUrl);
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
       images.push({
         externalId: `${externalId}:image:primary`,
