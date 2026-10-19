@@ -16,7 +16,7 @@ import { AddressService } from './address.service.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET', 'super-secret-key-15m'),
-        signOptions: { expiresIn: '60m' },
+        signOptions: { expiresIn: '8h' },
       }),
     }),
   ],

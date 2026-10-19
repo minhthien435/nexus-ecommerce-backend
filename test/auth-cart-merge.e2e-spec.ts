@@ -102,7 +102,7 @@ describe('Login guest cart integration (HTTP, mocked Auth and Cart boundaries)',
       expect(response.body.data).toEqual({
         user: { id: userId, email: 'user@example.com' },
         accessToken: 'access',
-        expiresIn: 3600,
+        expiresIn: 28_800,
       });
       expect(response.headers['set-cookie'][0]).toContain(
         'refreshToken=refresh',
@@ -215,7 +215,7 @@ describe('Login guest cart integration (HTTP, mocked Auth and Cart boundaries)',
         expect(response.body.data).toMatchObject({
           user: { id: userId },
           accessToken: 'access',
-          expiresIn: 3600,
+          expiresIn: 28_800,
           cartMerge: {
             status: kind === 'denied' ? 'forbidden' : 'failed',
             accepted: [],

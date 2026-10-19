@@ -64,7 +64,7 @@ export class AuthController {
 
     return {
       accessToken,
-      expiresIn: 3600,
+      expiresIn: 28_800,
       user,
       ...(dto.guestCartItems === undefined
         ? {}
@@ -94,7 +94,7 @@ export class AuthController {
     this.tokenService.setRefreshTokenCookie(res, rawRefreshToken);
     return {
       accessToken,
-      expiresIn: 3600,
+      expiresIn: 28_800,
       user,
       ...(dto.guestCartItems === undefined
         ? {}
