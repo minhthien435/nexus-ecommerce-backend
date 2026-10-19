@@ -14,6 +14,10 @@ _bmad-output/
 frontend/
 
 # Local Kaggle datasets, transformed output and generated reports
-data/kaggle/raw/
+data/kaggle/raw/*
+!data/kaggle/raw/amazon-sales-dataset/
+data/kaggle/raw/amazon-sales-dataset/*
+!data/kaggle/raw/amazon-sales-dataset/amazon.csv
+!data/kaggle/raw/amazon-sales-dataset/README.md
 data/kaggle/processed/
 data/kaggle/reports/
