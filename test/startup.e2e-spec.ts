@@ -1,12 +1,12 @@
 import { AppModule } from '../src/app.module.js';
 import { Test } from '@nestjs/testing';
-import { JwtService } from '@nestjs/jwt';
 import { DataSource } from 'typeorm';
 import request from 'supertest';
 import { UserEntity } from '../src/modules/identity/domain/user.entity.js';
 import { CartEntity } from '../src/modules/commerce/domain/entities/cart.entity.js';
 import { RbacService } from '../src/modules/identity/rbac/rbac.service.js';
 import { AuthService } from '../src/modules/identity/auth/services/auth.service.js';
+import { TokenService } from '../src/modules/identity/auth/services/token.service.js';
 import { RecaptchaService } from '../src/modules/identity/auth/services/recaptcha.service.js';
 import { CartMergeApi } from '../src/modules/commerce/cart-merge.api.js';
 import { CartWriteService } from '../src/modules/commerce/services/cart-write.service.js';
@@ -86,9 +86,11 @@ describe('Application startup module graph (e2e)', () => {
       await request(app.getHttpServer())
         .get('/api/v1/commerce/cart')
         .expect(401);
-      const token = await module
-        .get(JwtService)
-        .signAsync({ sub: userId, tokenVersion: 0 });
+      const token = await module.get(TokenService).generateAccessToken({
+        id: userId,
+        email: 'user@example.com',
+        tokenVersion: 0,
+      } as UserEntity);
       const response = await request(app.getHttpServer())
         .get('/api/v1/commerce/cart')
         .set('Authorization', `Bearer ${token}`)
