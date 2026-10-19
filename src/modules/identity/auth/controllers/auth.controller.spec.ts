@@ -60,7 +60,7 @@ describe.each(['password', 'Google'])(
       expect(await s.login()).toEqual({
         user: { id: 'authenticated-user' },
         accessToken: 'access',
-        expiresIn: 3600,
+        expiresIn: 28_800,
       });
       expect(s.merge.merge).not.toHaveBeenCalled();
     });
@@ -85,7 +85,7 @@ describe.each(['password', 'Google'])(
       expect(await pending).toEqual({
         user: { id: 'authenticated-user' },
         accessToken: 'access',
-        expiresIn: 3600,
+        expiresIn: 28_800,
         cartMerge: { status: 'failed', accepted: [], skipped: [] },
       });
       expect(s.merge.merge).toHaveBeenCalledWith('authenticated-user', input);
@@ -167,7 +167,7 @@ describe('AuthController', () => {
 
     await expect(controller.login(dto, request, response)).resolves.toEqual({
       accessToken: 'access',
-      expiresIn: 3600,
+      expiresIn: 28_800,
       user: { id: 'user-1', email: 'user@example.com' },
     });
     expect(captcha.verify).toHaveBeenCalledWith('valid-captcha', '127.0.0.1');
@@ -212,7 +212,7 @@ describe('AuthController', () => {
       controller.googleLogin({ credential: 'credential' }, request, response),
     ).resolves.toEqual({
       accessToken: 'access',
-      expiresIn: 3600,
+      expiresIn: 28_800,
       user: { id: 'user-1' },
     });
     expect(tokens.setRefreshTokenCookie).toHaveBeenCalledWith(
