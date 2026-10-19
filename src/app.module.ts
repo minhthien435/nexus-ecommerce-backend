@@ -12,6 +12,8 @@ import { CommerceModule } from './modules/commerce/commerce.module.js';
 import { AuthCartModule } from './modules/auth-cart/auth-cart.module.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
+import { AuctionModule } from './modules/auction/auction.module.js';
+import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
     CatalogModule,
     CommerceModule,
     AuthCartModule,
+    AuctionModule,
+    IntegrationsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -12,3 +12,8 @@ _bmad-output/
 
 # Frontend test clone
 frontend/
+
+# Local Kaggle datasets, transformed output and generated reports
+data/kaggle/raw/
+data/kaggle/processed/
+data/kaggle/reports/

@@ -1,0 +1,3 @@
+product_id,product_name,category,actual_price,brand,about_product,img_link
+P-001,Demo Phone,Electronics,1000,Nexus,Fixture product,https://example.com/phone.jpg
+P-002,Bad Product,Unknown,not-a-price,,,bad-url
