@@ -28,6 +28,7 @@ describe('ProductSearchService', () => {
     const hit = {
       items: [],
       meta: { page: 1, limit: 20, totalItems: 0, totalPages: 0 },
+      facets: { categories: [] },
     };
     cache.get.mockResolvedValue(hit);
 
@@ -52,6 +53,17 @@ describe('ProductSearchService', () => {
           min_price: '1000000.00',
           currency: 'VND',
           primary_image_url: 'https://example.test/image.jpg',
+          cat_id: 'category-1',
+          cat_name: 'Electronics',
+          cat_slug: 'electronics',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'category-1',
+          name: 'Electronics',
+          slug: 'electronics',
+          count: '1',
         },
       ])
       .mockResolvedValueOnce([{ total: '1' }]);
@@ -77,10 +89,17 @@ describe('ProductSearchService', () => {
     expect(result.items[0]).toMatchObject({
       id: 'product-1',
       minimumPrice: '1000000.00',
+      category: {
+        id: 'category-1',
+        name: 'Electronics',
+        slug: 'electronics',
+      },
     });
     const listSql = query.mock.calls[1][0] as string;
     expect(listSql).toContain('WITH RECURSIVE category_tree');
     expect(listSql).toContain('unaccent(lower');
+    expect(listSql).toContain("COALESCE(p.brand, '')");
+    expect(listSql).toContain('unaccent(lower(p.name)) LIKE');
     expect(listSql).toContain('price.min_price ASC NULLS LAST');
     expect(query.mock.calls[1][1]).toEqual([
       input.categoryId,
@@ -90,6 +109,16 @@ describe('ProductSearchService', () => {
       2_000_000,
       10,
       10,
+      'dien thoai',
+    ]);
+    expect(listSql).toContain('CASE');
+    expect(result.facets.categories).toEqual([
+      {
+        id: 'category-1',
+        name: 'Electronics',
+        slug: 'electronics',
+        count: 1,
+      },
     ]);
     expect(cache.set).toHaveBeenCalledWith('search-key', result);
   });
@@ -97,6 +126,7 @@ describe('ProductSearchService', () => {
   it('falls back to case-insensitive LIKE when unaccent is unavailable', async () => {
     query
       .mockResolvedValueOnce([{ available: false }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ total: '0' }]);
     const input = Object.assign(new SearchProductsQueryDto(), {
@@ -126,6 +156,7 @@ describe('ProductSearchService', () => {
           primary_image_url: null,
         },
       ])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ total: '1' }]);
 
     const result = await service.search(new SearchProductsQueryDto());
@@ -135,6 +166,7 @@ describe('ProductSearchService', () => {
       minimumPrice: null,
       currency: null,
     });
+    expect(query.mock.calls[0][1]).toHaveLength(7);
   });
 
   it('rejects an inverted price range', async () => {
@@ -162,6 +194,9 @@ describe('ProductSearchService', () => {
           attributes: { warranty: '12 months' },
           created_at: '2026-10-16T00:00:00Z',
           updated_at: '2026-10-16T00:00:00Z',
+          cat_id: 'category-1',
+          cat_name: 'Electronics',
+          cat_slug: 'electronics',
         },
       ])
       .mockResolvedValueOnce([
@@ -186,6 +221,12 @@ describe('ProductSearchService', () => {
       skuCode: 'PHONE-BLACK',
       availableQuantity: 3,
     });
+    expect(detail.category).toEqual({
+      id: 'category-1',
+      name: 'Electronics',
+      slug: 'electronics',
+    });
+    expect(query.mock.calls[0][0]).toContain('LEFT JOIN catalog.categories');
   });
 
   it('returns 404 for a missing or inactive product slug', async () => {

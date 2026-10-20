@@ -21,9 +21,20 @@ type ProductListRow = {
   min_price: string | null;
   currency: string | null;
   primary_image_url: string | null;
+  cat_id: string | null;
+  cat_name: string | null;
+  cat_slug: string | null;
 };
 
 type CountRow = { total: string };
+type CategoryFacetRow = {
+  id: string;
+  name: string;
+  slug: string;
+  count: string;
+};
+
+type ProductCategory = { id: string; name: string; slug: string };
 
 export type ProductListItem = {
   id: string;
@@ -36,6 +47,7 @@ export type ProductListItem = {
   currency: string | null;
   primaryImageUrl: string | null;
   createdAt: Date | string;
+  category: ProductCategory | null;
 };
 
 export type ProductSearchPage = {
@@ -46,6 +58,7 @@ export type ProductSearchPage = {
     totalItems: number;
     totalPages: number;
   };
+  facets: { categories: Array<ProductCategory & { count: number }> };
 };
 
 export type ProductDetail = {
@@ -60,6 +73,7 @@ export type ProductDetail = {
   attributes: Record<string, unknown> | null;
   createdAt: Date | string;
   updatedAt: Date | string;
+  category: ProductCategory | null;
   images: Array<{
     id: string;
     url: string;
@@ -133,12 +147,18 @@ export class ProductSearchService {
         attributes: Record<string, unknown> | null;
         created_at: Date | string;
         updated_at: Date | string;
+        cat_id: string | null;
+        cat_name: string | null;
+        cat_slug: string | null;
       }>
     >(
       `SELECT p.id, p.seller_id, p.category_id, p.name, p.slug,
               p.description, p.brand, p.is_auction_eligible, p.attributes,
-              p.created_at, p.updated_at
+              p.created_at, p.updated_at,
+              c.id AS cat_id, c.name AS cat_name, c.slug AS cat_slug
          FROM catalog.products p
+         LEFT JOIN catalog.categories c
+           ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
         WHERE p.slug = $1
           AND p.status = 'ACTIVE'
           AND p.deleted_at IS NULL
@@ -199,6 +219,7 @@ export class ProductSearchService {
       attributes: product.attributes,
       createdAt: product.created_at,
       updatedAt: product.updated_at,
+      category: this.toCategory(product),
       images: images.map((image) => ({
         id: image.id,
         url: image.url,
@@ -231,8 +252,8 @@ export class ProductSearchService {
        WHERE child.is_active = true AND child.deleted_at IS NULL
     )`;
     const textExpression = useUnaccent
-      ? `unaccent(lower(p.name || ' ' || COALESCE(p.description, ''))) LIKE unaccent(lower($2)) ESCAPE '\\'`
-      : `lower(p.name || ' ' || COALESCE(p.description, '')) LIKE lower($2) ESCAPE '\\'`;
+      ? `unaccent(lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, ''))) LIKE unaccent(lower($2)) ESCAPE '\\'`
+      : `lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, '')) LIKE lower($2) ESCAPE '\\'`;
     const where = `p.status = 'ACTIVE'
       AND p.deleted_at IS NULL
       AND ($1::uuid IS NULL OR p.category_id IN (SELECT id FROM category_tree))
@@ -253,12 +274,42 @@ export class ProductSearchService {
       query.minPrice,
       query.maxPrice,
     ];
+    const rankNameExpression = useUnaccent
+      ? `unaccent(lower(regexp_replace(p.name, '[^[:alnum:]]+', ' ', 'g')))`
+      : `lower(regexp_replace(p.name, '[^[:alnum:]]+', ' ', 'g'))`;
+    const rankKeywordExpression = useUnaccent
+      ? `unaccent(lower($8))`
+      : `lower($8)`;
+    const nameContainsExpression = useUnaccent
+      ? `unaccent(lower(p.name)) LIKE unaccent(lower($2)) ESCAPE '\\'`
+      : `lower(p.name) LIKE lower($2) ESCAPE '\\'`;
+    const brandContainsExpression = useUnaccent
+      ? `unaccent(lower(COALESCE(p.brand, ''))) LIKE unaccent(lower($2)) ESCAPE '\\'`
+      : `lower(COALESCE(p.brand, '')) LIKE lower($2) ESCAPE '\\'`;
+    const relevanceOrder = query.keyword
+      ? `CASE
+           WHEN ${rankNameExpression} = ${rankKeywordExpression}
+             OR (' ' || ${rankNameExpression} || ' ') LIKE ('% ' || ${rankKeywordExpression} || ' %') THEN 0
+           WHEN ${nameContainsExpression} THEN 1
+           WHEN ${brandContainsExpression} THEN 2
+           ELSE 3
+         END ASC, `
+      : '';
+    const rowParameters = [
+      ...baseParameters,
+      query.limit,
+      (query.page - 1) * query.limit,
+      ...(query.keyword ? [query.keyword] : []),
+    ];
     const rows = await this.dataSource.query<ProductListRow[]>(
       `${categoryCte}
        SELECT p.id, p.category_id, p.name, p.slug, p.brand,
               p.is_auction_eligible, p.created_at, price.min_price::text,
-              price.currency, image.url AS primary_image_url
+               price.currency, image.url AS primary_image_url,
+               c.id AS cat_id, c.name AS cat_name, c.slug AS cat_slug
          FROM catalog.products p
+         LEFT JOIN catalog.categories c
+           ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
          ${priceJoin}
          LEFT JOIN LATERAL (
            SELECT pi.url FROM catalog.product_images pi
@@ -267,9 +318,21 @@ export class ProductSearchService {
             LIMIT 1
          ) image ON true
         WHERE ${where}
-        ORDER BY ${SORT_SQL[query.sort]}
+        ORDER BY ${relevanceOrder}${SORT_SQL[query.sort]}
         LIMIT $6 OFFSET $7`,
-      [...baseParameters, query.limit, (query.page - 1) * query.limit],
+      rowParameters,
+    );
+    const facets = await this.dataSource.query<CategoryFacetRow[]>(
+      `${categoryCte}
+       SELECT c.id, c.name, c.slug, COUNT(p.id)::text AS count
+         FROM catalog.products p
+         ${priceJoin}
+         JOIN catalog.categories c
+           ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
+        WHERE ${where}
+        GROUP BY c.id, c.name, c.slug
+        ORDER BY COUNT(p.id) DESC, c.name ASC, c.id ASC`,
+      baseParameters,
     );
     const counts = await this.dataSource.query<CountRow[]>(
       `${categoryCte}
@@ -292,12 +355,21 @@ export class ProductSearchService {
         currency: row.currency,
         primaryImageUrl: row.primary_image_url,
         createdAt: row.created_at,
+        category: this.toCategory(row),
       })),
       meta: {
         page: query.page,
         limit: query.limit,
         totalItems,
         totalPages: Math.ceil(totalItems / query.limit),
+      },
+      facets: {
+        categories: facets.map((facet) => ({
+          id: facet.id,
+          name: facet.name,
+          slug: facet.slug,
+          count: Number(facet.count),
+        })),
       },
     };
   }
@@ -330,5 +402,15 @@ export class ProductSearchService {
       .replaceAll('\\', '\\\\')
       .replaceAll('%', '\\%')
       .replaceAll('_', '\\_');
+  }
+
+  private toCategory(row: {
+    cat_id: string | null;
+    cat_name: string | null;
+    cat_slug: string | null;
+  }): ProductCategory | null {
+    return row.cat_id && row.cat_name && row.cat_slug
+      ? { id: row.cat_id, name: row.cat_name, slug: row.cat_slug }
+      : null;
   }
 }

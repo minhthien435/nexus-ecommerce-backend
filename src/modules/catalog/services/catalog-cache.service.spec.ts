@@ -45,6 +45,6 @@ describe('CatalogCacheService', () => {
   it('uses normalized, deterministic search and detail keys', () => {
     const cache = new CatalogCacheService(new ConfigService());
     expect(cache.searchKey({ page: 1 })).toBe(cache.searchKey({ page: 1 }));
-    expect(cache.detailKey('IPHONE')).toBe('catalog:detail:v1:iphone');
+    expect(cache.detailKey('IPHONE')).toBe('catalog:detail:v2:iphone');
   });
 });

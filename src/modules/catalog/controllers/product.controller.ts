@@ -15,6 +15,7 @@ export class ProductController {
       message: 'Lấy danh sách sản phẩm thành công',
       data: result.items,
       meta: result.meta,
+      facets: result.facets,
     };
   }
 

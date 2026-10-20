@@ -14,6 +14,7 @@ describe('ProductController', () => {
     products.search.mockResolvedValue({
       items: [{ id: 'product-1' }],
       meta: { page: 1, limit: 20, totalItems: 1, totalPages: 1 },
+      facets: { categories: [] },
     });
 
     await expect(
@@ -24,6 +25,7 @@ describe('ProductController', () => {
       message: 'Lấy danh sách sản phẩm thành công',
       data: [{ id: 'product-1' }],
       meta: { page: 1, limit: 20, totalItems: 1, totalPages: 1 },
+      facets: { categories: [] },
     });
   });
 
