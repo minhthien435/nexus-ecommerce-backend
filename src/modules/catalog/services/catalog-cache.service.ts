@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { Redis } from 'ioredis';
 
-const SEARCH_PREFIX = 'catalog:search:v2:';
+const SEARCH_PREFIX = 'catalog:search:v3:';
 const DETAIL_PREFIX = 'catalog:detail:v2:';
 const CACHE_TTL_SECONDS = 300;
 

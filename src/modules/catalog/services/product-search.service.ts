@@ -18,6 +18,7 @@ type ProductListRow = {
   brand: string | null;
   is_auction_eligible: boolean;
   created_at: Date | string;
+  default_sku_id: string | null;
   min_price: string | null;
   currency: string | null;
   primary_image_url: string | null;
@@ -43,6 +44,7 @@ export type ProductListItem = {
   slug: string;
   brand: string | null;
   isAuctionEligible: boolean;
+  defaultSkuId: string | null;
   minimumPrice: string | null;
   currency: string | null;
   primaryImageUrl: string | null;
@@ -262,10 +264,28 @@ export class ProductSearchService {
       AND ($4::numeric IS NULL OR price.min_price >= $4)
       AND ($5::numeric IS NULL OR price.min_price <= $5)`;
     const priceJoin = `LEFT JOIN LATERAL (
-      SELECT MIN(s.price) AS min_price,
-             (array_agg(trim(s.currency) ORDER BY s.price, s.id))[1] AS currency
+      SELECT s.id AS default_sku_id,
+             s.price AS min_price,
+             trim(s.currency) AS currency
         FROM catalog.product_skus s
-       WHERE s.product_id = p.id AND s.is_active = true
+        JOIN fulfillment.inventory_items i ON i.sku_id = s.id
+        JOIN fulfillment.warehouses w
+          ON w.id = i.warehouse_id
+         AND w.is_default = true
+         AND w.is_active = true
+         AND NOT EXISTS (
+           SELECT 1
+             FROM fulfillment.warehouses other
+            WHERE other.is_default = true
+              AND other.is_active = true
+              AND other.id <> w.id
+         )
+       WHERE s.product_id = p.id
+         AND s.is_active = true
+       GROUP BY s.id
+      HAVING SUM(i.available_qty) > 0
+       ORDER BY s.price ASC, s.id ASC
+       LIMIT 1
     ) price ON true`;
     const baseParameters = [
       query.categoryId,
@@ -304,8 +324,8 @@ export class ProductSearchService {
     const rows = await this.dataSource.query<ProductListRow[]>(
       `${categoryCte}
        SELECT p.id, p.category_id, p.name, p.slug, p.brand,
-              p.is_auction_eligible, p.created_at, price.min_price::text,
-               price.currency, image.url AS primary_image_url,
+               p.is_auction_eligible, p.created_at, price.default_sku_id,
+               price.min_price::text, price.currency, image.url AS primary_image_url,
                c.id AS cat_id, c.name AS cat_name, c.slug AS cat_slug
          FROM catalog.products p
          LEFT JOIN catalog.categories c
@@ -351,6 +371,7 @@ export class ProductSearchService {
         slug: row.slug,
         brand: row.brand,
         isAuctionEligible: row.is_auction_eligible,
+        defaultSkuId: row.default_sku_id,
         minimumPrice: row.min_price,
         currency: row.currency,
         primaryImageUrl: row.primary_image_url,

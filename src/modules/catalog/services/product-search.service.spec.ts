@@ -50,6 +50,7 @@ describe('ProductSearchService', () => {
           brand: 'Nexus',
           is_auction_eligible: true,
           created_at: '2026-10-16T00:00:00Z',
+          default_sku_id: 'sku-1',
           min_price: '1000000.00',
           currency: 'VND',
           primary_image_url: 'https://example.test/image.jpg',
@@ -88,6 +89,7 @@ describe('ProductSearchService', () => {
     });
     expect(result.items[0]).toMatchObject({
       id: 'product-1',
+      defaultSkuId: 'sku-1',
       minimumPrice: '1000000.00',
       category: {
         id: 'category-1',
@@ -101,6 +103,13 @@ describe('ProductSearchService', () => {
     expect(listSql).toContain("COALESCE(p.brand, '')");
     expect(listSql).toContain('unaccent(lower(p.name)) LIKE');
     expect(listSql).toContain('price.min_price ASC NULLS LAST');
+    expect(listSql).toContain('s.id AS default_sku_id');
+    expect(listSql).toContain('w.is_default = true');
+    expect(listSql).toContain('w.is_active = true');
+    expect(listSql).toContain('AND NOT EXISTS');
+    expect(listSql).toContain('other.id <> w.id');
+    expect(listSql).toContain('HAVING SUM(i.available_qty) > 0');
+    expect(listSql).toContain('ORDER BY s.price ASC, s.id ASC');
     expect(query.mock.calls[1][1]).toEqual([
       input.categoryId,
       '%dien thoai%',
@@ -151,6 +160,7 @@ describe('ProductSearchService', () => {
           brand: null,
           is_auction_eligible: false,
           created_at: '2026-10-16T00:00:00Z',
+          default_sku_id: null,
           min_price: null,
           currency: null,
           primary_image_url: null,
@@ -163,6 +173,7 @@ describe('ProductSearchService', () => {
 
     expect(result.items[0]).toMatchObject({
       id: 'product-without-sku',
+      defaultSkuId: null,
       minimumPrice: null,
       currency: null,
     });
