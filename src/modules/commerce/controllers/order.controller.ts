@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -24,31 +25,62 @@ export class OrderController {
 
   @Post('checkout')
   @Permissions('CHECKOUT.START')
-  checkout(@CurrentUserId() userId: string, @Body() dto: CreateCheckoutDto) {
-    return this.orderService.checkout(userId, dto);
+  async checkout(
+    @CurrentUserId() userId: string,
+    @Body() dto: CreateCheckoutDto,
+  ) {
+    const result = await this.orderService.checkout(userId, dto);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.CREATED,
+      message: 'Tạo phiên thanh toán thành công',
+      data: result,
+    };
   }
 
   @Get()
   @Permissions('ORDER.VIEW')
-  getOrders(@CurrentUserId() userId: string, @Query() query: QueryOrdersDto) {
-    return this.orderService.getBuyerOrders(userId, query);
+  async getOrders(
+    @CurrentUserId() userId: string,
+    @Query() query: QueryOrdersDto,
+  ) {
+    const result = await this.orderService.getBuyerOrders(userId, query);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách đơn hàng thành công',
+      data: result.data,
+      meta: result.meta,
+    };
   }
 
   @Get(':id')
   @Permissions('ORDER.VIEW')
-  getOrderById(
+  async getOrderById(
     @CurrentUserId() userId: string,
     @Param('id', new ParseUUIDPipe()) orderId: string,
   ) {
-    return this.orderService.getOrderById(userId, orderId);
+    const result = await this.orderService.getOrderById(userId, orderId);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy chi tiết đơn hàng thành công',
+      data: result,
+    };
   }
 
   @Patch(':id/cancel')
   @Permissions('ORDER.CANCEL')
-  cancelOrder(
+  async cancelOrder(
     @CurrentUserId() userId: string,
     @Param('id', new ParseUUIDPipe()) orderId: string,
   ) {
-    return this.orderService.cancelOrder(userId, orderId);
+    const result = await this.orderService.cancelOrder(userId, orderId);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Hủy đơn hàng thành công',
+      data: result,
+    };
   }
 }
