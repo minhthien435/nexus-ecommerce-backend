@@ -12,9 +12,12 @@ import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
+import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
+import { OrderInventoryReleasePort } from '../ports/order-inventory-release.port.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
+import { OrderStateMachineService } from './order-state-machine.service.js';
 
 @Injectable()
 export class OrderService {
@@ -30,9 +33,13 @@ export class OrderService {
     private readonly orderRepo: Repository<OrderEntity>,
     @InjectRepository(OrderItemEntity)
     private readonly orderItemRepo: Repository<OrderItemEntity>,
+    @InjectRepository(OrderStatusHistoryEntity)
+    private readonly orderHistoryRepo: Repository<OrderStatusHistoryEntity>,
     @InjectRepository(UserAddressEntity)
     private readonly addressRepo: Repository<UserAddressEntity>,
     private readonly catalogApi: CatalogCartApi,
+    private readonly orderStateMachine: OrderStateMachineService,
+    private readonly inventoryRelease: OrderInventoryReleasePort,
   ) {}
 
   /**
@@ -360,6 +367,45 @@ export class OrderService {
       throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
     }
 
-    return order;
+    const history = await this.orderHistoryRepo.find({
+      where: { orderId },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+
+    return { ...order, history };
+  }
+
+  async cancelOrder(userId: string, orderId: string) {
+    const buyerId = userId.toLowerCase();
+
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      await this.orderStateMachine.transition(manager, {
+        orderId,
+        toStatus: 'CANCELLED',
+        actorId: buyerId,
+        expectedBuyerId: buyerId,
+        reason: 'CANCELLED_BY_BUYER',
+      });
+
+      const items = await manager.getRepository(OrderItemEntity).find({
+        select: { skuId: true, quantity: true },
+        where: { orderId },
+        order: { id: 'ASC' },
+      });
+      await this.inventoryRelease.release({ orderId, items }, manager);
+
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, buyerId },
+        relations: { items: true, checkoutSession: true },
+      });
+      const history = await manager
+        .getRepository(OrderStatusHistoryEntity)
+        .find({
+          where: { orderId },
+          order: { createdAt: 'ASC', id: 'ASC' },
+        });
+
+      return { ...order!, history };
+    });
   }
 }
