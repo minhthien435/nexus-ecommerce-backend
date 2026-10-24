@@ -15,6 +15,10 @@ import { CartService } from './services/cart.service.js';
 import { CartWriteService } from './services/cart-write.service.js';
 import { OrderService } from './services/order.service.js';
 import { CartMergeApi } from './cart-merge.api.js';
+import { BullModule } from '@nestjs/bullmq';
+import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
+import { OrderExpirySchedulerApi } from './order-expiry-scheduler.api.js';
+import { OrderExpirySchedulerService } from './services/order-expiry-scheduler.service.js';
 
 @Module({
   imports: [
@@ -29,6 +33,7 @@ import { CartMergeApi } from './cart-merge.api.js';
     IdentityModule,
     CatalogModule,
     FulfillmentModule,
+    BullModule.registerQueue({ name: ORDER_EXPIRY_QUEUE }),
   ],
   controllers: [CartController, OrderController],
   providers: [
@@ -36,7 +41,11 @@ import { CartMergeApi } from './cart-merge.api.js';
     CartWriteService,
     OrderService,
     { provide: CartMergeApi, useExisting: CartWriteService },
+    {
+      provide: OrderExpirySchedulerApi,
+      useClass: OrderExpirySchedulerService,
+    },
   ],
-  exports: [CartMergeApi, OrderService],
+  exports: [CartMergeApi, OrderService, OrderExpirySchedulerApi],
 })
 export class CommerceModule {}
