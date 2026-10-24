@@ -5,14 +5,18 @@ export type InventoryReservationItem = {
   quantity: number;
 };
 
+export type InventoryReservationReceipt = InventoryReservationItem & {
+  warehouseId: string;
+};
+
 export abstract class InventoryReservationApi {
   abstract reserve(
     items: InventoryReservationItem[],
     manager: EntityManager,
-  ): Promise<void>;
+  ): Promise<InventoryReservationReceipt[]>;
 
   abstract release(
-    items: InventoryReservationItem[],
+    receipts: InventoryReservationReceipt[],
     manager: EntityManager,
   ): Promise<void>;
 }

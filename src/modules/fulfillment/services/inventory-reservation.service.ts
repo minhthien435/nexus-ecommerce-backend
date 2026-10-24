@@ -7,7 +7,10 @@ import {
 import type { EntityManager } from 'typeorm';
 import { WarehouseEntity } from '../domain/entities/warehouse.entity.js';
 import { InventoryReservationApi } from '../inventory-reservation.api.js';
-import type { InventoryReservationItem } from '../inventory-reservation.api.js';
+import type {
+  InventoryReservationItem,
+  InventoryReservationReceipt,
+} from '../inventory-reservation.api.js';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -18,9 +21,9 @@ export class InventoryReservationService extends InventoryReservationApi {
   async reserve(
     items: InventoryReservationItem[],
     manager: EntityManager,
-  ): Promise<void> {
+  ): Promise<InventoryReservationReceipt[]> {
     const normalized = this.normalize(items);
-    if (normalized.length === 0) return;
+    if (normalized.length === 0) return [];
     const warehouseId = await this.defaultWarehouseId(manager);
     const { valuesSql, parameters } = this.requestedValues(normalized, 2);
     const rows = (await manager.query(
@@ -52,33 +55,64 @@ SELECT sku_id FROM updated ORDER BY sku_id`,
         message: 'One or more inventory items do not have sufficient stock',
       });
     }
+    return normalized.map((item) => ({ ...item, warehouseId }));
   }
 
   async release(
-    items: InventoryReservationItem[],
+    receipts: InventoryReservationReceipt[],
     manager: EntityManager,
   ): Promise<void> {
-    const normalized = this.normalize(items);
+    const normalized = this.normalizeReceipts(receipts);
     if (normalized.length === 0) return;
-    const warehouseId = await this.defaultWarehouseId(manager);
-    const { valuesSql, parameters } = this.requestedValues(normalized, 2);
+    const { valuesSql, parameters } = this.receiptValues(normalized);
     const rows = (await manager.query(
-      `WITH requested(sku_id, quantity) AS (VALUES ${valuesSql})
+      `WITH requested(warehouse_id, sku_id, quantity) AS (VALUES ${valuesSql})
 UPDATE fulfillment.inventory_items AS inventory
 SET available_qty = inventory.available_qty + requested.quantity
 FROM requested
-WHERE inventory.warehouse_id = $1::uuid
+WHERE inventory.warehouse_id = requested.warehouse_id
   AND inventory.sku_id = requested.sku_id
   AND inventory.available_qty IS NOT NULL
-RETURNING inventory.sku_id`,
-      [warehouseId, ...parameters],
-    )) as { sku_id: string }[];
+RETURNING inventory.warehouse_id, inventory.sku_id`,
+      parameters,
+    )) as { warehouse_id: string; sku_id: string }[];
     if (rows.length !== normalized.length) {
       throw new ServiceUnavailableException({
         errorCode: 'INVALID_INVENTORY_DATA',
         message: 'Reserved inventory row is missing',
       });
     }
+  }
+
+  private normalizeReceipts(
+    receipts: InventoryReservationReceipt[],
+  ): InventoryReservationReceipt[] {
+    if (!Array.isArray(receipts)) this.invalidInput();
+    const quantities = new Map<string, InventoryReservationReceipt>();
+    for (const receipt of receipts) {
+      const skuId = receipt?.skuId?.toLowerCase();
+      const warehouseId = receipt?.warehouseId?.toLowerCase();
+      if (
+        !UUID_PATTERN.test(skuId) ||
+        !UUID_PATTERN.test(warehouseId) ||
+        !Number.isSafeInteger(receipt.quantity) ||
+        receipt.quantity <= 0 ||
+        receipt.quantity > POSTGRES_INTEGER_MAX
+      ) {
+        this.invalidInput();
+      }
+      const key = `${warehouseId}:${skuId}`;
+      const quantity = (quantities.get(key)?.quantity ?? 0) + receipt.quantity;
+      if (!Number.isSafeInteger(quantity) || quantity > POSTGRES_INTEGER_MAX) {
+        this.invalidInput();
+      }
+      quantities.set(key, { warehouseId, skuId, quantity });
+    }
+    return [...quantities.values()].sort(
+      (left, right) =>
+        left.warehouseId.localeCompare(right.warehouseId) ||
+        left.skuId.localeCompare(right.skuId),
+    );
   }
 
   private normalize(
@@ -131,6 +165,21 @@ RETURNING inventory.sku_id`,
         parameters.push(item.skuId, item.quantity);
         const offset = firstParameter + index * 2;
         return `($${offset}::uuid, $${offset + 1}::int)`;
+      })
+      .join(', ');
+    return { valuesSql, parameters };
+  }
+
+  private receiptValues(items: InventoryReservationReceipt[]): {
+    valuesSql: string;
+    parameters: Array<string | number>;
+  } {
+    const parameters: Array<string | number> = [];
+    const valuesSql = items
+      .map((item, index) => {
+        parameters.push(item.warehouseId, item.skuId, item.quantity);
+        const offset = 1 + index * 3;
+        return `($${offset}::uuid, $${offset + 1}::uuid, $${offset + 2}::int)`;
       })
       .join(', ');
     return { valuesSql, parameters };
