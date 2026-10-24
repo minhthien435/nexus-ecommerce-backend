@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -40,5 +41,14 @@ export class OrderController {
     @Param('id', new ParseUUIDPipe()) orderId: string,
   ) {
     return this.orderService.getOrderById(userId, orderId);
+  }
+
+  @Patch(':id/cancel')
+  @Permissions('ORDER.CANCEL')
+  cancelOrder(
+    @CurrentUserId() userId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    return this.orderService.cancelOrder(userId, orderId);
   }
 }

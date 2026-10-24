@@ -1,0 +1,172 @@
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type { EntityManager } from 'typeorm';
+import type { InventoryReservationItem } from '../../fulfillment/inventory-reservation.api.js';
+import {
+  canTransitionOrder,
+  type OrderStatus,
+} from '../domain/order-status.js';
+import { OrderEntity } from '../domain/entities/order.entity.js';
+import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
+import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
+
+export interface OrderTransitionInput {
+  orderId: string;
+  toStatus: OrderStatus;
+  actorId: string | null;
+  reason?: string | null;
+  expectedBuyerId?: string;
+}
+
+export type OrderExpiryTransitionResult =
+  | { outcome: 'NOT_FOUND'; changed: false }
+  | { outcome: 'SKIPPED'; changed: false }
+  | { outcome: 'NOT_DUE'; changed: false; holdExpiresAt: Date }
+  | {
+      outcome: 'EXPIRED';
+      changed: true;
+      inventoryItems: InventoryReservationItem[];
+    };
+
+@Injectable()
+export class OrderStateMachineService {
+  async transition(
+    manager: EntityManager,
+    input: OrderTransitionInput,
+  ): Promise<OrderEntity> {
+    this.requireActiveTransaction(manager);
+    const order = await this.lockOrder(manager, input.orderId);
+    if (
+      !order ||
+      (input.expectedBuyerId && order.buyerId !== input.expectedBuyerId)
+    ) {
+      throw new NotFoundException({
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'Order was not found',
+      });
+    }
+    await this.applyTransition(
+      manager,
+      order,
+      input.toStatus,
+      input.actorId,
+      input.reason ?? null,
+    );
+    return order;
+  }
+
+  async expire(
+    orderId: string,
+    manager: EntityManager,
+  ): Promise<OrderExpiryTransitionResult> {
+    this.requireActiveTransaction(manager);
+    const order = await this.lockOrder(manager, orderId);
+    if (!order) return { outcome: 'NOT_FOUND', changed: false };
+    if (order.status !== 'PENDING_PAYMENT') {
+      return { outcome: 'SKIPPED', changed: false };
+    }
+    if (!order.holdExpiresAt) {
+      return { outcome: 'SKIPPED', changed: false };
+    }
+
+    const observedTime = await this.observeDatabaseTime(manager);
+    if (order.holdExpiresAt > observedTime) {
+      return {
+        outcome: 'NOT_DUE',
+        changed: false,
+        holdExpiresAt: order.holdExpiresAt,
+      };
+    }
+
+    const inventoryItems = await this.loadInventoryItems(manager, order.id);
+    await this.applyTransition(
+      manager,
+      order,
+      'CANCELLED',
+      null,
+      'PAYMENT_HOLD_EXPIRED',
+    );
+    return { outcome: 'EXPIRED', changed: true, inventoryItems };
+  }
+
+  private async lockOrder(
+    manager: EntityManager,
+    orderId: string,
+  ): Promise<OrderEntity | null> {
+    return manager
+      .getRepository(OrderEntity)
+      .createQueryBuilder('order')
+      .setLock('pessimistic_write')
+      .where('order.id = :orderId', { orderId })
+      .getOne();
+  }
+
+  private async loadInventoryItems(
+    manager: EntityManager,
+    orderId: string,
+  ): Promise<InventoryReservationItem[]> {
+    const items = await manager.getRepository(OrderItemEntity).find({
+      select: { skuId: true, quantity: true },
+      where: { orderId },
+      order: { id: 'ASC' },
+    });
+    return items.map(({ skuId, quantity }) => ({ skuId, quantity }));
+  }
+
+  private async observeDatabaseTime(manager: EntityManager): Promise<Date> {
+    const rows = (await manager.query(
+      'SELECT clock_timestamp() AS "observedTime"',
+    )) as Array<{ observedTime?: unknown }>;
+    const observedTime = rows[0]?.observedTime;
+    if (!(observedTime instanceof Date)) {
+      throw new ServiceUnavailableException({
+        errorCode: 'ORDER_DATABASE_CLOCK_UNAVAILABLE',
+        message: 'The database clock did not return a valid timestamp',
+      });
+    }
+    return observedTime;
+  }
+
+  private async applyTransition(
+    manager: EntityManager,
+    order: OrderEntity,
+    toStatus: OrderStatus,
+    actorId: string | null,
+    reason: string | null,
+  ): Promise<void> {
+    if (!canTransitionOrder(order.status, toStatus)) {
+      throw new ConflictException({
+        errorCode: 'ORDER_TRANSITION_NOT_ALLOWED',
+        message: `Order cannot transition from ${order.status} to ${toStatus}`,
+      });
+    }
+    const fromStatus = order.status;
+    order.status = toStatus;
+    await manager.getRepository(OrderEntity).save(order);
+
+    const historyRepository = manager.getRepository(OrderStatusHistoryEntity);
+    await historyRepository.save(
+      historyRepository.create({
+        orderId: order.id,
+        fromStatus,
+        toStatus,
+        reason,
+        changedBy: actorId,
+      }),
+    );
+  }
+
+  private requireActiveTransaction(manager: EntityManager): void {
+    if (!manager.queryRunner?.isTransactionActive) {
+      throw new InternalServerErrorException({
+        errorCode: 'ORDER_TRANSACTION_REQUIRED',
+        message: 'Order transitions require an active caller-owned transaction',
+      });
+    }
+  }
+}

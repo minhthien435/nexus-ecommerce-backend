@@ -34,7 +34,12 @@ function setup() {
   };
 
   const orderItemRepo = {
+    find: vi.fn(),
     save: vi.fn(),
+  };
+
+  const orderHistoryRepo = {
+    find: vi.fn().mockResolvedValue([]),
   };
 
   const addressRepo = {
@@ -55,6 +60,14 @@ function setup() {
     getCartSkus: vi.fn().mockResolvedValue([]),
   };
 
+  const orderStateMachine = {
+    transition: vi.fn(),
+  };
+
+  const inventoryRelease = {
+    release: vi.fn(),
+  };
+
   const manager = {
     create: vi.fn((_entityClass, data) => ({
       id: 'mock-id-' + Math.random(),
@@ -62,10 +75,24 @@ function setup() {
     })),
     save: vi.fn(async (_entityClassOrData, data) => data || _entityClassOrData),
     delete: vi.fn().mockResolvedValue({ affected: 1 }),
+    getRepository: vi.fn((entity) => {
+      if (entity.name === 'OrderEntity') return orderRepo;
+      if (entity.name === 'OrderItemEntity') return orderItemRepo;
+      if (entity.name === 'OrderStatusHistoryEntity') return orderHistoryRepo;
+      throw new Error(`Unexpected repository: ${entity.name}`);
+    }),
   };
 
   const dataSource = {
-    transaction: vi.fn(async (cb) => cb(manager)),
+    transaction: vi.fn(
+      async (
+        isolationOrCallback: string | ((value: typeof manager) => unknown),
+        callback?: (value: typeof manager) => unknown,
+      ) =>
+        typeof isolationOrCallback === 'function'
+          ? isolationOrCallback(manager)
+          : callback!(manager),
+    ),
   };
 
   const service = new OrderService(
@@ -75,8 +102,11 @@ function setup() {
     checkoutSessionRepo as never,
     orderRepo as never,
     orderItemRepo as never,
+    orderHistoryRepo as never,
     addressRepo as never,
     catalogApi as never,
+    orderStateMachine as never,
+    inventoryRelease as never,
   );
 
   return {
@@ -85,8 +115,11 @@ function setup() {
     checkoutSessionRepo,
     orderRepo,
     orderItemRepo,
+    orderHistoryRepo,
     addressRepo,
     catalogApi,
+    orderStateMachine,
+    inventoryRelease,
     manager,
     dataSource,
     service,
@@ -256,10 +289,56 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
     const order = await s.service.getOrderById(userId, 'order-1');
     expect(order.id).toBe('order-1');
+    expect(order.history).toEqual([]);
+    expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
+      where: { orderId: 'order-1' },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
 
     s.orderRepo.findOne.mockResolvedValueOnce(null);
     await expect(
       s.service.getOrderById(userId, 'order-not-found'),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  it('cancels an owned pending order and releases its persisted items in one transaction', async () => {
+    const s = setup();
+    const persistedItems = [{ skuId: 'sku-1', quantity: 2 }];
+    s.orderItemRepo.find.mockResolvedValue(persistedItems);
+    s.orderRepo.findOne.mockResolvedValue({
+      id: 'order-1',
+      buyerId: userId,
+      status: 'CANCELLED',
+    });
+
+    await expect(
+      s.service.cancelOrder(userId, 'order-1'),
+    ).resolves.toMatchObject({
+      id: 'order-1',
+      status: 'CANCELLED',
+      history: [],
+    });
+    expect(s.orderStateMachine.transition).toHaveBeenCalledWith(s.manager, {
+      orderId: 'order-1',
+      toStatus: 'CANCELLED',
+      actorId: userId,
+      expectedBuyerId: userId,
+      reason: 'CANCELLED_BY_BUYER',
+    });
+    expect(s.inventoryRelease.release).toHaveBeenCalledWith(
+      { orderId: 'order-1', items: persistedItems },
+      s.manager,
+    );
+  });
+
+  it('propagates release failures so the transaction can roll back', async () => {
+    const s = setup();
+    s.orderItemRepo.find.mockResolvedValue([{ skuId: 'sku-1', quantity: 1 }]);
+    s.inventoryRelease.release.mockRejectedValue(new Error('release failed'));
+
+    await expect(s.service.cancelOrder(userId, 'order-1')).rejects.toThrow(
+      'release failed',
+    );
+    expect(s.orderRepo.findOne).not.toHaveBeenCalled();
   });
 });
