@@ -68,6 +68,20 @@ function setup() {
     release: vi.fn(),
   };
 
+  const inventoryReservation = {
+    reserve: vi.fn().mockImplementation(async (items) =>
+      items.map((item: { skuId: string; quantity: number }) => ({
+        ...item,
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      })),
+    ),
+  };
+
+  const expiryOutbox = {
+    schedule: vi.fn().mockResolvedValue(undefined),
+    reconcile: vi.fn().mockResolvedValue(undefined),
+  };
+
   const manager = {
     create: vi.fn((_entityClass, data) => ({
       id: 'mock-id-' + Math.random(),
@@ -107,6 +121,8 @@ function setup() {
     catalogApi as never,
     orderStateMachine as never,
     inventoryRelease as never,
+    inventoryReservation as never,
+    expiryOutbox as never,
   );
 
   return {
@@ -120,6 +136,8 @@ function setup() {
     catalogApi,
     orderStateMachine,
     inventoryRelease,
+    inventoryReservation,
+    expiryOutbox,
     manager,
     dataSource,
     service,
@@ -250,6 +268,71 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
     // Cart items deleted inside transaction
     expect(s.manager.delete).toHaveBeenCalled();
+    expect(s.inventoryReservation.reserve).toHaveBeenCalledOnce();
+    expect(s.expiryOutbox.schedule).toHaveBeenCalledTimes(2);
+    expect(s.expiryOutbox.reconcile).toHaveBeenCalledOnce();
+    expect(s.manager.create).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        skuId: 'sku-1',
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      }),
+    );
+  });
+
+  it('does not create checkout data or clear the cart when reservation fails', async () => {
+    const s = setup();
+    s.cartItemRepo.find.mockResolvedValue([
+      { id: 'item-1', cartId, skuId: 'sku-1', quantity: 2 },
+    ]);
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      {
+        id: 'sku-1',
+        productId: 'prod-1',
+        sellerId: seller1,
+        price: '100000.00',
+        isActive: true,
+        productName: 'Product 1',
+        productStatus: 'ACTIVE',
+        productDeletedAt: null,
+      },
+    ]);
+    s.inventoryReservation.reserve.mockRejectedValue(
+      new BadRequestException('insufficient stock'),
+    );
+
+    await expect(s.service.checkout(userId, {})).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(s.manager.save).not.toHaveBeenCalled();
+    expect(s.manager.delete).not.toHaveBeenCalled();
+    expect(s.expiryOutbox.schedule).not.toHaveBeenCalled();
+    expect(s.expiryOutbox.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('returns after commit without waiting for outbox reconciliation', async () => {
+    const s = setup();
+    s.cartItemRepo.find.mockResolvedValue([
+      { id: 'item-1', cartId, skuId: 'sku-1', quantity: 1 },
+    ]);
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      {
+        id: 'sku-1',
+        productId: 'prod-1',
+        sellerId: seller1,
+        price: '100000.00',
+        isActive: true,
+        productName: 'Product 1',
+        productStatus: 'ACTIVE',
+        productDeletedAt: null,
+      },
+    ]);
+    s.expiryOutbox.reconcile.mockReturnValue(new Promise(() => undefined));
+
+    await expect(s.service.checkout(userId, {})).resolves.toMatchObject({
+      orders: expect.any(Array),
+    });
+    expect(s.expiryOutbox.reconcile).toHaveBeenCalledOnce();
   });
 
   it('getBuyerOrders returns paginated results with Envelope meta', async () => {

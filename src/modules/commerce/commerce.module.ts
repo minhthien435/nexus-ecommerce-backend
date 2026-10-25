@@ -12,6 +12,7 @@ import { CheckoutSessionEntity } from './domain/entities/checkout-session.entity
 import { OrderEntity } from './domain/entities/order.entity.js';
 import { OrderItemEntity } from './domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from './domain/entities/order-status-history.entity.js';
+import { OrderExpiryOutboxEntity } from './domain/entities/order-expiry-outbox.entity.js';
 import { CartService } from './services/cart.service.js';
 import { CartWriteService } from './services/cart-write.service.js';
 import { OrderService } from './services/order.service.js';
@@ -22,6 +23,10 @@ import { BullModule } from '@nestjs/bullmq';
 import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
 import { OrderExpirySchedulerApi } from './order-expiry-scheduler.api.js';
 import { OrderExpirySchedulerService } from './services/order-expiry-scheduler.service.js';
+import { OrderExpiryOutboxApi } from './order-expiry-outbox.api.js';
+import { OrderExpiryOutboxService } from './services/order-expiry-outbox.service.js';
+import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
+import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
 
 @Module({
   imports: [
@@ -32,6 +37,7 @@ import { OrderExpirySchedulerService } from './services/order-expiry-scheduler.s
       OrderEntity,
       OrderItemEntity,
       OrderStatusHistoryEntity,
+      OrderExpiryOutboxEntity,
       UserAddressEntity,
     ]),
     IdentityModule,
@@ -45,11 +51,18 @@ import { OrderExpirySchedulerService } from './services/order-expiry-scheduler.s
     CartWriteService,
     OrderService,
     OrderStateMachineService,
+    OrderExpiryOutboxService,
+    OrderExpiryProcessor,
     ...ORDER_INVENTORY_RELEASE_PROVIDERS,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,
       useClass: OrderExpirySchedulerService,
+    },
+    { provide: OrderExpiryOutboxApi, useExisting: OrderExpiryOutboxService },
+    {
+      provide: OrderExpiryTransitionApi,
+      useExisting: OrderStateMachineService,
     },
   ],
   exports: [

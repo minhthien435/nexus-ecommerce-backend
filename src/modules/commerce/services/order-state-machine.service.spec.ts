@@ -6,6 +6,7 @@ import { OrderStateMachineService } from './order-state-machine.service.js';
 const orderId = '11111111-1111-4111-8111-111111111111';
 const buyerId = '22222222-2222-4222-8222-222222222222';
 const skuId = '33333333-3333-4333-8333-333333333333';
+const warehouseId = '44444444-4444-4444-8444-444444444444';
 const now = new Date('2026-10-24T12:00:00.000Z');
 
 function order(status: OrderEntity['status'] = 'PENDING_PAYMENT', offset = 0) {
@@ -28,7 +29,14 @@ function setup(current: OrderEntity | null = order()) {
     save: vi.fn(async (value) => value),
   };
   const itemRepository = {
-    find: vi.fn().mockResolvedValue([{ skuId, quantity: 2 }]),
+    find: vi.fn().mockResolvedValue([
+      { skuId, quantity: 2, warehouseId },
+      {
+        skuId: '55555555-5555-4555-8555-555555555555',
+        quantity: 1,
+        warehouseId: null,
+      },
+    ]),
   };
   const historyRepository = {
     create: vi.fn((value) => value),
@@ -125,11 +133,10 @@ describe('OrderStateMachineService', () => {
       s.service.expire(orderId, s.manager as never),
     ).resolves.toEqual({
       outcome: 'EXPIRED',
-      changed: true,
-      inventoryItems: [{ skuId, quantity: 2 }],
+      inventoryReceipts: [{ skuId, quantity: 2, warehouseId }],
     });
     expect(s.itemRepository.find).toHaveBeenCalledWith({
-      select: { skuId: true, quantity: true },
+      select: { skuId: true, quantity: true, warehouseId: true },
       where: { orderId },
       order: { id: 'ASC' },
     });
@@ -148,7 +155,6 @@ describe('OrderStateMachineService', () => {
       s.service.expire(orderId, s.manager as never),
     ).resolves.toEqual({
       outcome: 'NOT_DUE',
-      changed: false,
       holdExpiresAt: new Date(now.getTime() + 1),
     });
     expect(s.itemRepository.find).not.toHaveBeenCalled();
@@ -161,7 +167,7 @@ describe('OrderStateMachineService', () => {
     const s = setup(current);
     await expect(
       s.service.expire(orderId, s.manager as never),
-    ).resolves.toEqual({ outcome: 'SKIPPED', changed: false });
+    ).resolves.toEqual({ outcome: 'SKIPPED' });
     expect(s.manager.query).not.toHaveBeenCalled();
     expect(s.itemRepository.find).not.toHaveBeenCalled();
     expect(s.orderRepository.save).not.toHaveBeenCalled();
@@ -169,9 +175,9 @@ describe('OrderStateMachineService', () => {
   });
 
   it.each([
-    [null, { outcome: 'NOT_FOUND', changed: false }],
-    [order('PAID'), { outcome: 'SKIPPED', changed: false }],
-    [order('CANCELLED'), { outcome: 'SKIPPED', changed: false }],
+    [null, { outcome: 'NOT_FOUND' }],
+    [order('PAID'), { outcome: 'SKIPPED' }],
+    [order('CANCELLED'), { outcome: 'SKIPPED' }],
   ])('returns a retry-safe no-op for %j', async (current, expected) => {
     const s = setup(current as OrderEntity | null);
     await expect(

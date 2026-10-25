@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { CatalogCartApi } from '../../catalog/catalog-cart.api.js';
 import { UserAddressEntity } from '../../identity/users/entities/user-address.entity.js';
+import { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
 import { CartEntity } from '../domain/entities/cart.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
@@ -16,6 +17,7 @@ import { OrderStatusHistoryEntity } from '../domain/entities/order-status-histor
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
 import { OrderInventoryReleasePort } from '../ports/order-inventory-release.port.js';
+import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 
@@ -40,6 +42,8 @@ export class OrderService {
     private readonly catalogApi: CatalogCartApi,
     private readonly orderStateMachine: OrderStateMachineService,
     private readonly inventoryRelease: OrderInventoryReleasePort,
+    private readonly inventoryReservation: InventoryReservationApi,
+    private readonly expiryOutbox: OrderExpiryOutboxApi,
   ) {}
 
   /**
@@ -167,7 +171,21 @@ export class OrderService {
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
 
     // 7. Thực thi Transaction tạo CheckoutSession, Orders và OrderItems
-    return await this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const receipts = await this.inventoryReservation.reserve(
+        cartItems.map((item) => ({
+          skuId: item.skuId,
+          quantity: item.quantity,
+        })),
+        manager,
+      );
+      const warehouseBySku = new Map(
+        receipts.map((receipt) => [
+          receipt.skuId.toLowerCase(),
+          receipt.warehouseId,
+        ]),
+      );
+
       let sessionSubtotalCents = 0n;
       let sessionShippingFeeCents = 0n;
 
@@ -273,21 +291,31 @@ export class OrderService {
             : null,
         });
         const savedOrder = await manager.save(order);
+        await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
 
         // Tạo OrderItems
-        const orderItems = orderData.items.map((itemData) =>
-          manager.create(OrderItemEntity, {
+        const orderItems = orderData.items.map((itemData) => {
+          const warehouseId = warehouseBySku.get(itemData.skuId.toLowerCase());
+          if (!warehouseId) {
+            throw new BadRequestException({
+              errorCode: 'INVALID_INVENTORY_RECEIPT',
+              message:
+                'Inventory reservation did not return every requested SKU',
+            });
+          }
+          return manager.create(OrderItemEntity, {
             orderId: savedOrder.id,
             productId: itemData.productId,
             skuId: itemData.skuId,
+            warehouseId,
             productNameSnapshot: itemData.productName,
             skuAttributesSnapshot: itemData.attributes,
             unitPrice: itemData.unitPrice,
             quantity: itemData.quantity,
             discountAmount: '0.00',
             lineTotal: centsToMoney(itemData.lineTotalCents),
-          }),
-        );
+          });
+        });
         await manager.save(orderItems);
         savedOrder.items = orderItems;
         createdOrders.push(savedOrder);
@@ -316,6 +344,11 @@ export class OrderService {
         })),
       };
     });
+
+    void this.expiryOutbox.reconcile().catch(() => {
+      // The committed outbox intent is durable; lifecycle reconciliation retries it.
+    });
+    return result;
   }
 
   /**

@@ -23,6 +23,9 @@ export class OrderItemEntity {
   @Column('uuid', { name: 'sku_id' })
   skuId: string;
 
+  @Column('uuid', { name: 'warehouse_id', nullable: true })
+  warehouseId: string | null;
+
   @Column('varchar', { name: 'product_name_snapshot', length: 255 })
   productNameSnapshot: string;
 

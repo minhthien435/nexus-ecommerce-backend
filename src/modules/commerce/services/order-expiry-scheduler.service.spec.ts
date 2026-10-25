@@ -26,7 +26,7 @@ describe('OrderExpirySchedulerService', () => {
         delay: 60_000,
         attempts: 5,
         backoff: { type: 'exponential', delay: 1000 },
-        removeOnComplete: true,
+        removeOnComplete: false,
       },
     );
     expect(queue.add.mock.calls[0][2].jobId).not.toContain(':');
