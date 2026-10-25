@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 import {
   canTransitionOrder,
@@ -111,16 +112,7 @@ export class OrderStateMachineService extends OrderExpiryTransitionApi {
       where: { orderId },
       order: { id: 'ASC' },
     });
-    return items
-      .filter(
-        (item): item is OrderItemEntity & { warehouseId: string } =>
-          item.warehouseId !== null,
-      )
-      .map(({ skuId, quantity, warehouseId }) => ({
-        skuId,
-        quantity,
-        warehouseId,
-      }));
+    return orderInventoryReceipts(items);
   }
 
   private async observeDatabaseTime(manager: EntityManager): Promise<Date> {

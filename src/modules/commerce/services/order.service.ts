@@ -16,7 +16,7 @@ import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
-import { OrderInventoryReleasePort } from '../ports/order-inventory-release.port.js';
+import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
@@ -41,7 +41,6 @@ export class OrderService {
     private readonly addressRepo: Repository<UserAddressEntity>,
     private readonly catalogApi: CatalogCartApi,
     private readonly orderStateMachine: OrderStateMachineService,
-    private readonly inventoryRelease: OrderInventoryReleasePort,
     private readonly inventoryReservation: InventoryReservationApi,
     private readonly expiryOutbox: OrderExpiryOutboxApi,
   ) {}
@@ -421,11 +420,14 @@ export class OrderService {
       });
 
       const items = await manager.getRepository(OrderItemEntity).find({
-        select: { skuId: true, quantity: true },
+        select: { skuId: true, quantity: true, warehouseId: true },
         where: { orderId },
         order: { id: 'ASC' },
       });
-      await this.inventoryRelease.release({ orderId, items }, manager);
+      await this.inventoryReservation.release(
+        orderInventoryReceipts(items),
+        manager,
+      );
 
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, buyerId },
