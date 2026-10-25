@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
-import type { InventoryReservationItem } from '../../fulfillment/inventory-reservation.api.js';
+import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 import {
   canTransitionOrder,
   type OrderStatus,
@@ -14,6 +14,10 @@ import {
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
+import {
+  OrderExpiryTransitionApi,
+  type OrderExpiryTransitionResult,
+} from '../order-expiry-transition.api.js';
 
 export interface OrderTransitionInput {
   orderId: string;
@@ -23,18 +27,8 @@ export interface OrderTransitionInput {
   expectedBuyerId?: string;
 }
 
-export type OrderExpiryTransitionResult =
-  | { outcome: 'NOT_FOUND'; changed: false }
-  | { outcome: 'SKIPPED'; changed: false }
-  | { outcome: 'NOT_DUE'; changed: false; holdExpiresAt: Date }
-  | {
-      outcome: 'EXPIRED';
-      changed: true;
-      inventoryItems: InventoryReservationItem[];
-    };
-
 @Injectable()
-export class OrderStateMachineService {
+export class OrderStateMachineService extends OrderExpiryTransitionApi {
   async transition(
     manager: EntityManager,
     input: OrderTransitionInput,
@@ -66,24 +60,26 @@ export class OrderStateMachineService {
   ): Promise<OrderExpiryTransitionResult> {
     this.requireActiveTransaction(manager);
     const order = await this.lockOrder(manager, orderId);
-    if (!order) return { outcome: 'NOT_FOUND', changed: false };
+    if (!order) return { outcome: 'NOT_FOUND' };
     if (order.status !== 'PENDING_PAYMENT') {
-      return { outcome: 'SKIPPED', changed: false };
+      return { outcome: 'SKIPPED' };
     }
     if (!order.holdExpiresAt) {
-      return { outcome: 'SKIPPED', changed: false };
+      return { outcome: 'SKIPPED' };
     }
 
     const observedTime = await this.observeDatabaseTime(manager);
     if (order.holdExpiresAt > observedTime) {
       return {
         outcome: 'NOT_DUE',
-        changed: false,
         holdExpiresAt: order.holdExpiresAt,
       };
     }
 
-    const inventoryItems = await this.loadInventoryItems(manager, order.id);
+    const inventoryReceipts = await this.loadInventoryReceipts(
+      manager,
+      order.id,
+    );
     await this.applyTransition(
       manager,
       order,
@@ -91,7 +87,7 @@ export class OrderStateMachineService {
       null,
       'PAYMENT_HOLD_EXPIRED',
     );
-    return { outcome: 'EXPIRED', changed: true, inventoryItems };
+    return { outcome: 'EXPIRED', inventoryReceipts };
   }
 
   private async lockOrder(
@@ -106,16 +102,25 @@ export class OrderStateMachineService {
       .getOne();
   }
 
-  private async loadInventoryItems(
+  private async loadInventoryReceipts(
     manager: EntityManager,
     orderId: string,
-  ): Promise<InventoryReservationItem[]> {
+  ): Promise<InventoryReservationReceipt[]> {
     const items = await manager.getRepository(OrderItemEntity).find({
-      select: { skuId: true, quantity: true },
+      select: { skuId: true, quantity: true, warehouseId: true },
       where: { orderId },
       order: { id: 'ASC' },
     });
-    return items.map(({ skuId, quantity }) => ({ skuId, quantity }));
+    return items
+      .filter(
+        (item): item is OrderItemEntity & { warehouseId: string } =>
+          item.warehouseId !== null,
+      )
+      .map(({ skuId, quantity, warehouseId }) => ({
+        skuId,
+        quantity,
+        warehouseId,
+      }));
   }
 
   private async observeDatabaseTime(manager: EntityManager): Promise<Date> {

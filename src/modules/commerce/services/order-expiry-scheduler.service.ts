@@ -37,7 +37,9 @@ export class OrderExpirySchedulerService extends OrderExpirySchedulerApi {
         delay: Math.max(0, expiryTime - Date.now()),
         attempts: 5,
         backoff: { type: 'exponential', delay: 1000 },
-        removeOnComplete: true,
+        // Retain the stable job id so an outbox retry after a publisher crash
+        // cannot create a second logical expiry job.
+        removeOnComplete: false,
       },
     );
   }
