@@ -64,11 +64,8 @@ function setup() {
     transition: vi.fn(),
   };
 
-  const inventoryRelease = {
-    release: vi.fn(),
-  };
-
   const inventoryReservation = {
+    release: vi.fn(),
     reserve: vi.fn().mockImplementation(async (items) =>
       items.map((item: { skuId: string; quantity: number }) => ({
         ...item,
@@ -120,7 +117,6 @@ function setup() {
     addressRepo as never,
     catalogApi as never,
     orderStateMachine as never,
-    inventoryRelease as never,
     inventoryReservation as never,
     expiryOutbox as never,
   );
@@ -135,7 +131,6 @@ function setup() {
     addressRepo,
     catalogApi,
     orderStateMachine,
-    inventoryRelease,
     inventoryReservation,
     expiryOutbox,
     manager,
@@ -386,7 +381,13 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
   it('cancels an owned pending order and releases its persisted items in one transaction', async () => {
     const s = setup();
-    const persistedItems = [{ skuId: 'sku-1', quantity: 2 }];
+    const persistedItems = [
+      {
+        skuId: 'sku-1',
+        quantity: 2,
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    ];
     s.orderItemRepo.find.mockResolvedValue(persistedItems);
     s.orderRepo.findOne.mockResolvedValue({
       id: 'order-1',
@@ -408,20 +409,50 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       expectedBuyerId: userId,
       reason: 'CANCELLED_BY_BUYER',
     });
-    expect(s.inventoryRelease.release).toHaveBeenCalledWith(
-      { orderId: 'order-1', items: persistedItems },
+    expect(s.inventoryReservation.release).toHaveBeenCalledWith(
+      persistedItems,
       s.manager,
     );
   });
 
   it('propagates release failures so the transaction can roll back', async () => {
     const s = setup();
-    s.orderItemRepo.find.mockResolvedValue([{ skuId: 'sku-1', quantity: 1 }]);
-    s.inventoryRelease.release.mockRejectedValue(new Error('release failed'));
+    s.orderItemRepo.find.mockResolvedValue([
+      {
+        skuId: 'sku-1',
+        quantity: 1,
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    ]);
+    s.inventoryReservation.release.mockRejectedValue(
+      new Error('release failed'),
+    );
 
     await expect(s.service.cancelOrder(userId, 'order-1')).rejects.toThrow(
       'release failed',
     );
+    expect(s.orderRepo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing warehouse receipts without calling release', async () => {
+    const s = setup();
+    s.orderItemRepo.find.mockResolvedValue([
+      {
+        skuId: 'sku-1',
+        quantity: 1,
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+      { skuId: 'sku-2', quantity: 2, warehouseId: null },
+    ]);
+    await expect(
+      s.service.cancelOrder(userId, 'order-1'),
+    ).rejects.toMatchObject({
+      status: 503,
+      response: expect.objectContaining({
+        errorCode: 'ORDER_INVENTORY_RECEIPT_MISSING',
+      }),
+    });
+    expect(s.inventoryReservation.release).not.toHaveBeenCalled();
     expect(s.orderRepo.findOne).not.toHaveBeenCalled();
   });
 });

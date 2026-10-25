@@ -17,7 +17,6 @@ import { CartService } from './services/cart.service.js';
 import { CartWriteService } from './services/cart-write.service.js';
 import { OrderService } from './services/order.service.js';
 import { OrderStateMachineService } from './services/order-state-machine.service.js';
-import { ORDER_INVENTORY_RELEASE_PROVIDERS } from './ports/order-inventory-release.port.js';
 import { CartMergeApi } from './cart-merge.api.js';
 import { BullModule } from '@nestjs/bullmq';
 import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
@@ -53,7 +52,6 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderStateMachineService,
     OrderExpiryOutboxService,
     OrderExpiryProcessor,
-    ...ORDER_INVENTORY_RELEASE_PROVIDERS,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,

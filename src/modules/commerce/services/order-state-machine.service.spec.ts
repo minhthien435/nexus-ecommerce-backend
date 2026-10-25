@@ -29,14 +29,7 @@ function setup(current: OrderEntity | null = order()) {
     save: vi.fn(async (value) => value),
   };
   const itemRepository = {
-    find: vi.fn().mockResolvedValue([
-      { skuId, quantity: 2, warehouseId },
-      {
-        skuId: '55555555-5555-4555-8555-555555555555',
-        quantity: 1,
-        warehouseId: null,
-      },
-    ]),
+    find: vi.fn().mockResolvedValue([{ skuId, quantity: 2, warehouseId }]),
   };
   const historyRepository = {
     create: vi.fn((value) => value),
@@ -63,6 +56,27 @@ function setup(current: OrderEntity | null = order()) {
 }
 
 describe('OrderStateMachineService', () => {
+  it('rejects partial receipts before cancelling or writing history', async () => {
+    const s = setup();
+    s.itemRepository.find.mockResolvedValue([
+      { skuId, quantity: 2, warehouseId },
+      {
+        skuId: '55555555-5555-4555-8555-555555555555',
+        quantity: 1,
+        warehouseId: null,
+      } as never,
+    ]);
+    await expect(
+      s.service.expire(orderId, s.manager as never),
+    ).rejects.toMatchObject({
+      status: 503,
+      response: expect.objectContaining({
+        errorCode: 'ORDER_INVENTORY_RECEIPT_MISSING',
+      }),
+    });
+    expect(s.orderRepository.save).not.toHaveBeenCalled();
+    expect(s.historyRepository.save).not.toHaveBeenCalled();
+  });
   it('locks, transitions, and records the authenticated actor', async () => {
     const s = setup();
     await expect(
