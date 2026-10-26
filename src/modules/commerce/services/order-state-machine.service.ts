@@ -15,6 +15,8 @@ import {
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
+import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import {
   OrderExpiryTransitionApi,
   type OrderExpiryTransitionResult,
@@ -89,6 +91,41 @@ export class OrderStateMachineService extends OrderExpiryTransitionApi {
       'PAYMENT_HOLD_EXPIRED',
     );
     return { outcome: 'EXPIRED', inventoryReceipts };
+  }
+
+  async finalizeExpiry(orderId: string, manager: EntityManager): Promise<void> {
+    this.requireActiveTransaction(manager);
+    const order = await manager.getRepository(OrderEntity).findOne({
+      where: { id: orderId },
+    });
+    if (!order) return;
+    await manager
+      .getRepository(CartItemEntity)
+      .update(
+        { reservedOrderId: orderId },
+        { reservedOrderId: null, reservationExpiresAt: null },
+      );
+    if (!order.checkoutSessionId) return;
+    const session = await manager
+      .getRepository(CheckoutSessionEntity)
+      .createQueryBuilder('session')
+      .setLock('pessimistic_write')
+      .where('session.id = :sessionId', {
+        sessionId: order.checkoutSessionId,
+      })
+      .getOne();
+    if (!session) return;
+    const pending = await manager.getRepository(OrderEntity).count({
+      where: {
+        checkoutSessionId: order.checkoutSessionId,
+        status: 'PENDING_PAYMENT',
+      },
+    });
+    if (pending === 0) {
+      await manager
+        .getRepository(CheckoutSessionEntity)
+        .update({ id: session.id }, { status: 'CANCELLED' });
+    }
   }
 
   private async lockOrder(

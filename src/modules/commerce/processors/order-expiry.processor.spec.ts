@@ -27,6 +27,7 @@ describe('OrderExpiryProcessor', () => {
     };
     const transition = {
       expire: vi.fn(),
+      finalizeExpiry: vi.fn().mockResolvedValue(undefined),
     };
     for (const outcome of outcomes) {
       transition.expire.mockResolvedValueOnce(outcome);
@@ -63,6 +64,7 @@ describe('OrderExpiryProcessor', () => {
     );
     expect(s.transition.expire).toHaveBeenCalledWith(orderId, manager);
     expect(s.inventory.release).toHaveBeenCalledWith([receipt], manager);
+    expect(s.transition.finalizeExpiry).toHaveBeenCalledWith(orderId, manager);
     expect(s.transactionState).toEqual({ commits: 1, rollbacks: 0 });
   });
 

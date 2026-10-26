@@ -1,6 +1,8 @@
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
+import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
@@ -26,6 +28,8 @@ function setup(current: OrderEntity | null = order()) {
   };
   const orderRepository = {
     createQueryBuilder: vi.fn().mockReturnValue(queryBuilder),
+    findOne: vi.fn().mockResolvedValue(current),
+    count: vi.fn().mockResolvedValue(0),
     save: vi.fn(async (value) => value),
   };
   const itemRepository = {
@@ -35,6 +39,18 @@ function setup(current: OrderEntity | null = order()) {
     create: vi.fn((value) => value),
     save: vi.fn(async (value) => value),
   };
+  const cartItemRepository = {
+    update: vi.fn().mockResolvedValue({ affected: 1 }),
+  };
+  const sessionQueryBuilder = {
+    setLock: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    getOne: vi.fn().mockResolvedValue({ id: 'session-1' }),
+  };
+  const sessionRepository = {
+    createQueryBuilder: vi.fn().mockReturnValue(sessionQueryBuilder),
+    update: vi.fn().mockResolvedValue({ affected: 1 }),
+  };
   const manager = {
     queryRunner: { isTransactionActive: true },
     query: vi.fn().mockResolvedValue([{ observedTime: now }]),
@@ -42,15 +58,20 @@ function setup(current: OrderEntity | null = order()) {
       if (entity === OrderEntity) return orderRepository;
       if (entity === OrderItemEntity) return itemRepository;
       if (entity === OrderStatusHistoryEntity) return historyRepository;
+      if (entity === CartItemEntity) return cartItemRepository;
+      if (entity === CheckoutSessionEntity) return sessionRepository;
       throw new Error('unexpected repository');
     }),
   };
   return {
     historyRepository,
     itemRepository,
+    cartItemRepository,
     manager,
     orderRepository,
     queryBuilder,
+    sessionQueryBuilder,
+    sessionRepository,
     service: new OrderStateMachineService(),
   };
 }
@@ -214,5 +235,62 @@ describe('OrderStateMachineService', () => {
       }),
     });
     expect(s.orderRepository.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  describe('expiry reservation finalization', () => {
+    it('unlocks the exact rows and leaves the session active while a sibling is pending', async () => {
+      const current = {
+        ...order(),
+        checkoutSessionId: 'session-1',
+      } as OrderEntity;
+      const s = setup(current);
+      s.orderRepository.count.mockResolvedValue(1);
+
+      await s.service.finalizeExpiry(orderId, s.manager as never);
+
+      expect(s.cartItemRepository.update).toHaveBeenCalledWith(
+        { reservedOrderId: orderId },
+        { reservedOrderId: null, reservationExpiresAt: null },
+      );
+      expect(s.sessionQueryBuilder.setLock).toHaveBeenCalledWith(
+        'pessimistic_write',
+      );
+      expect(s.sessionRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('marks the locked session CANCELLED after the last pending sibling resolves', async () => {
+      const current = {
+        ...order(),
+        checkoutSessionId: 'session-1',
+      } as OrderEntity;
+      const s = setup(current);
+
+      await s.service.finalizeExpiry(orderId, s.manager as never);
+
+      expect(s.sessionQueryBuilder.getOne).toHaveBeenCalledOnce();
+      expect(s.orderRepository.count).toHaveBeenCalledWith({
+        where: { checkoutSessionId: 'session-1', status: 'PENDING_PAYMENT' },
+      });
+      expect(s.sessionRepository.update).toHaveBeenCalledWith(
+        { id: 'session-1' },
+        { status: 'CANCELLED' },
+      );
+    });
+
+    it('is a no-op for a missing order and only unlocks for an order without a session', async () => {
+      const missing = setup(null);
+      await missing.service.finalizeExpiry(orderId, missing.manager as never);
+      expect(missing.cartItemRepository.update).not.toHaveBeenCalled();
+
+      const noSession = setup(order());
+      await noSession.service.finalizeExpiry(
+        orderId,
+        noSession.manager as never,
+      );
+      expect(noSession.cartItemRepository.update).toHaveBeenCalledOnce();
+      expect(
+        noSession.sessionRepository.createQueryBuilder,
+      ).not.toHaveBeenCalled();
+    });
   });
 });

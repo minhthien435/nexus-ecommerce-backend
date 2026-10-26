@@ -20,4 +20,9 @@ export abstract class OrderExpiryTransitionApi {
     orderId: string,
     manager: EntityManager,
   ): Promise<OrderExpiryTransitionResult>;
+
+  abstract finalizeExpiry(
+    orderId: string,
+    manager: EntityManager,
+  ): Promise<void>;
 }

@@ -36,6 +36,12 @@ export class CartItemEntity {
   })
   productNameSnapshot: string | null;
 
+  @Column('uuid', { name: 'reserved_order_id', nullable: true })
+  reservedOrderId: string | null;
+
+  @Column('timestamptz', { name: 'reservation_expires_at', nullable: true })
+  reservationExpiresAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
