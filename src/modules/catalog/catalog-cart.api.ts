@@ -13,6 +13,7 @@ export type CartSku = {
   productSlug: string;
   productStatus: string;
   productDeletedAt: Date | null;
+  primaryImageUrl?: string | null;
 };
 
 export abstract class CatalogCartApi {

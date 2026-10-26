@@ -111,6 +111,8 @@ export class CartService {
         productId: row.productId,
         productName: sku?.productName ?? row.productNameSnapshot,
         productSlug: sku?.productSlug ?? null,
+        imageUrl: sku?.primaryImageUrl ?? null,
+        primaryImageUrl: sku?.primaryImageUrl ?? null,
         skuCode: sku?.skuCode ?? null,
         variantAttributes: sku?.variantAttributes ?? null,
         quantity: row.quantity,
