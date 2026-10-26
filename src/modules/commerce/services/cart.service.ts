@@ -95,7 +95,13 @@ export class CartService {
       }
       const lineTotal =
         currentPrice === null ? null : currentPrice * BigInt(row.quantity);
-      if (exclusionReason === null && sku && lineTotal !== null) {
+      const isReserved = Boolean(row.reservedOrderId);
+      if (
+        exclusionReason === null &&
+        !isReserved &&
+        sku &&
+        lineTotal !== null
+      ) {
         if (currency !== null && currency !== sku.currency) {
           throw new ConflictException({
             errorCode: 'CART_CURRENCY_MISMATCH',
@@ -122,10 +128,10 @@ export class CartService {
         lineTotal: lineTotal === null ? null : centsToMoney(lineTotal),
         priceChanged: currentPrice === null ? null : currentPrice !== snapshot,
         availableQuantity,
-        includedInSubtotal: exclusionReason === null,
+        includedInSubtotal: exclusionReason === null && !isReserved,
         exclusionReason,
         warning: exclusionReason ? reasons[exclusionReason] : null,
-        isReserved: row.reservedOrderId !== null,
+        isReserved,
         reservedOrderId: row.reservedOrderId,
         reservationExpiresAt: row.reservationExpiresAt,
       };

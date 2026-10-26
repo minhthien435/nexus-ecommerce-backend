@@ -182,7 +182,9 @@ describe('CartService read cart', () => {
       isReserved: true,
       reservedOrderId: '33333333-3333-4333-8333-333333333333',
       reservationExpiresAt,
+      includedInSubtotal: false,
     });
+    expect(result.subtotal).toBe('0.00');
   });
 
   it('keeps invalid lines visible and excludes out-of-stock, insufficient and discontinued lines', async () => {

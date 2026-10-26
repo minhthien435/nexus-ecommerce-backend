@@ -109,4 +109,6 @@ export class OrderEntity {
     cascade: ['insert'],
   })
   items?: Relation<OrderItemEntity[]>;
+
+  paymentMethod?: string | null;
 }

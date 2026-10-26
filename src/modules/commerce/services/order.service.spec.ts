@@ -426,7 +426,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       },
     ]);
 
-    await s.service.checkout(userId, {
+    const result = await s.service.checkout(userId, {
       paymentMethod: 'COD',
       selectedCartItemIds: ['item-1'],
     });
@@ -436,6 +436,9 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       expect.objectContaining({ id: expect.any(Object) }),
     );
     expect(s.manager.update).not.toHaveBeenCalled();
+    expect(s.expiryOutbox.schedule).not.toHaveBeenCalled();
+    expect(result.orders[0].status).toBe('PROCESSING');
+    expect(result.orders[0].holdExpiresAt).toBeNull();
   });
 
   it('allows at most one of two racing checkouts to reserve the same row', async () => {

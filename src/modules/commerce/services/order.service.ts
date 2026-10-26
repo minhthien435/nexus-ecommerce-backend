@@ -324,6 +324,9 @@ export class OrderService {
 
       // Tạo các Orders và OrderItems theo từng Seller
       const createdOrders: OrderEntity[] = [];
+      const isCod = (dto.paymentMethod ?? 'STRIPE') === 'COD';
+      const initialStatus = isCod ? 'PROCESSING' : 'PENDING_PAYMENT';
+      const orderHoldExpiresAt = isCod ? null : expiresAt;
 
       for (const orderData of ordersToCreate) {
         const order = manager.create(OrderEntity, {
@@ -332,7 +335,7 @@ export class OrderService {
           buyerId: userId.toLowerCase(),
           sellerId: orderData.sellerId,
           source: 'CART',
-          status: 'PENDING_PAYMENT',
+          status: initialStatus,
           subtotal: centsToMoney(orderData.subtotalCents),
           shippingFee: centsToMoney(orderData.shippingFeeCents),
           discountAmount: '0.00',
@@ -340,13 +343,24 @@ export class OrderService {
           total: centsToMoney(orderData.totalCents),
           currency: 'VND',
           shippingAddressSnapshot: shippingSnapshot,
-          holdExpiresAt: expiresAt,
+          holdExpiresAt: orderHoldExpiresAt,
           idempotencyKey: dto.idempotencyKey
             ? `${dto.idempotencyKey}-${orderData.sellerId}`
             : null,
         });
         const savedOrder = await manager.save(order);
-        await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
+        if (!isCod) {
+          await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
+        }
+
+        const initialHistory = manager.create(OrderStatusHistoryEntity, {
+          orderId: savedOrder.id,
+          fromStatus: null,
+          toStatus: initialStatus,
+          reason: isCod ? 'ORDER_CREATED_COD' : 'ORDER_CREATED',
+          changedBy: userId.toLowerCase(),
+        });
+        await manager.save(initialHistory);
 
         // Tạo OrderItems
         const orderItems = orderData.items.map((itemData) => {
@@ -378,7 +392,7 @@ export class OrderService {
         const sellerCartItemIds = orderData.items.map(
           (item) => item.cartItemId,
         );
-        if ((dto.paymentMethod ?? 'STRIPE') === 'COD') {
+        if (isCod) {
           await manager.delete(CartItemEntity, {
             id: In(sellerCartItemIds),
           });
@@ -405,11 +419,18 @@ export class OrderService {
         currency: savedSession.currency,
         orders: createdOrders.map((o) => ({
           id: o.id,
+          orderCode: o.orderNumber,
           orderNumber: o.orderNumber,
           sellerId: o.sellerId,
           status: o.status,
           total: o.total,
-          itemsCount: o.items?.length || 0,
+          totalAmount: o.total,
+          paymentMethod: savedSession.paymentMethod,
+          itemsCount:
+            o.items?.reduce(
+              (sum, item) => sum + (Number(item.quantity) || 0),
+              0,
+            ) || 0,
           holdExpiresAt: o.holdExpiresAt,
           paymentDeadlineAt: o.holdExpiresAt, // Alias tương thích cho FE
         })),
@@ -436,6 +457,7 @@ export class OrderService {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
       .where('order.buyerId = :userId', { userId: buyerId });
 
     if (query.status) {
@@ -446,7 +468,12 @@ export class OrderService {
 
     const [orders, totalItems] = await qb.getManyAndCount();
     await this.enrichOrdersWithImages(orders);
-    const totalPages = Math.ceil(totalItems / limit);
+    for (const order of orders) {
+      if (order.checkoutSession) {
+        order.paymentMethod = order.checkoutSession.paymentMethod;
+      }
+    }
+    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
 
     return {
       data: orders,
@@ -479,6 +506,9 @@ export class OrderService {
     }
 
     await this.enrichOrdersWithImages([order]);
+    if (order.checkoutSession) {
+      order.paymentMethod = order.checkoutSession.paymentMethod;
+    }
 
     const history = await this.orderHistoryRepo.find({
       where: { orderId },
