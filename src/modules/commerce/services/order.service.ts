@@ -200,6 +200,7 @@ export class OrderService {
           productId: string;
           productName: string;
           attributes: Record<string, unknown> | null;
+          imageUrl: string | null;
           unitPrice: string;
           quantity: number;
           lineTotalCents: bigint;
@@ -221,6 +222,7 @@ export class OrderService {
             productId: sku.productId,
             productName: sku.productName,
             attributes: sku.variantAttributes,
+            imageUrl: sku.primaryImageUrl || null,
             unitPrice: sku.price,
             quantity: item.quantity,
             lineTotalCents,
@@ -302,7 +304,7 @@ export class OrderService {
                 'Inventory reservation did not return every requested SKU',
             });
           }
-          return manager.create(OrderItemEntity, {
+          const orderItem = manager.create(OrderItemEntity, {
             orderId: savedOrder.id,
             productId: itemData.productId,
             skuId: itemData.skuId,
@@ -314,6 +316,9 @@ export class OrderService {
             discountAmount: '0.00',
             lineTotal: centsToMoney(itemData.lineTotalCents),
           });
+          orderItem.imageUrl = itemData.imageUrl;
+          orderItem.primaryImageUrl = itemData.imageUrl;
+          return orderItem;
         });
         await manager.save(orderItems);
         savedOrder.items = orderItems;
@@ -370,6 +375,7 @@ export class OrderService {
     qb.orderBy('order.createdAt', 'DESC').skip(skip).take(limit);
 
     const [orders, totalItems] = await qb.getManyAndCount();
+    await this.enrichOrdersWithImages(orders);
     const totalPages = Math.ceil(totalItems / limit);
 
     return {
@@ -398,6 +404,8 @@ export class OrderService {
     if (!order) {
       throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
     }
+
+    await this.enrichOrdersWithImages([order]);
 
     const history = await this.orderHistoryRepo.find({
       where: { orderId },
@@ -433,6 +441,9 @@ export class OrderService {
         where: { id: orderId, buyerId },
         relations: { items: true, checkoutSession: true },
       });
+      if (order) {
+        await this.enrichOrdersWithImages([order]);
+      }
       const history = await manager
         .getRepository(OrderStatusHistoryEntity)
         .find({
@@ -442,5 +453,41 @@ export class OrderService {
 
       return { ...order!, history };
     });
+  }
+
+  /**
+   * Đính kèm ảnh sản phẩm cho các mặt hàng trong đơn hàng
+   */
+  private async enrichOrdersWithImages(orders: OrderEntity[]): Promise<void> {
+    const productIds = Array.from(
+      new Set(
+        orders
+          .flatMap((o) => o.items || [])
+          .map((i) => i.productId)
+          .filter(Boolean),
+      ),
+    );
+    if (productIds.length === 0) return;
+
+    if (typeof this.dataSource?.query === 'function') {
+      const rows: Array<{ productId: string; url: string }> =
+        await this.dataSource.query(
+          `SELECT DISTINCT ON (product_id) product_id as "productId", url
+           FROM catalog.product_images
+           WHERE product_id = ANY($1)
+           ORDER BY product_id, is_primary DESC, sort_order ASC, id ASC`,
+          [productIds],
+        );
+      const imageMap = new Map(rows.map((r) => [r.productId, r.url]));
+
+      for (const order of orders) {
+        if (!order.items) continue;
+        for (const item of order.items) {
+          const url = imageMap.get(item.productId) || null;
+          item.imageUrl = url;
+          item.primaryImageUrl = url;
+        }
+      }
+    }
   }
 }

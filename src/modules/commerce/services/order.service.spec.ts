@@ -339,17 +339,32 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       orderBy: vi.fn().mockReturnThis(),
       skip: vi.fn().mockReturnThis(),
       take: vi.fn().mockReturnThis(),
-      getManyAndCount: vi
-        .fn()
-        .mockResolvedValue([[{ id: 'order-1', total: '100000.00' }], 1]),
+      getManyAndCount: vi.fn().mockResolvedValue([
+        [
+          {
+            id: 'order-1',
+            total: '100000.00',
+            items: [{ id: 'item-1', productId: 'prod-1' }],
+          },
+        ],
+        1,
+      ]),
     };
     s.orderRepo.createQueryBuilder.mockReturnValue(qb);
+    (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
+      .fn()
+      .mockResolvedValue([
+        { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
+      ]);
 
     const result = await s.service.getBuyerOrders(userId, {
       page: 1,
       limit: 10,
     });
     expect(result.data).toHaveLength(1);
+    expect(result.data[0].items![0].imageUrl).toBe(
+      'https://img.nexus.com/p1.png',
+    );
     expect(result.meta).toEqual({
       page: 1,
       limit: 10,
@@ -358,15 +373,23 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     });
   });
 
-  it('getOrderById returns order detail or throws NotFoundException', async () => {
+  it('getOrderById returns order detail with enriched image or throws NotFoundException', async () => {
     const s = setup();
     s.orderRepo.findOne.mockResolvedValueOnce({
       id: 'order-1',
       buyerId: userId,
+      items: [{ id: 'item-1', productId: 'prod-1' }],
     });
+    (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
+      .fn()
+      .mockResolvedValue([
+        { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
+      ]);
 
     const order = await s.service.getOrderById(userId, 'order-1');
     expect(order.id).toBe('order-1');
+    expect(order.items![0].imageUrl).toBe('https://img.nexus.com/p1.png');
+
     expect(order.history).toEqual([]);
     expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
       where: { orderId: 'order-1' },
