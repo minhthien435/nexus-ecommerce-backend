@@ -194,6 +194,21 @@ export class OrderService {
           'Giỏ hàng trống hoặc không có sản phẩm nào được chọn',
         );
       }
+      for (const item of cartItems) {
+        if (
+          item.reservedOrderId &&
+          item.reservationExpiresAt &&
+          item.reservationExpiresAt <= now
+        ) {
+          item.reservedOrderId = null;
+          item.reservationExpiresAt = null;
+          await manager.update(
+            CartItemEntity,
+            { id: item.id },
+            { reservedOrderId: null, reservationExpiresAt: null },
+          );
+        }
+      }
       if (cartItems.some((item) => Boolean(item.reservedOrderId))) {
         throw new ConflictException({
           errorCode: 'CART_ITEM_RESERVED',

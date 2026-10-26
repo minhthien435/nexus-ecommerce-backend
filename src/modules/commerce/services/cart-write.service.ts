@@ -65,7 +65,7 @@ export class CartWriteService {
           })
         : null;
       const quantity = (existing?.quantity ?? 0) + input.quantity;
-      this.assertNotReserved(existing);
+      this.assertNotReserved(existing, observedTime);
       if (quantity > MAX_QUANTITY) {
         throw new BadRequestException({
           errorCode: 'CART_QUANTITY_OVERFLOW',
@@ -188,7 +188,7 @@ export class CartWriteService {
             })
           : null;
         const quantity = quantityAdded + BigInt(existing?.quantity ?? 0);
-        this.assertNotReserved(existing);
+        this.assertNotReserved(existing, observedTime);
         const sku = skus.get(skuId);
         const reason =
           quantity > BigInt(MAX_QUANTITY)
@@ -280,7 +280,7 @@ export class CartWriteService {
           message: 'The requested cart item was not found',
         });
       }
-      this.assertNotReserved(existing);
+      this.assertNotReserved(existing, observedTime);
       if (quantity === 0) {
         await items.delete(existing.id);
         return this.reader.projectCart(cart, manager);
@@ -327,8 +327,20 @@ export class CartWriteService {
     return configs[0].value;
   }
 
-  private assertNotReserved(item: CartItemEntity | null): void {
+  private assertNotReserved(
+    item: CartItemEntity | null,
+    observedTime?: Date,
+  ): void {
     if (item?.reservedOrderId) {
+      if (
+        item.reservationExpiresAt &&
+        observedTime &&
+        item.reservationExpiresAt <= observedTime
+      ) {
+        item.reservedOrderId = null;
+        item.reservationExpiresAt = null;
+        return;
+      }
       throw new ConflictException({
         errorCode: 'CART_ITEM_RESERVED',
         message: 'The cart item is reserved by an active checkout',

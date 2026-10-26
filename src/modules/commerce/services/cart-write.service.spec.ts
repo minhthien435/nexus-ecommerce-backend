@@ -548,6 +548,13 @@ describe('CartWriteService reserved rows', () => {
     });
     expect(s.state.items).toEqual(before);
   });
+
+  it('allows modifying or deleting when the reservation has expired past observed time', async () => {
+    const s = await reservedCart();
+    s.state.items[0].reservationExpiresAt = new Date('2026-10-17T11:59:00Z');
+    const result = await s.patch(2);
+    expect(result.items[0].quantity).toBe(2);
+  });
 });
 
 describe('CartWriteService transactional protocol (mock orchestration)', () => {
