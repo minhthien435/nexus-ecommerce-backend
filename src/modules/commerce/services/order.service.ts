@@ -426,6 +426,9 @@ export class OrderService {
    * Lấy danh sách đơn hàng của người mua (phân trang chuẩn Envelope)
    */
   async getBuyerOrders(userId: string, query: QueryOrdersDto) {
+    const buyerId = userId.toLowerCase();
+    await this.reconcileExpiredStripeOrders(buyerId);
+
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
@@ -433,7 +436,7 @@ export class OrderService {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.items', 'items')
-      .where('order.buyerId = :userId', { userId: userId.toLowerCase() });
+      .where('order.buyerId = :userId', { userId: buyerId });
 
     if (query.status) {
       qb.andWhere('order.status = :status', { status: query.status });
@@ -460,8 +463,11 @@ export class OrderService {
    * Xem chi tiết một đơn hàng theo ID
    */
   async getOrderById(userId: string, orderId: string) {
+    const buyerId = userId.toLowerCase();
+    await this.reconcileExpiredStripeOrders(buyerId, orderId);
+
     const order = await this.orderRepo.findOne({
-      where: { id: orderId, buyerId: userId.toLowerCase() },
+      where: { id: orderId, buyerId },
       relations: {
         items: true,
         checkoutSession: true,
@@ -480,6 +486,46 @@ export class OrderService {
     });
 
     return { ...order, history };
+  }
+
+  private async reconcileExpiredStripeOrders(
+    buyerId: string,
+    orderId?: string,
+  ): Promise<void> {
+    const candidatesQuery = this.orderRepo
+      .createQueryBuilder('order')
+      .innerJoin('order.checkoutSession', 'checkoutSession')
+      .select('order.id', 'orderId')
+      .where('order.buyerId = :buyerId', { buyerId })
+      .andWhere('order.status = :pendingStatus', {
+        pendingStatus: 'PENDING_PAYMENT',
+      })
+      .andWhere('order.holdExpiresAt IS NOT NULL')
+      .andWhere('order.holdExpiresAt <= clock_timestamp()')
+      .andWhere('checkoutSession.paymentMethod = :paymentMethod', {
+        paymentMethod: 'STRIPE',
+      });
+
+    if (orderId) {
+      candidatesQuery.andWhere('order.id = :orderId', { orderId });
+    }
+
+    const candidates = await candidatesQuery.getRawMany<{ orderId: string }>();
+    for (const candidate of candidates) {
+      await this.dataSource.transaction('READ COMMITTED', async (manager) => {
+        const transition = await this.orderStateMachine.expire(
+          candidate.orderId,
+          manager,
+        );
+        if (transition.outcome !== 'EXPIRED') return;
+
+        await this.inventoryReservation.release(
+          transition.inventoryReceipts,
+          manager,
+        );
+        await this.orderStateMachine.finalizeExpiry(candidate.orderId, manager);
+      });
+    }
   }
 
   async cancelOrder(userId: string, orderId: string) {
