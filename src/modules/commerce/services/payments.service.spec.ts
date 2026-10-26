@@ -46,7 +46,7 @@ describe('PaymentsService', () => {
     total: '550000.00',
     currency: 'VND',
     shippingAddressSnapshot: { city: 'HCM' },
-    paymentDeadlineAt: new Date(),
+    holdExpiresAt: new Date(),
     idempotencyKey: null,
     createdAt: new Date(),
     updatedAt: new Date(),

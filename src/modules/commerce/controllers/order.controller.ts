@@ -1,0 +1,86 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { CurrentUserId } from '../../../common/auth/current-user-id.decorator.js';
+import { AccessTokenGuard } from '../../identity/auth/guards/access-token.guard.js';
+import { Permissions } from '../../identity/rbac/decorators/permissions.decorator.js';
+import { PermissionsGuard } from '../../identity/rbac/guards/permissions.guard.js';
+import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
+import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
+import { OrderService } from '../services/order.service.js';
+
+@Controller('api/v1/commerce/orders')
+@UseGuards(AccessTokenGuard, PermissionsGuard)
+export class OrderController {
+  constructor(private readonly orderService: OrderService) {}
+
+  @Post('checkout')
+  @Permissions('CHECKOUT.START')
+  async checkout(
+    @CurrentUserId() userId: string,
+    @Body() dto: CreateCheckoutDto,
+  ) {
+    const result = await this.orderService.checkout(userId, dto);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.CREATED,
+      message: 'Tạo phiên thanh toán thành công',
+      data: result,
+    };
+  }
+
+  @Get()
+  @Permissions('ORDER.VIEW')
+  async getOrders(
+    @CurrentUserId() userId: string,
+    @Query() query: QueryOrdersDto,
+  ) {
+    const result = await this.orderService.getBuyerOrders(userId, query);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách đơn hàng thành công',
+      data: result.data,
+      meta: result.meta,
+    };
+  }
+
+  @Get(':id')
+  @Permissions('ORDER.VIEW')
+  async getOrderById(
+    @CurrentUserId() userId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    const result = await this.orderService.getOrderById(userId, orderId);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy chi tiết đơn hàng thành công',
+      data: result,
+    };
+  }
+
+  @Patch(':id/cancel')
+  @Permissions('ORDER.CANCEL')
+  async cancelOrder(
+    @CurrentUserId() userId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    const result = await this.orderService.cancelOrder(userId, orderId);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Hủy đơn hàng thành công',
+      data: result,
+    };
+  }
+}

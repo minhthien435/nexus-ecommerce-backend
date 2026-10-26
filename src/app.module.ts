@@ -14,10 +14,16 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { AuctionModule } from './modules/auction/auction.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
+import { BullModule } from '@nestjs/bullmq';
+import { createBullMqOptions } from './config/bullmq.config.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: createBullMqOptions,
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: createTypeOrmOptions,
