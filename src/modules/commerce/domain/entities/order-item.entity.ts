@@ -57,4 +57,8 @@ export class OrderItemEntity {
   })
   @JoinColumn({ name: 'order_id' })
   order?: Relation<OrderEntity>;
+
+  imageUrl?: string | null;
+
+  primaryImageUrl?: string | null;
 }

@@ -37,6 +37,10 @@ export class CatalogCartService extends CatalogCartApi {
       .addSelect('product.slug', 'productSlug')
       .addSelect('product.status', 'productStatus')
       .addSelect('product.deletedAt', 'productDeletedAt')
+      .addSelect(
+        '(SELECT pi.url FROM catalog.product_images pi WHERE pi.product_id = product.id ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1)',
+        'primaryImageUrl',
+      )
       .where('sku.id IN (:...skuIds)', { skuIds })
       .getRawMany<CartSku>();
   }
