@@ -1,0 +1,385 @@
+{
+  "info": {
+    "_postman_id": "nexus-orders-flow-collection-sprint3",
+    "name": "Nexus E-Commerce - Sprint 3 Orders & Checkout Flow",
+    "description": "Automated End-to-End Postman Test Suite for Sprint 3 (NEX-301.1 & NEX-301.2).\n\nCovers:\n1. Authentication (Login & Auto-Token extraction)\n2. Catalog Product & Default SKU lookup\n3. Buyer Delivery Address lookup/ensure\n4. Add to Cart & Fetch Cart items\n5. Checkout flow (NEX-301.1: Multi-seller order split, snapshot creation, cart cleanup)\n6. My Orders List (Envelope validation, pagination)\n7. Order Detail by ID with Status History (NEX-301.2)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Authentication",
+      "item": [
+        {
+          "name": "01.1 - Login as Buyer / Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const token = json.data?.accessToken || json.data?.data?.accessToken;",
+                  "const user = json.data?.user || json.data?.data?.user;",
+                  "",
+                  "pm.test('Access token received', function () {",
+                  "    pm.expect(token).to.be.a('string');",
+                  "});",
+                  "",
+                  "if (token) {",
+                  "    pm.environment.set('accessToken', token);",
+                  "}",
+                  "if (user && user.id) {",
+                  "    pm.environment.set('userId', user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@nexus.vn\",\n  \"password\": \"Admin@123456\",\n  \"captchaToken\": \"bypass-recaptcha-dev\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Catalog & Address Setup",
+      "item": [
+        {
+          "name": "02.1 - Get Sample Product & SKU",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const items = json.data || [];",
+                  "pm.test('Products returned', function () {",
+                  "    pm.expect(items.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "const product = items[0];",
+                  "if (product && product.defaultSkuId) {",
+                  "    pm.environment.set('skuId', product.defaultSkuId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/catalog/products?limit=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "catalog", "products"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "02.2 - Get or Ensure Delivery Address",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const addresses = json.data || [];",
+                  "if (addresses.length > 0) {",
+                  "    pm.environment.set('addressId', addresses[0].id);",
+                  "} else {",
+                  "    // Fallback known valid address ID for testing",
+                  "    pm.environment.set('addressId', 'd39621ae-c9c6-4f06-8e09-faf9f2d7e2e5');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/addresses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "addresses"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Cart Flow",
+      "item": [
+        {
+          "name": "03.1 - Add SKU to Cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"skuId\": \"{{skuId}}\",\n  \"quantity\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/cart/items",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "cart", "items"]
+            }
+          }
+        },
+        {
+          "name": "03.2 - Get Cart Items & Extract CartItemId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const items = json.data?.items || [];",
+                  "pm.test('Cart has items', function () {",
+                  "    pm.expect(items.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "if (items.length > 0) {",
+                  "    pm.environment.set('cartItemId', items[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/cart",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "cart"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Checkout Flow [NEX-301.1]",
+      "item": [
+        {
+          "name": "04.1 - Checkout (Create Session & Orders)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "",
+                  "pm.test('Checkout session created', function () {",
+                  "    pm.expect(data.checkoutSessionId).to.be.a('string');",
+                  "    pm.expect(data.orders).to.be.an('array');",
+                  "    pm.expect(data.orders.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "if (data.checkoutSessionId) {",
+                  "    pm.environment.set('checkoutSessionId', data.checkoutSessionId);",
+                  "}",
+                  "if (data.orders && data.orders[0]) {",
+                  "    pm.environment.set('orderId', data.orders[0].id);",
+                  "    pm.environment.set('orderNumber', data.orders[0].orderCode);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"selectedCartItemIds\": [\"{{cartItemId}}\"],\n  \"addressId\": \"{{addressId}}\",\n  \"paymentMethod\": \"COD\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/orders/checkout",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "orders", "checkout"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - My Orders & Detail Flow [NEX-301.1 & NEX-301.2]",
+      "item": [
+        {
+          "name": "05.1 - Get My Orders List (Envelope Validation)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Response matches Standard Envelope', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "    pm.expect(json.meta).to.be.an('object');",
+                  "    pm.expect(json.meta.page).to.equal(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/orders?page=1&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "orders"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "05.2 - Get Order Detail by ID with Status History",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const order = json.data;",
+                  "",
+                  "pm.test('Order details match created order', function () {",
+                  "    pm.expect(order.id).to.equal(pm.environment.get('orderId'));",
+                  "    pm.expect(order.status).to.equal('PENDING_PAYMENT');",
+                  "    pm.expect(order.items).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/orders/{{orderId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "orders", "{{orderId}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

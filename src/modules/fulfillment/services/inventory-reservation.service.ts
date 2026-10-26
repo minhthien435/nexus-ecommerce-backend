@@ -65,17 +65,25 @@ SELECT sku_id FROM updated ORDER BY sku_id`,
     const normalized = this.normalizeReceipts(receipts);
     if (normalized.length === 0) return;
     const { valuesSql, parameters } = this.receiptValues(normalized);
-    const rows = (await manager.query(
-      `WITH requested(warehouse_id, sku_id, quantity) AS (VALUES ${valuesSql})
-UPDATE fulfillment.inventory_items AS inventory
-SET reserved_qty = inventory.reserved_qty - requested.quantity
-FROM requested
-WHERE inventory.warehouse_id = requested.warehouse_id
-  AND inventory.sku_id = requested.sku_id
-  AND inventory.reserved_qty >= requested.quantity
-RETURNING inventory.warehouse_id, inventory.sku_id`,
+    const rawResult = (await manager.query(
+      `WITH requested(warehouse_id, sku_id, quantity) AS (VALUES ${valuesSql}),
+updated AS (
+  UPDATE fulfillment.inventory_items AS inventory
+  SET reserved_qty = inventory.reserved_qty - requested.quantity
+  FROM requested
+  WHERE inventory.warehouse_id = requested.warehouse_id
+    AND inventory.sku_id = requested.sku_id
+    AND inventory.reserved_qty >= requested.quantity
+  RETURNING inventory.warehouse_id, inventory.sku_id
+)
+SELECT warehouse_id, sku_id FROM updated`,
       parameters,
-    )) as { warehouse_id: string; sku_id: string }[];
+    )) as unknown;
+    const rows = (
+      Array.isArray(rawResult) && Array.isArray(rawResult[0])
+        ? rawResult[0]
+        : (rawResult ?? [])
+    ) as { warehouse_id: string; sku_id: string }[];
     if (rows.length !== normalized.length) {
       throw new ServiceUnavailableException({
         errorCode: 'INVALID_INVENTORY_DATA',
