@@ -123,6 +123,9 @@ export class CartService {
         includedInSubtotal: exclusionReason === null,
         exclusionReason,
         warning: exclusionReason ? reasons[exclusionReason] : null,
+        isReserved: row.reservedOrderId !== null,
+        reservedOrderId: row.reservedOrderId,
+        reservationExpiresAt: row.reservationExpiresAt,
       };
     });
     const excludedItemCount = items.filter(

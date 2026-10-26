@@ -523,6 +523,33 @@ describe('CartWriteService guest merge (mock transaction orchestration)', () => 
   });
 });
 
+describe('CartWriteService reserved rows', () => {
+  async function reservedCart() {
+    const s = setup();
+    await s.add(1);
+    Object.assign(s.state.items[0], {
+      reservedOrderId: '11111111-1111-4111-8111-111111111111',
+      reservationExpiresAt: new Date('2026-10-17T12:15:00Z'),
+    });
+    return s;
+  }
+
+  it.each([
+    ['add-to-existing', (s: ReturnType<typeof setup>) => s.add(1)],
+    ['merge', (s: ReturnType<typeof setup>) => s.merge()],
+    ['update', (s: ReturnType<typeof setup>) => s.patch(2)],
+    ['delete', (s: ReturnType<typeof setup>) => s.patch(0)],
+  ])('rejects %s while preserving the reserved row', async (_name, action) => {
+    const s = await reservedCart();
+    const before = structuredClone(s.state.items);
+    await expect(action(s)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ errorCode: 'CART_ITEM_RESERVED' }),
+    });
+    expect(s.state.items).toEqual(before);
+  });
+});
+
 describe('CartWriteService transactional protocol (mock orchestration)', () => {
   it('locks the canonical account before reading, uses one manager, and expires exactly seven days after DB time', async () => {
     const s = setup();

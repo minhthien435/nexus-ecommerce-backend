@@ -34,6 +34,7 @@ export class OrderExpiryProcessor extends WorkerHost {
         const transition = await this.transition.expire(orderId, manager);
         if (transition.outcome === 'EXPIRED') {
           await this.inventory.release(transition.inventoryReceipts, manager);
+          await this.transition.finalizeExpiry(orderId, manager);
         }
         return transition;
       },

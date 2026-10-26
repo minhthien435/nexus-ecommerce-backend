@@ -21,7 +21,13 @@ export class CheckoutSessionEntity {
   buyerId: string;
 
   @Column('varchar', { length: 30, default: 'INITIATED' })
-  status: 'INITIATED' | 'PROCESSING' | 'COMPLETED' | 'EXPIRED' | 'FAILED';
+  status:
+    | 'INITIATED'
+    | 'PROCESSING'
+    | 'COMPLETED'
+    | 'EXPIRED'
+    | 'FAILED'
+    | 'CANCELLED';
 
   @Column('jsonb', { name: 'shipping_address' })
   shippingAddress: Record<string, unknown>;

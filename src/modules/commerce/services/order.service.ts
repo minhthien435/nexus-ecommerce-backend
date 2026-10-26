@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -80,7 +81,7 @@ export class OrderService {
     // 3. Lấy thông tin SKU & Sản phẩm mới nhất từ Catalog
     const skuIds = cartItems.map((item) => item.skuId);
     const catalogSkus = await this.catalogApi.getCartSkus(skuIds);
-    const skuMap = new Map(catalogSkus.map((s) => [s.id, s]));
+    let skuMap = new Map(catalogSkus.map((s) => [s.id, s]));
 
     // Kiểm tra tính khả dụng của từng mặt hàng
     for (const item of cartItems) {
@@ -155,7 +156,7 @@ export class OrderService {
     }
 
     // 5. Gom nhóm các món hàng theo từng Người bán (Seller)
-    const itemsBySeller = new Map<string, typeof cartItems>();
+    let itemsBySeller = new Map<string, typeof cartItems>();
     for (const item of cartItems) {
       const sku = skuMap.get(item.skuId)!;
       const sellerId = sku.sellerId;
@@ -171,6 +172,57 @@ export class OrderService {
 
     // 7. Thực thi Transaction tạo CheckoutSession, Orders và OrderItems
     const result = await this.dataSource.transaction(async (manager) => {
+      const itemQuery = manager
+        .getRepository(CartItemEntity)
+        .createQueryBuilder('item')
+        .setLock('pessimistic_write')
+        .where('item.cartId = :cartId', { cartId: cart.id })
+        .orderBy('item.createdAt', 'ASC')
+        .addOrderBy('item.id', 'ASC');
+      if (dto.selectedCartItemIds?.length) {
+        itemQuery.andWhere('item.id IN (:...selectedIds)', {
+          selectedIds: dto.selectedCartItemIds,
+        });
+      }
+      cartItems = await itemQuery.getMany();
+      if (
+        cartItems.length === 0 ||
+        (dto.selectedCartItemIds?.length &&
+          cartItems.length !== new Set(dto.selectedCartItemIds).size)
+      ) {
+        throw new BadRequestException(
+          'Giỏ hàng trống hoặc không có sản phẩm nào được chọn',
+        );
+      }
+      if (cartItems.some((item) => Boolean(item.reservedOrderId))) {
+        throw new ConflictException({
+          errorCode: 'CART_ITEM_RESERVED',
+          message: 'A selected cart item is reserved by an active checkout',
+        });
+      }
+      const lockedSkus = await this.catalogApi.getCartSkus(
+        cartItems.map((item) => item.skuId),
+        manager,
+      );
+      skuMap = new Map(lockedSkus.map((sku) => [sku.id, sku]));
+      itemsBySeller = new Map();
+      for (const item of cartItems) {
+        const sku = skuMap.get(item.skuId);
+        if (
+          !sku ||
+          !sku.isActive ||
+          sku.productStatus !== 'ACTIVE' ||
+          sku.productDeletedAt
+        ) {
+          throw new BadRequestException(
+            `Sản phẩm "${sku?.productName || item.productNameSnapshot || 'Không xác định'}" hiện không còn mở bán`,
+          );
+        }
+        const sellerItems = itemsBySeller.get(sku.sellerId) ?? [];
+        sellerItems.push(item);
+        itemsBySeller.set(sku.sellerId, sellerItems);
+      }
+
       const receipts = await this.inventoryReservation.reserve(
         cartItems.map((item) => ({
           skuId: item.skuId,
@@ -196,6 +248,7 @@ export class OrderService {
         shippingFeeCents: bigint;
         totalCents: bigint;
         items: Array<{
+          cartItemId: string;
           skuId: string;
           productId: string;
           productName: string;
@@ -217,6 +270,7 @@ export class OrderService {
 
           sellerSubtotalCents += lineTotalCents;
           sellerItemsData.push({
+            cartItemId: item.id,
             skuId: sku.id,
             productId: sku.productId,
             productName: sku.productName,
@@ -316,13 +370,26 @@ export class OrderService {
           });
         });
         await manager.save(orderItems);
+        const sellerCartItemIds = orderData.items.map(
+          (item) => item.cartItemId,
+        );
+        if ((dto.paymentMethod ?? 'STRIPE') === 'COD') {
+          await manager.delete(CartItemEntity, {
+            id: In(sellerCartItemIds),
+          });
+        } else {
+          await manager.update(
+            CartItemEntity,
+            { id: In(sellerCartItemIds) },
+            {
+              reservedOrderId: savedOrder.id,
+              reservationExpiresAt: expiresAt,
+            },
+          );
+        }
         savedOrder.items = orderItems;
         createdOrders.push(savedOrder);
       }
-
-      // Xóa các mặt hàng đã checkout khỏi giỏ hàng
-      const checkedOutItemIds = cartItems.map((item) => item.id);
-      await manager.delete(CartItemEntity, { id: In(checkedOutItemIds) });
 
       return {
         checkoutSessionId: savedSession.id,
@@ -411,23 +478,84 @@ export class OrderService {
     const buyerId = userId.toLowerCase();
 
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      await this.orderStateMachine.transition(manager, {
-        orderId,
-        toStatus: 'CANCELLED',
-        actorId: buyerId,
-        expectedBuyerId: buyerId,
-        reason: 'CANCELLED_BY_BUYER',
+      const chosen = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, buyerId },
       });
-
-      const items = await manager.getRepository(OrderItemEntity).find({
-        select: { skuId: true, quantity: true, warehouseId: true },
-        where: { orderId },
-        order: { id: 'ASC' },
-      });
-      await this.inventoryReservation.release(
-        orderInventoryReceipts(items),
-        manager,
+      if (!chosen) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message: 'Order was not found',
+        });
+      }
+      if (!chosen.checkoutSessionId) {
+        throw new ConflictException({
+          errorCode: 'ORDER_SESSION_NOT_CANCELLABLE',
+          message: 'Order does not belong to a checkout session',
+        });
+      }
+      const session = await manager
+        .getRepository(CheckoutSessionEntity)
+        .createQueryBuilder('session')
+        .setLock('pessimistic_write')
+        .where('session.id = :sessionId', {
+          sessionId: chosen.checkoutSessionId,
+        })
+        .getOne();
+      if (
+        !session ||
+        session.paymentMethod !== 'STRIPE' ||
+        !['INITIATED', 'PROCESSING'].includes(session.status)
+      ) {
+        throw new ConflictException({
+          errorCode: 'CHECKOUT_SESSION_NOT_CANCELLABLE',
+          message: 'Only an active Stripe checkout session can be cancelled',
+        });
+      }
+      const siblings = await manager
+        .getRepository(OrderEntity)
+        .createQueryBuilder('order')
+        .setLock('pessimistic_write')
+        .where('order.checkoutSessionId = :sessionId', {
+          sessionId: chosen.checkoutSessionId,
+        })
+        .orderBy('order.id', 'ASC')
+        .getMany();
+      const pending = siblings.filter(
+        (order) => order.status === 'PENDING_PAYMENT',
       );
+      if (pending.length === 0) {
+        throw new ConflictException({
+          errorCode: 'ORDER_TRANSITION_NOT_ALLOWED',
+          message: 'Checkout session has no pending orders to cancel',
+        });
+      }
+      for (const order of pending) {
+        await this.orderStateMachine.transition(manager, {
+          orderId: order.id,
+          toStatus: 'CANCELLED',
+          actorId: buyerId,
+          expectedBuyerId: buyerId,
+          reason: 'CHECKOUT_CANCELLED_BY_BUYER',
+        });
+        const items = await manager.getRepository(OrderItemEntity).find({
+          select: { skuId: true, quantity: true, warehouseId: true },
+          where: { orderId: order.id },
+          order: { id: 'ASC' },
+        });
+        await this.inventoryReservation.release(
+          orderInventoryReceipts(items),
+          manager,
+        );
+      }
+      await manager
+        .getRepository(CartItemEntity)
+        .update(
+          { reservedOrderId: In(pending.map((order) => order.id)) },
+          { reservedOrderId: null, reservationExpiresAt: null },
+        );
+      await manager
+        .getRepository(CheckoutSessionEntity)
+        .update({ id: chosen.checkoutSessionId }, { status: 'CANCELLED' });
 
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, buyerId },
