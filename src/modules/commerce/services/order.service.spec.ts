@@ -8,6 +8,18 @@ const seller1 = '33333333-3333-4333-8333-333333333333';
 const seller2 = '44444444-4444-4444-8444-444444444444';
 const addressId = '55555555-5555-4555-8555-555555555555';
 
+function candidateQueryBuilder(orderIds: string[] = []) {
+  return {
+    innerJoin: vi.fn().mockReturnThis(),
+    select: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    andWhere: vi.fn().mockReturnThis(),
+    getRawMany: vi
+      .fn()
+      .mockResolvedValue(orderIds.map((orderId) => ({ orderId }))),
+  };
+}
+
 function setup() {
   const cartRepo = {
     findOne: vi.fn().mockResolvedValue({
@@ -101,6 +113,8 @@ function setup() {
 
   const orderStateMachine = {
     transition: vi.fn(),
+    expire: vi.fn().mockResolvedValue({ outcome: 'SKIPPED' }),
+    finalizeExpiry: vi.fn().mockResolvedValue(undefined),
   };
 
   const inventoryReservation = {
@@ -507,6 +521,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
   it('getBuyerOrders returns paginated results with Envelope meta', async () => {
     const s = setup();
+    const candidatesQb = candidateQueryBuilder();
     const qb = {
       leftJoinAndSelect: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
@@ -525,7 +540,9 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         1,
       ]),
     };
-    s.orderRepo.createQueryBuilder.mockReturnValue(qb as never);
+    s.orderRepo.createQueryBuilder
+      .mockReturnValueOnce(candidatesQb as never)
+      .mockReturnValueOnce(qb as never);
 
     (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
       .fn()
@@ -547,10 +564,31 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       totalItems: 1,
       totalPages: 1,
     });
+    expect(candidatesQb.innerJoin).toHaveBeenCalledWith(
+      'order.checkoutSession',
+      'checkoutSession',
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'checkoutSession.paymentMethod = :paymentMethod',
+      { paymentMethod: 'STRIPE' },
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.status = :pendingStatus',
+      { pendingStatus: 'PENDING_PAYMENT' },
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.holdExpiresAt IS NOT NULL',
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.holdExpiresAt <= clock_timestamp()',
+    );
+    expect(s.dataSource.transaction).not.toHaveBeenCalled();
   });
 
   it('getOrderById returns order detail with enriched image or throws NotFoundException', async () => {
     const s = setup();
+    const candidatesQb = candidateQueryBuilder();
+    s.orderRepo.createQueryBuilder.mockReturnValue(candidatesQb as never);
     s.orderRepo.findOne.mockResolvedValueOnce({
       id: 'order-1',
       buyerId: userId,
@@ -576,7 +614,203 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     await expect(
       s.service.getOrderById(userId, 'order-not-found'),
     ).rejects.toThrow(NotFoundException);
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
+      orderId: 'order-1',
+    });
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
+      orderId: 'order-not-found',
+    });
   });
+
+  it('reconciles overdue Stripe orders before applying the buyer list status filter', async () => {
+    const s = setup();
+    const candidatesQb = candidateQueryBuilder(['order-1']);
+    const listQb = {
+      leftJoinAndSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      take: vi.fn().mockReturnThis(),
+      getManyAndCount: vi
+        .fn()
+        .mockResolvedValue([[{ id: 'order-1', status: 'CANCELLED' }], 1]),
+    };
+    const receipts = [
+      {
+        skuId: 'sku-1',
+        quantity: 1,
+        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    ];
+    s.orderRepo.createQueryBuilder
+      .mockReturnValueOnce(candidatesQb as never)
+      .mockReturnValueOnce(listQb as never);
+    s.orderStateMachine.expire.mockResolvedValue({
+      outcome: 'EXPIRED',
+      inventoryReceipts: receipts,
+    });
+
+    const result = await s.service.getBuyerOrders(userId.toUpperCase(), {
+      page: 1,
+      limit: 10,
+      status: 'CANCELLED',
+    });
+
+    expect(result.data).toEqual([{ id: 'order-1', status: 'CANCELLED' }]);
+    expect(candidatesQb.where).toHaveBeenCalledWith(
+      'order.buyerId = :buyerId',
+      { buyerId: userId },
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.holdExpiresAt <= clock_timestamp()',
+    );
+    expect(s.dataSource.transaction).toHaveBeenCalledWith(
+      'READ COMMITTED',
+      expect.any(Function),
+    );
+    expect(s.orderStateMachine.expire).toHaveBeenCalledWith(
+      'order-1',
+      s.manager,
+    );
+    expect(s.inventoryReservation.release).toHaveBeenCalledWith(
+      receipts,
+      s.manager,
+    );
+    expect(s.orderStateMachine.finalizeExpiry).toHaveBeenCalledWith(
+      'order-1',
+      s.manager,
+    );
+    expect(listQb.andWhere).toHaveBeenCalledWith('order.status = :status', {
+      status: 'CANCELLED',
+    });
+    expect(
+      s.orderStateMachine.finalizeExpiry.mock.invocationCallOrder[0],
+    ).toBeLessThan(listQb.getManyAndCount.mock.invocationCallOrder[0]);
+  });
+
+  it('reconciles an overdue owned order before returning refreshed detail and history', async () => {
+    const s = setup();
+    const candidatesQb = candidateQueryBuilder(['order-1']);
+    s.orderRepo.createQueryBuilder.mockReturnValue(candidatesQb as never);
+    s.orderStateMachine.expire.mockResolvedValue({
+      outcome: 'EXPIRED',
+      inventoryReceipts: [],
+    });
+    s.orderRepo.findOne.mockResolvedValue({
+      id: 'order-1',
+      buyerId: userId,
+      status: 'CANCELLED',
+      items: [],
+    });
+    s.orderHistoryRepo.find.mockResolvedValue([
+      { toStatus: 'CANCELLED', reason: 'PAYMENT_HOLD_EXPIRED' },
+    ]);
+
+    const result = await s.service.getOrderById(userId, 'order-1');
+
+    expect(result).toMatchObject({
+      id: 'order-1',
+      status: 'CANCELLED',
+      history: [{ toStatus: 'CANCELLED' }],
+    });
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
+      orderId: 'order-1',
+    });
+    expect(s.orderStateMachine.finalizeExpiry).toHaveBeenCalledWith(
+      'order-1',
+      s.manager,
+    );
+    expect(
+      s.orderStateMachine.finalizeExpiry.mock.invocationCallOrder[0],
+    ).toBeLessThan(s.orderRepo.findOne.mock.invocationCallOrder[0]);
+  });
+
+  it.each(['SKIPPED', 'NOT_FOUND'] as const)(
+    'does not release or finalize when a concurrent worker leaves outcome %s',
+    async (outcome) => {
+      const s = setup();
+      const candidatesQb = candidateQueryBuilder(['order-1']);
+      const listQb = {
+        leftJoinAndSelect: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[], 0]),
+      };
+      s.orderRepo.createQueryBuilder
+        .mockReturnValueOnce(candidatesQb as never)
+        .mockReturnValueOnce(listQb as never);
+      s.orderStateMachine.expire.mockResolvedValue({ outcome });
+
+      await s.service.getBuyerOrders(userId, {});
+
+      expect(s.inventoryReservation.release).not.toHaveBeenCalled();
+      expect(s.orderStateMachine.finalizeExpiry).not.toHaveBeenCalled();
+      expect(listQb.getManyAndCount).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ['inventory release', 'release'],
+    ['expiry finalization', 'finalize'],
+  ] as const)(
+    'propagates %s failure and does not return a stale buyer list',
+    async (_label, failurePoint) => {
+      const s = setup();
+      const transactionState = { commits: 0, rollbacks: 0 };
+      s.dataSource.transaction.mockImplementation(
+        async (isolationOrCallback, callback) => {
+          const operation =
+            typeof isolationOrCallback === 'function'
+              ? isolationOrCallback
+              : callback!;
+          try {
+            const result = await operation(s.manager);
+            transactionState.commits += 1;
+            return result;
+          } catch (error) {
+            transactionState.rollbacks += 1;
+            throw error;
+          }
+        },
+      );
+      const candidatesQb = candidateQueryBuilder(['order-1']);
+      const listQb = {
+        leftJoinAndSelect: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[], 0]),
+      };
+      s.orderRepo.createQueryBuilder
+        .mockReturnValueOnce(candidatesQb as never)
+        .mockReturnValueOnce(listQb as never);
+      s.orderStateMachine.expire.mockResolvedValue({
+        outcome: 'EXPIRED',
+        inventoryReceipts: [],
+      });
+      if (failurePoint === 'release') {
+        s.inventoryReservation.release.mockRejectedValue(
+          new Error('release failed'),
+        );
+      } else {
+        s.orderStateMachine.finalizeExpiry.mockRejectedValue(
+          new Error('finalize failed'),
+        );
+      }
+
+      await expect(s.service.getBuyerOrders(userId, {})).rejects.toThrow(
+        `${failurePoint} failed`,
+      );
+      expect(transactionState).toEqual({ commits: 0, rollbacks: 1 });
+      expect(listQb.getManyAndCount).not.toHaveBeenCalled();
+    },
+  );
 
   it('cancels an owned pending order and releases its persisted items in one transaction', async () => {
     const s = setup();
