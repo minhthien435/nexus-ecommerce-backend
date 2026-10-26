@@ -24,6 +24,7 @@ import { PermissionsGuard } from './rbac/guards/permissions.guard.js';
 import { RolesGuard } from './rbac/guards/roles.guard.js';
 import { RbacService } from './rbac/rbac.service.js';
 import { AdminUserController } from './admin/admin-user.controller.js';
+import { AdminDashboardController } from './admin/admin-dashboard.controller.js';
 import { AdminUserService } from './admin/admin-user.service.js';
 import { IdentityPublicApi } from './identity-public.api.js';
 import { IdentityPublicApiService } from './identity-public-api.service.js';
@@ -54,7 +55,12 @@ import { EmailModule } from '../../common/email/email.module.js';
       }),
     }),
   ],
-  controllers: [ProfileController, PasswordController, AdminUserController],
+  controllers: [
+    ProfileController,
+    PasswordController,
+    AdminUserController,
+    AdminDashboardController,
+  ],
   providers: [
     AuthService,
     TokenService,

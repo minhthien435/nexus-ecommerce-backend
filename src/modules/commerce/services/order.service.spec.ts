@@ -525,7 +525,8 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         1,
       ]),
     };
-    s.orderRepo.createQueryBuilder.mockReturnValue(qb);
+    s.orderRepo.createQueryBuilder.mockReturnValue(qb as never);
+
     (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
       .fn()
       .mockResolvedValue([
