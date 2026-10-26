@@ -3,13 +3,20 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import type Stripe from 'stripe';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import {
+  ORDER_EXPIRY_QUEUE,
+  type OrderExpiryJobPayload,
+} from '../order-expiry.constants.js';
 import { toStripeAmount } from '../utils/stripe-amount.util.js';
 import { StripeClientService } from './stripe-client.service.js';
 
@@ -25,6 +32,9 @@ export class PaymentWebhookService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly stripeClientService: StripeClientService,
+    @Optional()
+    @InjectQueue(ORDER_EXPIRY_QUEUE)
+    private readonly expiryQueue?: Queue<OrderExpiryJobPayload>,
   ) {}
 
   async handleWebhook(
@@ -37,9 +47,11 @@ export class PaymentWebhookService {
       signature,
     );
 
+    let orderIdToCancelExpiry: string | null = null;
+
     // 2. Process inside a database transaction with idempotency
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         // Pre-check for duplicate event already committed
         const existingCallback = await manager.findOne(PaymentCallbackEntity, {
           where: { providerEventId: event.id },
@@ -133,7 +145,7 @@ export class PaymentWebhookService {
             this.logger.log(
               `Order ${order.id} transitioned to PAID via Stripe event ${event.id}`,
             );
-            // Note: Expiry-job cancellation is BLOCKED awaiting Dev 2 BullMQ contract.
+            orderIdToCancelExpiry = order.id;
           } else if (order.status === 'PAID') {
             if (payment.status !== 'SUCCEEDED') {
               payment.status = 'SUCCEEDED';
@@ -211,6 +223,13 @@ export class PaymentWebhookService {
 
         return { received: true };
       });
+
+      // 5. Post-commit side effects: Cancel order expiry BullMQ job if order transitioned to PAID
+      if (orderIdToCancelExpiry) {
+        await this.cancelOrderExpiryJob(orderIdToCancelExpiry);
+      }
+
+      return result;
     } catch (error) {
       const pgError = error as {
         code?: string;
@@ -234,6 +253,38 @@ export class PaymentWebhookService {
         (error as Error).stack,
       );
       throw error;
+    }
+  }
+
+  private async cancelOrderExpiryJob(orderId: string): Promise<void> {
+    if (!this.expiryQueue) {
+      this.logger.debug(
+        `Expiry queue not available; skipping cancellation for order ${orderId}`,
+      );
+      return;
+    }
+
+    const normalizedOrderId = orderId.toLowerCase();
+    const jobId = `order-expiry-${normalizedOrderId}`;
+
+    try {
+      const job = await this.expiryQueue.getJob(jobId);
+      if (job) {
+        await job.remove();
+        this.logger.log(
+          `Cancelled order expiry job '${jobId}' for order ${orderId}`,
+        );
+      } else {
+        this.logger.debug(
+          `Order expiry job '${jobId}' not found for order ${orderId}; it may have already completed or not been scheduled`,
+        );
+      }
+    } catch (queueError) {
+      this.logger.warn(
+        `Failed to cancel order expiry job '${jobId}' for order ${orderId}: ${(queueError as Error).message}. ` +
+          `Order status is already committed as PAID; OrderExpiryProcessor will safely skip expiry.`,
+        (queueError as Error).stack,
+      );
     }
   }
 }
