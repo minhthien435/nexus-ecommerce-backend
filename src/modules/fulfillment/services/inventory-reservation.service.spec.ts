@@ -62,7 +62,7 @@ describe('InventoryReservationService', () => {
       'inventory.available_qty >= requested.quantity',
     );
     expect(sql.slice(updateStart)).toContain(
-      'available_qty = inventory.available_qty - requested.quantity',
+      'reserved_qty = inventory.reserved_qty + requested.quantity',
     );
     expect(sql).toContain(
       'ORDER BY inventory.sku_id\n  FOR UPDATE OF inventory',
@@ -109,10 +109,10 @@ describe('InventoryReservationService', () => {
       6,
     ]);
     expect(s.manager.query.mock.calls[0][0]).toContain(
-      'available_qty = inventory.available_qty + requested.quantity',
+      'reserved_qty = inventory.reserved_qty - requested.quantity',
     );
     expect(s.manager.query.mock.calls[0][0]).toContain(
-      'inventory.available_qty IS NOT NULL',
+      'inventory.reserved_qty >= requested.quantity',
     );
     expect(s.manager.getRepository).not.toHaveBeenCalled();
   });

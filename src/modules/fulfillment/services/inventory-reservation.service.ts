@@ -38,7 +38,7 @@ locked AS MATERIALIZED (
 ),
 updated AS (
   UPDATE fulfillment.inventory_items AS inventory
-  SET available_qty = inventory.available_qty - requested.quantity
+  SET reserved_qty = inventory.reserved_qty + requested.quantity
   FROM requested
   JOIN locked ON locked.sku_id = requested.sku_id
   WHERE inventory.warehouse_id = $1::uuid
@@ -68,11 +68,11 @@ SELECT sku_id FROM updated ORDER BY sku_id`,
     const rows = (await manager.query(
       `WITH requested(warehouse_id, sku_id, quantity) AS (VALUES ${valuesSql})
 UPDATE fulfillment.inventory_items AS inventory
-SET available_qty = inventory.available_qty + requested.quantity
+SET reserved_qty = inventory.reserved_qty - requested.quantity
 FROM requested
 WHERE inventory.warehouse_id = requested.warehouse_id
   AND inventory.sku_id = requested.sku_id
-  AND inventory.available_qty IS NOT NULL
+  AND inventory.reserved_qty >= requested.quantity
 RETURNING inventory.warehouse_id, inventory.sku_id`,
       parameters,
     )) as { warehouse_id: string; sku_id: string }[];
