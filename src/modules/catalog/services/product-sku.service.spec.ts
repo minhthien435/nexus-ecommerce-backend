@@ -157,6 +157,27 @@ describe('ProductSkuService', () => {
     expect(skuRepo.delete).toBeUndefined();
   });
 
+  it('allows clearing original price and validates it against resulting price', async () => {
+    skuRepo.findOne.mockResolvedValue({
+      id: 'sku-1',
+      productId: 'product-1',
+      price: 100,
+      originalPrice: 150,
+    });
+    await expect(
+      service.update('sku-1', { originalPrice: null }, 'seller-1'),
+    ).resolves.toMatchObject({ originalPrice: null });
+    skuRepo.findOne.mockResolvedValue({
+      id: 'sku-1',
+      productId: 'product-1',
+      price: 100,
+      originalPrice: null,
+    });
+    await expect(
+      service.update('sku-1', { originalPrice: 90 }, 'seller-1'),
+    ).rejects.toThrow('Giá gốc');
+  });
+
   it('rejects a non-positive or fractional stock quantity', async () => {
     await expect(service.checkAvailableStock('sku-1', 0)).rejects.toThrow(
       BadRequestException,

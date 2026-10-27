@@ -55,6 +55,18 @@ describe('SKU DTOs', () => {
     expect(errors).toHaveLength(0);
   });
 
+  it('accepts null to clear originalPrice and rejects negative values', async () => {
+    await expect(
+      validate(plainToInstance(UpdateSkuDto, { originalPrice: null })),
+    ).resolves.toHaveLength(0);
+    const errors = await validate(
+      plainToInstance(UpdateSkuDto, { originalPrice: -1 }),
+    );
+    expect(errors.some((error) => error.property === 'originalPrice')).toBe(
+      true,
+    );
+  });
+
   it.each([
     'attributes',
     'price',

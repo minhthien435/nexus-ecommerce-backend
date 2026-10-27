@@ -219,6 +219,7 @@ describe('ProductSearchService', () => {
           sku_code: 'PHONE-BLACK',
           variant_attributes: { color: 'black' },
           price: '100.00',
+          original_price: '120.00',
           currency: 'VND',
           available_quantity: '3',
         },
@@ -230,6 +231,7 @@ describe('ProductSearchService', () => {
     expect(query.mock.calls[2][0]).toContain('HAVING SUM(i.available_qty) > 0');
     expect(detail.skus[0]).toMatchObject({
       skuCode: 'PHONE-BLACK',
+      originalPrice: '120.00',
       availableQuantity: 3,
     });
     expect(detail.category).toEqual({

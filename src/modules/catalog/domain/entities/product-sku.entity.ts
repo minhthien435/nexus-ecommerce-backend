@@ -41,6 +41,16 @@ export class ProductSkuEntity {
   })
   price: number;
 
+  @Column({
+    name: 'original_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    nullable: true,
+    transformer: decimalTransformer,
+  })
+  originalPrice: number | null;
+
   @Column({ type: 'varchar', length: 3, default: 'VND' })
   currency: string;
 
