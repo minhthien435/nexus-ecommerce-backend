@@ -6,7 +6,10 @@ import { RolesGuard } from '../rbac/guards/roles.guard.js';
 import { UserEntity } from '../domain/user.entity.js';
 import { RoleEntity } from '../rbac/entities/role.entity.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
-import { ProductEntity } from '../../catalog/domain/entities/product.entity.js';
+import {
+  ProductEntity,
+  ProductStatus,
+} from '../../catalog/domain/entities/product.entity.js';
 import { ProductSkuEntity } from '../../catalog/domain/entities/product-sku.entity.js';
 import { CategoryEntity } from '../../catalog/domain/entities/category.entity.js';
 import { InventoryItemEntity } from '../../fulfillment/domain/entities/inventory-item.entity.js';
@@ -88,9 +91,11 @@ export class AdminDashboardController {
 
       // Products
       productRepo.count({ where: { deletedAt: IsNull() } }),
-      productRepo.count({ where: { status: 'ACTIVE', deletedAt: IsNull() } }),
       productRepo.count({
-        where: { status: Not('ACTIVE'), deletedAt: IsNull() },
+        where: { status: ProductStatus.ACTIVE, deletedAt: IsNull() },
+      }),
+      productRepo.count({
+        where: { status: Not(ProductStatus.ACTIVE), deletedAt: IsNull() },
       }),
 
       // SKUs
