@@ -129,7 +129,7 @@ export class SellerInventoryService {
                 unavailable_after AS unavailable_quantity,
                 available_after AS available_quantity,
                 idempotency_key, request_fingerprint, created_at
-         FROM fulfillment.inventory_ledger
+         FROM fulfillment.seller_inventory_adjustments
          WHERE actor_id = $1::uuid AND idempotency_key = $2`,
         [actorId, idempotencyKey],
       )) as LedgerRow[];
@@ -169,7 +169,7 @@ export class SellerInventoryService {
       }
       const stock = updated[0];
       const ledger = (await manager.query(
-        `INSERT INTO fulfillment.inventory_ledger
+        `INSERT INTO fulfillment.seller_inventory_adjustments
            (inventory_item_id, sku_id, warehouse_id, actor_id, type,
             quantity_delta, quantity_before, quantity_after, reserved_after,
             unavailable_after, available_after, idempotency_key, request_fingerprint)

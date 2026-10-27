@@ -74,7 +74,8 @@ describe('SellerInventoryService', () => {
     s.manager.query.mockImplementation((sql: string) => {
       if (sql.includes('pg_advisory_xact_lock')) return [];
       if (sql.includes('FROM catalog.product_skus')) return [{ id: skuId }];
-      if (sql.includes('FROM fulfillment.inventory_ledger')) return [];
+      if (sql.includes('FROM fulfillment.seller_inventory_adjustments'))
+        return [];
       if (sql.includes('INSERT INTO fulfillment.inventory_items'))
         return [
           {
@@ -88,7 +89,7 @@ describe('SellerInventoryService', () => {
             available_quantity: 9,
           },
         ];
-      if (sql.includes('INSERT INTO fulfillment.inventory_ledger'))
+      if (sql.includes('INSERT INTO fulfillment.seller_inventory_adjustments'))
         return [{ created_at: createdAt }];
       throw new Error('Unexpected query');
     });
@@ -223,7 +224,8 @@ describe('SellerInventoryService', () => {
     s.manager.query.mockImplementation((sql: string) => {
       if (sql.includes('pg_advisory_xact_lock')) return [];
       if (sql.includes('FROM catalog.product_skus')) return [{ id: skuId }];
-      if (sql.includes('FROM fulfillment.inventory_ledger')) return [];
+      if (sql.includes('FROM fulfillment.seller_inventory_adjustments'))
+        return [];
       if (sql.includes('INSERT INTO fulfillment.inventory_items'))
         return [
           {
