@@ -5,7 +5,10 @@ import type { ImportedProduct } from '../../integrations/kaggle/contracts.js';
 import { CategoryEntity } from '../domain/entities/category.entity.js';
 import { ProductImageEntity } from '../domain/entities/product-image.entity.js';
 import { ProductSkuEntity } from '../domain/entities/product-sku.entity.js';
-import { ProductEntity } from '../domain/entities/product.entity.js';
+import {
+  ProductEntity,
+  ProductStatus,
+} from '../domain/entities/product.entity.js';
 import { CatalogCacheService } from './catalog-cache.service.js';
 
 export type ProductImportOutcome = {
@@ -109,7 +112,7 @@ export class ProductImportService {
       name: record.name,
       description: record.description,
       brand: record.brand,
-      status: 'ACTIVE',
+      status: ProductStatus.ACTIVE,
       isAuctionEligible: record.isAuctionEligible,
       attributes: record.attributes,
     });

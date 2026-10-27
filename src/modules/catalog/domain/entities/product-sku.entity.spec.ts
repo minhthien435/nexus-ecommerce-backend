@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { CategoryEntity } from './category.entity.js';
 import { ProductSkuEntity } from './product-sku.entity.js';
 import { ProductEntity } from './product.entity.js';
+import { ProductImageEntity } from './product-image.entity.js';
 
 class MetadataDataSource extends DataSource {
   buildEntityMetadatas() {
@@ -15,7 +16,12 @@ describe('ProductSkuEntity', () => {
   it('maps the existing catalog.product_skus table metadata', async () => {
     const dataSource = new MetadataDataSource({
       type: 'postgres',
-      entities: [CategoryEntity, ProductEntity, ProductSkuEntity],
+      entities: [
+        CategoryEntity,
+        ProductEntity,
+        ProductSkuEntity,
+        ProductImageEntity,
+      ],
     });
 
     await dataSource.buildEntityMetadatas();
@@ -49,6 +55,13 @@ describe('ProductSkuEntity', () => {
       precision: 18,
       scale: 2,
       isNullable: false,
+    });
+    expect(metadata.findColumnWithPropertyName('originalPrice')).toMatchObject({
+      databaseName: 'original_price',
+      type: 'numeric',
+      precision: 18,
+      scale: 2,
+      isNullable: true,
     });
     expect(metadata.findColumnWithPropertyName('currency')).toMatchObject({
       type: 'varchar',

@@ -2,8 +2,12 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import type { Relation } from 'typeorm';
+import { ProductEntity } from './product.entity.js';
 
 @Entity({ name: 'product_images', schema: 'catalog' })
 export class ProductImageEntity {
@@ -24,4 +28,10 @@ export class ProductImageEntity {
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
+
+  @ManyToOne(() => ProductEntity, (product) => product.images, {
+    nullable: false,
+  })
+  @JoinColumn({ name: 'product_id' })
+  product?: Relation<ProductEntity>;
 }

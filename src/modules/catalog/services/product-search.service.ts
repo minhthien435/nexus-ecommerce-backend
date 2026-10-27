@@ -87,6 +87,7 @@ export type ProductDetail = {
     skuCode: string;
     variantAttributes: Record<string, unknown> | null;
     price: string;
+    originalPrice: string | null;
     currency: string;
     availableQuantity: number;
   }>;
@@ -191,11 +192,13 @@ export class ProductSearchService {
           sku_code: string;
           variant_attributes: Record<string, unknown> | null;
           price: string;
+          original_price: string | null;
           currency: string;
           available_quantity: string;
         }>
       >(
         `SELECT s.id, s.sku_code, s.variant_attributes, s.price::text,
+                s.original_price::text,
                 trim(s.currency) AS currency,
                 SUM(i.available_qty)::text AS available_quantity
            FROM catalog.product_skus s
@@ -233,6 +236,7 @@ export class ProductSearchService {
         skuCode: sku.sku_code,
         variantAttributes: sku.variant_attributes,
         price: sku.price,
+        originalPrice: sku.original_price,
         currency: sku.currency,
         availableQuantity: Number(sku.available_quantity),
       })),
