@@ -9,6 +9,9 @@ import { RefreshTokenEntity } from '../domain/refresh-token.entity.js';
 import { UserEntity } from '../domain/user.entity.js';
 import type { UserStatus } from '../domain/user-status.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
+import { RoleEntity } from '../rbac/entities/role.entity.js';
+import { AuditLogEntity } from '../domain/audit-log.entity.js';
+import { IdentityOutboxEntity } from '../domain/identity-outbox.entity.js';
 import { ListUsersQueryDto } from './dtos/list-users-query.dto.js';
 
 export type AdminUserView = {
@@ -71,14 +74,20 @@ export class AdminUserService {
     }
     if (query.role) {
       builder.andWhere(
-        `EXISTS (
-           SELECT 1
-             FROM identity.user_roles ur
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE ur.user_id = user.id
-              AND r.code = :role
-              AND r.deleted_at IS NULL
-         )`,
+        (qb) => {
+          const subQuery = qb
+            .subQuery()
+            .select('1')
+            .from(UserRoleEntity, 'ur')
+            .innerJoin(
+              RoleEntity,
+              'r',
+              'r.id = ur.roleId AND r.code = :role AND r.deletedAt IS NULL',
+            )
+            .where('ur.userId = user.id')
+            .getQuery();
+          return `EXISTS ${subQuery}`;
+        },
         { role: query.role },
       );
     }
@@ -162,12 +171,14 @@ export class AdminUserService {
     await this.dataSource.transaction(async (manager) => {
       await this.lockUser(manager, userId);
       const role = await this.findActiveRole(manager, roleCode);
-      await manager.query(
-        `INSERT INTO identity.user_roles (user_id, role_id)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id, role_id) DO NOTHING`,
-        [userId, role.id],
-      );
+      await manager
+        .getRepository(UserRoleEntity)
+        .createQueryBuilder()
+        .insert()
+        .into(UserRoleEntity)
+        .values({ userId, roleId: role.id })
+        .orIgnore()
+        .execute();
       await this.recordChange(manager, actorId, userId, 'USER_ROLE_ASSIGNED', {
         roleCode: role.code,
       });
@@ -248,45 +259,43 @@ export class AdminUserService {
     manager: EntityManager,
     roleCode: string,
   ): Promise<{ id: string; code: string }> {
-    const roles = await manager.query<Array<{ id: string; code: string }>>(
-      `SELECT id, code
-         FROM identity.roles
-        WHERE code = $1 AND deleted_at IS NULL
-        LIMIT 1`,
-      [roleCode],
-    );
-    if (roles.length === 0) throw new NotFoundException('Role not found');
-    return roles[0];
+    const role = await manager.getRepository(RoleEntity).findOne({
+      where: { code: roleCode, deletedAt: IsNull() },
+      select: { id: true, code: true },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+    return { id: role.id, code: role.code };
   }
 
   private async ensureNotLastAdmin(
     manager: EntityManager,
     userId: string,
   ): Promise<void> {
-    const rows = await manager.query<
-      Array<{ is_admin: boolean; active_admins: string }>
-    >(
-      `SELECT
-         EXISTS (
-           SELECT 1
-             FROM identity.user_roles ur
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE ur.user_id = $1 AND r.code = 'ADMIN' AND r.deleted_at IS NULL
-         ) AS is_admin,
-         (
-           SELECT COUNT(DISTINCT u.id)::text
-             FROM identity.users u
-             JOIN identity.user_roles ur ON ur.user_id = u.id
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE r.code = 'ADMIN'
-              AND r.deleted_at IS NULL
-              AND u.deleted_at IS NULL
-              AND u.status = 'ACTIVE'
-         ) AS active_admins`,
-      [userId],
-    );
-    if (rows[0]?.is_admin && Number(rows[0].active_admins) <= 1) {
-      throw new ConflictException('The last active administrator is protected');
+    const adminRole = await manager.getRepository(RoleEntity).findOne({
+      where: { code: 'ADMIN', deletedAt: IsNull() },
+      select: { id: true },
+    });
+    if (!adminRole) return;
+
+    const isUserAdmin = await manager.getRepository(UserRoleEntity).exists({
+      where: { userId, roleId: adminRole.id },
+    });
+
+    if (isUserAdmin) {
+      const activeAdminsCount = await manager
+        .getRepository(UserEntity)
+        .createQueryBuilder('u')
+        .innerJoin(UserRoleEntity, 'ur', 'ur.userId = u.id')
+        .where('ur.roleId = :roleId', { roleId: adminRole.id })
+        .andWhere('u.deletedAt IS NULL')
+        .andWhere('u.status = :status', { status: 'ACTIVE' })
+        .getCount();
+
+      if (activeAdminsCount <= 1) {
+        throw new ConflictException(
+          'The last active administrator is protected',
+        );
+      }
     }
   }
 
@@ -307,34 +316,41 @@ export class AdminUserService {
     changes: Record<string, unknown>,
   ): Promise<void> {
     const payload = { actorId, userId, action, changes };
-    await manager.query(
-      `INSERT INTO identity.audit_logs
-         (actor_id, action, entity_type, entity_id, changes)
-       VALUES ($1, $2, 'USER', $3, $4::jsonb)`,
-      [actorId, action, userId, JSON.stringify(changes)],
-    );
-    await manager.query(
-      `INSERT INTO identity.outbox_events
-         (event_type, aggregate_type, aggregate_id, payload)
-       VALUES ($1, 'USER', $2, $3::jsonb)`,
-      [action, userId, JSON.stringify(payload)],
-    );
+
+    const auditRepo = manager.getRepository(AuditLogEntity);
+    const auditRecord = auditRepo.create({
+      actorId,
+      action,
+      entityType: 'USER',
+      entityId: userId,
+      changes,
+    });
+    await auditRepo.save(auditRecord);
+
+    const outboxRepo = manager.getRepository(IdentityOutboxEntity);
+    const outboxRecord = outboxRepo.create({
+      eventType: action,
+      aggregateType: 'USER',
+      aggregateId: userId,
+      payload,
+    });
+    await outboxRepo.save(outboxRecord);
   }
 
   private async loadRoleMap(userIds: string[]): Promise<Map<string, string[]>> {
     const map = new Map<string, string[]>();
     if (userIds.length === 0) return map;
-    const rows = await this.dataSource.query<
-      Array<{ user_id: string; code: string }>
-    >(
-      `SELECT ur.user_id, r.code
-         FROM identity.user_roles ur
-         JOIN identity.roles r ON r.id = ur.role_id
-        WHERE ur.user_id = ANY($1::uuid[])
-          AND r.deleted_at IS NULL
-        ORDER BY r.code`,
-      [userIds],
-    );
+
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin(RoleEntity, 'r', 'r.id = ur.roleId AND r.deletedAt IS NULL')
+      .select('ur.userId', 'user_id')
+      .addSelect('r.code', 'code')
+      .where('ur.userId IN (:...userIds)', { userIds })
+      .orderBy('r.code', 'ASC')
+      .getRawMany<{ user_id: string; code: string }>();
+
     for (const row of rows) {
       map.set(row.user_id, [...(map.get(row.user_id) ?? []), row.code]);
     }

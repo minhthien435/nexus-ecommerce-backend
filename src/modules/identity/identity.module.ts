@@ -7,6 +7,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UserEntity } from './domain/user.entity.js';
 import { RefreshTokenEntity } from './domain/refresh-token.entity.js';
 import { PasswordResetTokenEntity } from './domain/password-reset-token.entity.js';
+import { AuditLogEntity } from './domain/audit-log.entity.js';
+import { IdentityOutboxEntity } from './domain/identity-outbox.entity.js';
 
 import { AuthService } from './auth/services/auth.service.js';
 import { TokenService } from './auth/services/token.service.js';
@@ -45,6 +47,8 @@ import { EmailModule } from '../../common/email/email.module.js';
       PrivilegeEntity,
       UserRoleEntity,
       RolePrivilegeEntity,
+      AuditLogEntity,
+      IdentityOutboxEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
