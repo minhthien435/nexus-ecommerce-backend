@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { DataSource } from 'typeorm';
+import { DataSource, ValueTransformer } from 'typeorm';
 import { describe, expect, it } from 'vitest';
 import { CategoryEntity } from './category.entity.js';
 import { ProductSkuEntity } from './product-sku.entity.js';
@@ -63,6 +63,12 @@ describe('ProductSkuEntity', () => {
       scale: 2,
       isNullable: true,
     });
+    const originalPriceTransformer = metadata.findColumnWithPropertyName(
+      'originalPrice',
+    )?.transformer as ValueTransformer;
+    expect(originalPriceTransformer.from(null)).toBeNull();
+    expect(originalPriceTransformer.from('149000.50')).toBe(149000.5);
+    expect(originalPriceTransformer.to(null)).toBeNull();
     expect(metadata.findColumnWithPropertyName('currency')).toMatchObject({
       type: 'varchar',
       length: '3',
