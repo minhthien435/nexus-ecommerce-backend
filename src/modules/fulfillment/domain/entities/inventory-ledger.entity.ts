@@ -10,8 +10,11 @@ export enum InventoryLedgerType {
   RESTOCK = 'RESTOCK',
 }
 
-@Entity({ schema: 'fulfillment', name: 'inventory_ledger' })
-@Unique('UQ_inventory_ledger_actor_idempotency', ['actorId', 'idempotencyKey'])
+@Entity({ schema: 'fulfillment', name: 'seller_inventory_adjustments' })
+@Unique('UQ_seller_inventory_adjustments_actor_idempotency', [
+  'actorId',
+  'idempotencyKey',
+])
 export class InventoryLedgerEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
