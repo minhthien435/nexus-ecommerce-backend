@@ -60,12 +60,12 @@ Nexus E-Commerce - Auth Flow Automation
 
 ---
 
-## 3. Các file cấu hình
-
-| File                                                        | Mô tả                                                                                        |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `postman/Nexus_ECommerce_Auth_Flow.postman_collection.json` | Postman Collection Schema v2.1.0 chứa 26 requests, pre-request scripts và test assertions    |
-| `postman/Nexus_ECommerce_Local.postman_environment.json`    | Environment cấu hình `baseUrl` và biến runtime (`accessToken`, `addressId`, `testEmail`,...) |
+| File                                                                  | Mô tả                                                                                                                       |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `postman/Nexus_ECommerce_Admin_Flow.postman_collection.json`          | **[MỚI]** Postman Collection kiểm thử độc lập phân hệ Admin (NEX-304): Dashboard Stats, User Management, Category Hierarchy |
+| `postman/Nexus_ECommerce_Sprint3_Orders_Flow.postman_collection.json` | Postman Collection kiểm thử Sprint 3: Đặt hàng, Checkout, Chi tiết đơn hàng, kèm Folder 06 Admin Module                     |
+| `postman/Nexus_ECommerce_Auth_Flow.postman_collection.json`           | Postman Collection Schema v2.1.0 chứa 26 requests, kiểm thử luồng Authentication, User Profile & Address                    |
+| `postman/Nexus_ECommerce_Local.postman_environment.json`              | Environment cấu hình `baseUrl` và biến runtime (`accessToken`, `managedUserId`, `adminCategoryId`,...)                      |
 
 ---
 
@@ -128,22 +128,25 @@ Nexus E-Commerce - Auth Flow Automation
 
 Chạy trực tiếp từ thư mục gốc dự án:
 
-```bash
+````bash
 # Chạy với Newman CLI
 npx newman run postman/Nexus_ECommerce_Auth_Flow.postman_collection.json \
   -e postman/Nexus_ECommerce_Local.postman_environment.json \
   --delay-request 50 \
   --reporters cli
-```
-
-Nếu muốn xuất báo cáo HTML:
-
 ```bash
-npx newman run postman/Nexus_ECommerce_Auth_Flow.postman_collection.json \
+# Chạy bộ test Phân hệ Admin
+npx newman run postman/Nexus_ECommerce_Admin_Flow.postman_collection.json \
   -e postman/Nexus_ECommerce_Local.postman_environment.json \
   --delay-request 50 \
-  --reporters cli,htmlextra
-```
+  --reporters cli
+
+# Chạy toàn bộ luồng Sprint 3 (Orders, Checkout & Admin)
+npx newman run postman/Nexus_ECommerce_Sprint3_Orders_Flow.postman_collection.json \
+  -e postman/Nexus_ECommerce_Local.postman_environment.json \
+  --delay-request 50 \
+  --reporters cli
+````
 
 > **Lưu ý về Cookie trong Newman:** Newman mặc định bật tính năng Cookie Jar, cho phép cookie HttpOnly `refreshToken` lưu và gửi tự động giữa các request cùng domain `localhost`.
 

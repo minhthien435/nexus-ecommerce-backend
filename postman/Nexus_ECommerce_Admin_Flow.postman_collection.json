@@ -1,0 +1,613 @@
+{
+  "info": {
+    "_postman_id": "nexus-admin-flow-collection-v1",
+    "name": "Nexus E-Commerce - Admin Subsystem Flow",
+    "description": "Comprehensive Postman Test Suite for Nexus E-Commerce Admin Subsystem (NEX-304).\n\nCovers:\n1. Admin Authentication (Auto token extraction for admin@nexus.vn)\n2. Dashboard Analytics & Financial Breakdown (NEX-304.1)\n3. User Management Lifecycle: List, Filter, View, Lock, Unlock, Assign Role, Revoke Role (NEX-304.2)\n4. Category Hierarchy CRUD: View Tree, Create, Update, Delete (NEX-304.3)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 - Authentication",
+      "item": [
+        {
+          "name": "01.1 - Login as Administrator",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const token = json.data?.accessToken || json.data?.data?.accessToken;",
+                  "const user = json.data?.user || json.data?.data?.user;",
+                  "",
+                  "pm.test('Admin Access token received', function () {",
+                  "    pm.expect(token).to.be.a('string');",
+                  "});",
+                  "",
+                  "if (token) {",
+                  "    pm.environment.set('accessToken', token);",
+                  "}",
+                  "if (user && user.id) {",
+                  "    pm.environment.set('adminUserId', user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@nexus.vn\",\n  \"password\": \"Admin@123456\",\n  \"captchaToken\": \"bypass-recaptcha-dev\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Dashboard Analytics [NEX-304.1]",
+      "item": [
+        {
+          "name": "02.1 - Get Dashboard Stats Success [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Response matches Standard Envelope', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.overview).to.be.an('object');",
+                  "    pm.expect(json.data.overview.totalProducts).to.be.above(0);",
+                  "    pm.expect(json.data.paymentBreakdown).to.be.an('array');",
+                  "    pm.expect(json.data.categoryBreakdown).to.be.an('array');",
+                  "    pm.expect(json.data.recentOrders).to.be.an('array');",
+                  "    pm.expect(json.data.systemHealth.status).to.equal('HEALTHY');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/dashboard/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "dashboard", "stats"]
+            }
+          }
+        },
+        {
+          "name": "02.2 - Get Dashboard Stats Missing Token [401 Unauthorized]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/dashboard/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "dashboard", "stats"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - User Management [NEX-304.2]",
+      "item": [
+        {
+          "name": "03.1 - List Users with Pagination & Sorting [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('User list returned with pagination', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data.items).to.be.an('array');",
+                  "    pm.expect(json.data.total).to.be.above(0);",
+                  "});",
+                  "",
+                  "const items = json.data.items || [];",
+                  "const target = items.find(u => !u.roles.includes('ADMIN')) || items[items.length - 1];",
+                  "if (target && target.id) {",
+                  "    pm.environment.set('managedUserId', target.id);",
+                  "    pm.environment.set('managedUserEmail', target.email);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?page=1&limit=5&sortBy=createdAt&sortOrder=DESC",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "users"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "5" },
+                { "key": "sortBy", "value": "createdAt" },
+                { "key": "sortOrder", "value": "DESC" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "03.2 - Filter Users by Role [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Filtered users match ADMIN role', function () {",
+                  "    json.data.items.forEach(user => {",
+                  "        pm.expect(user.roles).to.include('ADMIN');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users?role=ADMIN",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "users"],
+              "query": [{ "key": "role", "value": "ADMIN" }]
+            }
+          }
+        },
+        {
+          "name": "03.3 - Get User Detail by ID [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('User detail matches managed user', function () {",
+                  "    pm.expect(json.data.id).to.equal(pm.environment.get('managedUserId'));",
+                  "    pm.expect(json.data).not.to.have.property('passwordHash');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "users", "{{managedUserId}}"]
+            }
+          }
+        },
+        {
+          "name": "03.4 - Lock User Account [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('User status changed to LOCKED', function () {",
+                  "    pm.expect(json.data.status).to.equal('LOCKED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/lock",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{managedUserId}}",
+                "lock"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03.5 - Unlock User Account [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('User status restored to ACTIVE', function () {",
+                  "    pm.expect(json.data.status).to.equal('ACTIVE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/unlock",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{managedUserId}}",
+                "unlock"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03.6 - Assign Role to User [200/201 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Role STAFF assigned successfully', function () {",
+                  "    pm.expect(json.data.roles).to.include('STAFF');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleCode\": \"STAFF\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/roles",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{managedUserId}}",
+                "roles"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03.7 - Revoke Role from User [204 No Content]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 204 No Content', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/roles/STAFF",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "users",
+                "{{managedUserId}}",
+                "roles",
+                "STAFF"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Category Management [NEX-304.3]",
+      "item": [
+        {
+          "name": "04.1 - Get Category Hierarchy Tree [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Categories tree returned', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "    pm.expect(json.data.length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "categories"]
+            }
+          }
+        },
+        {
+          "name": "04.2 - Create New Category [201 Created]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const createCatRes = pm.response.json();",
+                  "const newCategory = createCatRes.data || createCatRes;",
+                  "pm.test('Category created with id and slug', function () {",
+                  "    pm.expect(newCategory.id).to.be.a('string');",
+                  "    pm.expect(newCategory.slug).to.be.a('string');",
+                  "});",
+                  "",
+                  "if (newCategory && newCategory.id) {",
+                  "    pm.environment.set('adminCategoryId', newCategory.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Phụ Kiện Công Nghệ Test {{$timestamp}}\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "categories"]
+            }
+          }
+        },
+        {
+          "name": "04.3 - Update Category [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const updateCatRes = pm.response.json();",
+                  "const updatedCategory = updateCatRes.data || updateCatRes;",
+                  "pm.test('Category updated successfully', function () {",
+                  "    pm.expect(updatedCategory.name).to.include('Phụ Kiện Cập Nhật');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Phụ Kiện Cập Nhật {{$timestamp}}\",\n  \"isActive\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/categories/{{adminCategoryId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "categories",
+                "{{adminCategoryId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "04.4 - Delete Category [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/categories/{{adminCategoryId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "categories",
+                "{{adminCategoryId}}"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

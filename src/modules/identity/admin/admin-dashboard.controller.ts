@@ -1,8 +1,17 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, In, IsNull, Not } from 'typeorm';
 import { AccessTokenGuard } from '../auth/guards/access-token.guard.js';
 import { Roles } from '../rbac/decorators/roles.decorator.js';
 import { RolesGuard } from '../rbac/guards/roles.guard.js';
+import { UserEntity } from '../domain/user.entity.js';
+import { RoleEntity } from '../rbac/entities/role.entity.js';
+import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
+import { ProductEntity } from '../../catalog/domain/entities/product.entity.js';
+import { ProductSkuEntity } from '../../catalog/domain/entities/product-sku.entity.js';
+import { CategoryEntity } from '../../catalog/domain/entities/category.entity.js';
+import { InventoryItemEntity } from '../../fulfillment/domain/entities/inventory-item.entity.js';
+import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
+import { CheckoutSessionEntity } from '../../commerce/domain/entities/checkout-session.entity.js';
 
 @Roles('ADMIN')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -12,165 +21,290 @@ export class AdminDashboardController {
 
   @Get('stats')
   async getStats() {
+    const userRepo = this.dataSource.getRepository(UserEntity);
+    const productRepo = this.dataSource.getRepository(ProductEntity);
+    const skuRepo = this.dataSource.getRepository(ProductSkuEntity);
+    const categoryRepo = this.dataSource.getRepository(CategoryEntity);
+    const inventoryRepo = this.dataSource.getRepository(InventoryItemEntity);
+    const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const userRoleRepo = this.dataSource.getRepository(UserRoleEntity);
+
+    const successfulStatuses = [
+      'PAID',
+      'PROCESSING',
+      'SHIPPED',
+      'DELIVERED',
+      'COMPLETED',
+    ];
+
     const [
-      usersResult,
-      productsResult,
-      skusResult,
-      categoriesResult,
-      inventoryResult,
+      // 1. Users metrics
+      totalUsers,
+      activeUsers,
+      suspendedUsers,
+
+      // 2. Products metrics
+      totalProducts,
+      activeProducts,
+      inactiveProducts,
+
+      // 3. SKUs metrics
+      totalSkus,
+
+      // 4. Categories metrics
+      totalCategories,
+
+      // 5. Inventory metrics
+      totalInventoryItems,
+      outOfStockCount,
+      lowStockCount,
+
+      // 6. Orders & Revenue metrics
+      totalOrders,
+      successfulOrders,
+      pendingOrders,
+      cancelledOrders,
+      revenueResult,
+
+      // 7. Payment method breakdown
+      paymentBreakdownRaw,
+
+      // 8. Category distribution breakdown
       categoryBreakdown,
-      recentUsers,
-      recentProducts,
+
+      // 9. Recent users
+      recentUsersList,
+
+      // 10. Recent products
+      recentProductsList,
+
+      // 11. Recent orders
+      recentOrdersRaw,
     ] = await Promise.all([
-      // Users counts
-      this.dataSource.query<
-        { total: number; active: number; suspended: number }[]
-      >(
-        `SELECT 
-          count(*)::int as total, 
-          count(*) FILTER (WHERE status = 'ACTIVE')::int as active, 
-          count(*) FILTER (WHERE status = 'SUSPENDED')::int as suspended 
-         FROM identity.users 
-         WHERE deleted_at IS NULL`,
-      ),
+      // Users
+      userRepo.count({ where: { deletedAt: IsNull() } }),
+      userRepo.count({ where: { status: 'ACTIVE', deletedAt: IsNull() } }),
+      userRepo.count({ where: { status: 'SUSPENDED', deletedAt: IsNull() } }),
 
-      // Products counts
-      this.dataSource.query<
-        { total: number; active: number; inactive: number }[]
-      >(
-        `SELECT 
-          count(*)::int as total, 
-          count(*) FILTER (WHERE status = 'ACTIVE')::int as active, 
-          count(*) FILTER (WHERE status != 'ACTIVE')::int as inactive 
-         FROM catalog.products 
-         WHERE deleted_at IS NULL`,
-      ),
+      // Products
+      productRepo.count({ where: { deletedAt: IsNull() } }),
+      productRepo.count({ where: { status: 'ACTIVE', deletedAt: IsNull() } }),
+      productRepo.count({
+        where: { status: Not('ACTIVE'), deletedAt: IsNull() },
+      }),
 
-      // SKUs counts
-      this.dataSource.query<{ total: number }[]>(
-        `SELECT count(*)::int as total 
-         FROM catalog.product_skus 
-         WHERE is_active = true`,
-      ),
+      // SKUs
+      skuRepo.count({ where: { isActive: true } }),
 
-      // Categories counts
-      this.dataSource.query<{ total: number }[]>(
-        `SELECT count(*)::int as total 
-         FROM catalog.categories 
-         WHERE deleted_at IS NULL`,
-      ),
+      // Categories
+      categoryRepo.count({ where: { deletedAt: IsNull() } }),
 
-      // Inventory metrics
-      this.dataSource.query<
-        { total: number; out_of_stock: number; low_stock: number }[]
-      >(
-        `SELECT 
-          count(*)::int as total, 
-          count(*) FILTER (WHERE available_qty <= 0)::int as out_of_stock, 
-          count(*) FILTER (WHERE available_qty > 0 AND available_qty <= 10)::int as low_stock 
-         FROM fulfillment.inventory_items`,
-      ),
+      // Inventory
+      inventoryRepo.count(),
+      inventoryRepo
+        .createQueryBuilder('item')
+        .where('item.availableQuantity <= :zero', { zero: 0 })
+        .getCount(),
+      inventoryRepo
+        .createQueryBuilder('item')
+        .where(
+          'item.availableQuantity > :zero AND item.availableQuantity <= :threshold',
+          {
+            zero: 0,
+            threshold: 10,
+          },
+        )
+        .getCount(),
 
-      // Category breakdown
-      this.dataSource.query<{ id: string; name: string; count: number }[]>(
-        `SELECT c.id, c.name, count(p.id)::int as count 
-         FROM catalog.categories c 
-         LEFT JOIN catalog.products p ON p.category_id = c.id AND p.deleted_at IS NULL 
-         WHERE c.deleted_at IS NULL 
-         GROUP BY c.id, c.name 
-         ORDER BY count DESC 
-         LIMIT 6`,
-      ),
+      // Orders & Revenue
+      orderRepo.count(),
+      orderRepo.count({ where: { status: In(successfulStatuses) } }),
+      orderRepo.count({ where: { status: 'PENDING_PAYMENT' } }),
+      orderRepo.count({ where: { status: 'CANCELLED' } }),
+      orderRepo
+        .createQueryBuilder('order')
+        .select('COALESCE(SUM(order.total), 0)', 'totalRevenue')
+        .where('order.status IN (:...statuses)', {
+          statuses: successfulStatuses,
+        })
+        .getRawOne<{ totalRevenue: string }>(),
+
+      // Payment Breakdown
+      orderRepo
+        .createQueryBuilder('order')
+        .leftJoin(
+          CheckoutSessionEntity,
+          'cs',
+          'cs.id = order.checkoutSessionId',
+        )
+        .select("COALESCE(cs.paymentMethod, 'COD')", 'method')
+        .addSelect('COUNT(order.id)::int', 'count')
+        .addSelect('COALESCE(SUM(order.total), 0)::text', 'totalAmount')
+        .where('order.status IN (:...statuses)', {
+          statuses: successfulStatuses,
+        })
+        .groupBy('cs.paymentMethod')
+        .getRawMany<{ method: string; count: number; totalAmount: string }>(),
+
+      // Category breakdown with product counts
+      categoryRepo
+        .createQueryBuilder('category')
+        .leftJoin(
+          ProductEntity,
+          'product',
+          'product.categoryId = category.id AND product.deletedAt IS NULL',
+        )
+        .select('category.id', 'id')
+        .addSelect('category.name', 'name')
+        .addSelect('COUNT(product.id)::int', 'count')
+        .where('category.deletedAt IS NULL')
+        .groupBy('category.id')
+        .addGroupBy('category.name')
+        .orderBy('count', 'DESC')
+        .limit(6)
+        .getRawMany<{ id: string; name: string; count: number }>(),
 
       // Recent users
-      this.dataSource.query<
-        {
-          id: string;
-          email: string;
-          full_name: string;
-          status: string;
-          created_at: string;
-          roles: string[];
-        }[]
-      >(
-        `SELECT 
-          u.id, 
-          u.email, 
-          u.full_name, 
-          u.status, 
-          u.created_at, 
-          COALESCE(array_remove(array_agg(r.code), NULL), ARRAY[]::varchar[]) as roles 
-         FROM identity.users u 
-         LEFT JOIN identity.user_roles ur ON ur.user_id = u.id 
-         LEFT JOIN identity.roles r ON r.id = ur.role_id 
-         WHERE u.deleted_at IS NULL 
-         GROUP BY u.id, u.email, u.full_name, u.status, u.created_at 
-         ORDER BY u.created_at DESC 
-         LIMIT 5`,
-      ),
+      userRepo.find({
+        where: { deletedAt: IsNull() },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          status: true,
+          createdAt: true,
+        },
+        order: { createdAt: 'DESC' },
+        take: 5,
+      }),
 
       // Recent products
-      this.dataSource.query<
-        {
+      productRepo.find({
+        where: { deletedAt: IsNull() },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          brand: true,
+          createdAt: true,
+        },
+        order: { createdAt: 'DESC' },
+        take: 5,
+      }),
+
+      // Recent orders with buyer details
+      orderRepo
+        .createQueryBuilder('order')
+        .leftJoin(
+          CheckoutSessionEntity,
+          'cs',
+          'cs.id = order.checkoutSessionId',
+        )
+        .leftJoin(UserEntity, 'buyer', 'buyer.id = order.buyerId')
+        .select([
+          'order.id AS id',
+          'order.orderNumber AS "orderNumber"',
+          'order.status AS status',
+          'order.total AS total',
+          'order.currency AS currency',
+          'order.createdAt AS "createdAt"',
+        ])
+        .addSelect("COALESCE(cs.paymentMethod, 'COD')", 'paymentMethod')
+        .addSelect('buyer.fullName', 'buyerName')
+        .addSelect('buyer.email', 'buyerEmail')
+        .orderBy('order.createdAt', 'DESC')
+        .limit(5)
+        .getRawMany<{
           id: string;
-          name: string;
+          orderNumber: string;
           status: string;
-          brand: string | null;
-          created_at: string;
-        }[]
-      >(
-        `SELECT 
-          id, 
-          name, 
-          status, 
-          brand, 
-          created_at 
-         FROM catalog.products 
-         WHERE deleted_at IS NULL 
-         ORDER BY created_at DESC 
-         LIMIT 5`,
-      ),
+          total: string;
+          currency: string;
+          createdAt: string;
+          paymentMethod: string;
+          buyerName: string | null;
+          buyerEmail: string | null;
+        }>(),
     ]);
 
-    const users = usersResult[0] || { total: 0, active: 0, suspended: 0 };
-    const products = productsResult[0] || { total: 0, active: 0, inactive: 0 };
-    const skus = skusResult[0] || { total: 0 };
-    const categories = categoriesResult[0] || { total: 0 };
-    const inventory = inventoryResult[0] || {
-      total: 0,
-      out_of_stock: 0,
-      low_stock: 0,
-    };
+    // Batch load roles for recent users using TypeORM
+    const recentUserIds = recentUsersList.map((u) => u.id);
+    const roleRows =
+      recentUserIds.length > 0
+        ? await userRoleRepo
+            .createQueryBuilder('ur')
+            .innerJoin(
+              RoleEntity,
+              'r',
+              'r.id = ur.roleId AND r.deletedAt IS NULL',
+            )
+            .select('ur.userId', 'userId')
+            .addSelect('r.code', 'roleCode')
+            .where('ur.userId IN (:...ids)', { ids: recentUserIds })
+            .getRawMany<{ userId: string; roleCode: string }>()
+        : [];
+
+    const rolesMap = new Map<string, string[]>();
+    for (const row of roleRows) {
+      const current = rolesMap.get(row.userId) ?? [];
+      current.push(row.roleCode);
+      rolesMap.set(row.userId, current);
+    }
 
     return {
       overview: {
-        totalProducts: products.total,
-        activeProducts: products.active,
-        inactiveProducts: products.inactive,
-        totalSkus: skus.total,
-        totalCategories: categories.total,
-        totalUsers: users.total,
-        activeUsers: users.active,
-        suspendedUsers: users.suspended,
-        totalInventoryItems: inventory.total,
-        outOfStockCount: inventory.out_of_stock,
-        lowStockCount: inventory.low_stock,
+        totalRevenue: revenueResult?.totalRevenue ?? '0.00',
+        totalOrders,
+        successfulOrders,
+        pendingOrders,
+        cancelledOrders,
+        totalProducts,
+        activeProducts,
+        inactiveProducts,
+        totalSkus,
+        totalCategories,
+        totalUsers,
+        activeUsers,
+        suspendedUsers,
+        totalInventoryItems,
+        outOfStockCount,
+        lowStockCount,
       },
-      categoryBreakdown,
-      recentUsers: recentUsers.map((u) => ({
+      paymentBreakdown: paymentBreakdownRaw.map((p) => ({
+        method: p.method,
+        count: Number(p.count),
+        totalAmount: p.totalAmount,
+      })),
+      categoryBreakdown: categoryBreakdown.map((c) => ({
+        id: c.id,
+        name: c.name,
+        count: Number(c.count),
+      })),
+      recentUsers: recentUsersList.map((u) => ({
         id: u.id,
         email: u.email,
-        fullName: u.full_name,
+        fullName: u.fullName,
         status: u.status,
-        createdAt: u.created_at,
-        roles: u.roles,
+        createdAt: u.createdAt,
+        roles: rolesMap.get(u.id) ?? [],
       })),
-      recentProducts: recentProducts.map((p) => ({
+      recentProducts: recentProductsList.map((p) => ({
         id: p.id,
         name: p.name,
         status: p.status,
         brand: p.brand,
-        createdAt: p.created_at,
+        createdAt: p.createdAt,
+      })),
+      recentOrders: recentOrdersRaw.map((o) => ({
+        id: o.id,
+        orderNumber: o.orderNumber,
+        status: o.status,
+        total: o.total,
+        currency: o.currency,
+        paymentMethod: o.paymentMethod || 'COD',
+        buyerName: o.buyerName,
+        buyerEmail: o.buyerEmail,
+        createdAt: o.createdAt,
       })),
       systemHealth: {
         status: 'HEALTHY',

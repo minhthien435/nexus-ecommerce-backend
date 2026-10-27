@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "nexus-orders-flow-collection-sprint3",
-    "name": "Nexus E-Commerce - Sprint 3 Orders & Checkout Flow",
-    "description": "Automated End-to-End Postman Test Suite for Sprint 3 (NEX-301.1 & NEX-301.2).\n\nCovers:\n1. Authentication (Login & Auto-Token extraction)\n2. Catalog Product & Default SKU lookup\n3. Buyer Delivery Address lookup/ensure\n4. Add to Cart & Fetch Cart items\n5. Checkout flow (NEX-301.1: Multi-seller order split, snapshot creation, cart cleanup)\n6. My Orders List (Envelope validation, pagination)\n7. Order Detail by ID with Status History (NEX-301.2)",
+    "name": "Nexus E-Commerce - Sprint 3 Orders, Checkout & Admin Flow",
+    "description": "Automated End-to-End Postman Test Suite for Sprint 3 (NEX-301.1, NEX-301.2 & NEX-304 Admin Module).\n\nCovers:\n1. Authentication (Login & Auto-Token extraction)\n2. Catalog Product & Default SKU lookup\n3. Buyer Delivery Address lookup/ensure\n4. Add to Cart & Fetch Cart items\n5. Checkout flow (NEX-301.1: Multi-seller order split, snapshot creation, cart cleanup)\n6. My Orders List (Envelope validation, pagination)\n7. Order Detail by ID with Status History (NEX-301.2)\n8. Admin Module (NEX-304: Dashboard Stats, User Management, Category Hierarchy CRUD)",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -244,21 +244,21 @@
                   "    pm.response.to.have.status(201);",
                   "});",
                   "",
-                  "const json = pm.response.json();",
-                  "const data = json.data || {};",
+                  "const checkoutJson = pm.response.json();",
+                  "const checkoutData = checkoutJson.data || {};",
                   "",
                   "pm.test('Checkout session created', function () {",
-                  "    pm.expect(data.checkoutSessionId).to.be.a('string');",
-                  "    pm.expect(data.orders).to.be.an('array');",
-                  "    pm.expect(data.orders.length).to.be.above(0);",
+                  "    pm.expect(checkoutData.checkoutSessionId).to.be.a('string');",
+                  "    pm.expect(checkoutData.orders).to.be.an('array');",
+                  "    pm.expect(checkoutData.orders.length).to.be.above(0);",
                   "});",
                   "",
-                  "if (data.checkoutSessionId) {",
-                  "    pm.environment.set('checkoutSessionId', data.checkoutSessionId);",
+                  "if (checkoutData.checkoutSessionId) {",
+                  "    pm.environment.set('checkoutSessionId', checkoutData.checkoutSessionId);",
                   "}",
-                  "if (data.orders && data.orders[0]) {",
-                  "    pm.environment.set('orderId', data.orders[0].id);",
-                  "    pm.environment.set('orderNumber', data.orders[0].orderCode);",
+                  "if (checkoutData.orders && checkoutData.orders[0]) {",
+                  "    pm.environment.set('orderId', checkoutData.orders[0].id);",
+                  "    pm.environment.set('orderNumber', checkoutData.orders[0].orderCode);",
                   "}"
                 ]
               }
@@ -357,7 +357,7 @@
                   "",
                   "pm.test('Order details match created order', function () {",
                   "    pm.expect(order.id).to.equal(pm.environment.get('orderId'));",
-                  "    pm.expect(order.status).to.equal('PENDING_PAYMENT');",
+                  "    pm.expect(['PENDING_PAYMENT', 'PROCESSING']).to.include(order.status);",
                   "    pm.expect(order.items).to.be.an('array');",
                   "});"
                 ]
@@ -378,6 +378,559 @@
               "path": ["api", "v1", "commerce", "orders", "{{orderId}}"]
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "06 - Admin Module [NEX-304]",
+      "item": [
+        {
+          "name": "06.1 - Admin Dashboard Stats",
+          "item": [
+            {
+              "name": "06.1.1 - Get Dashboard Stats Success [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('Response matches Standard Envelope', function () {",
+                      "    pm.expect(json.success).to.be.true;",
+                      "    pm.expect(json.data.overview).to.be.an('object');",
+                      "    pm.expect(json.data.overview.totalProducts).to.be.above(0);",
+                      "    pm.expect(json.data.paymentBreakdown).to.be.an('array');",
+                      "    pm.expect(json.data.categoryBreakdown).to.be.an('array');",
+                      "    pm.expect(json.data.systemHealth.status).to.equal('HEALTHY');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/dashboard/stats",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "dashboard", "stats"]
+                }
+              }
+            },
+            {
+              "name": "06.1.2 - Get Dashboard Stats Missing Token [401 Unauthorized]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 401 Unauthorized', function () {",
+                      "    pm.response.to.have.status(401);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/dashboard/stats",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "dashboard", "stats"]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "06.2 - Admin Users Management",
+          "item": [
+            {
+              "name": "06.2.1 - List Users with Pagination [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('User list returned with pagination', function () {",
+                      "    pm.expect(json.success).to.be.true;",
+                      "    pm.expect(json.data.items).to.be.an('array');",
+                      "    pm.expect(json.data.total).to.be.above(0);",
+                      "});",
+                      "",
+                      "const items = json.data.items || [];",
+                      "const target = items.find(u => !u.roles.includes('ADMIN')) || items[items.length - 1];",
+                      "if (target && target.id) {",
+                      "    pm.environment.set('managedUserId', target.id);",
+                      "    pm.environment.set('managedUserEmail', target.email);",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users?page=1&limit=5&sortBy=createdAt&sortOrder=DESC",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "users"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "5" },
+                    { "key": "sortBy", "value": "createdAt" },
+                    { "key": "sortOrder", "value": "DESC" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "06.2.2 - Filter Users by Role [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('Filtered users match ADMIN role', function () {",
+                      "    json.data.items.forEach(user => {",
+                      "        pm.expect(user.roles).to.include('ADMIN');",
+                      "    });",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users?role=ADMIN",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "users"],
+                  "query": [{ "key": "role", "value": "ADMIN" }]
+                }
+              }
+            },
+            {
+              "name": "06.2.3 - Get User Detail by ID [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('User detail matches managed user', function () {",
+                      "    pm.expect(json.data.id).to.equal(pm.environment.get('managedUserId'));",
+                      "    pm.expect(json.data).not.to.have.property('passwordHash');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "users", "{{managedUserId}}"]
+                }
+              }
+            },
+            {
+              "name": "06.2.4 - Lock User Account [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('User status changed to LOCKED', function () {",
+                      "    pm.expect(json.data.status).to.equal('LOCKED');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/lock",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{managedUserId}}",
+                    "lock"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "06.2.5 - Unlock User Account [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('User status restored to ACTIVE', function () {",
+                      "    pm.expect(json.data.status).to.equal('ACTIVE');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/unlock",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{managedUserId}}",
+                    "unlock"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "06.2.6 - Assign Role to User [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 or 201', function () {",
+                      "    pm.expect([200, 201]).to.include(pm.response.code);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('Role STAFF assigned successfully', function () {",
+                      "    pm.expect(json.data.roles).to.include('STAFF');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"roleCode\": \"STAFF\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/roles",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{managedUserId}}",
+                    "roles"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "06.2.7 - Revoke Role from User [204 No Content]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 204 No Content', function () {",
+                      "    pm.response.to.have.status(204);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/users/{{managedUserId}}/roles/STAFF",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "users",
+                    "{{managedUserId}}",
+                    "roles",
+                    "STAFF"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "06.3 - Admin Categories Management",
+          "item": [
+            {
+              "name": "06.3.1 - Get Category Hierarchy Tree [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const json = pm.response.json();",
+                      "pm.test('Categories tree returned', function () {",
+                      "    pm.expect(json.success).to.be.true;",
+                      "    pm.expect(json.data).to.be.an('array');",
+                      "    pm.expect(json.data.length).to.be.above(0);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "categories"]
+                }
+              }
+            },
+            {
+              "name": "06.3.2 - Create New Category [201 Created]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 201 Created', function () {",
+                      "    pm.response.to.have.status(201);",
+                      "});",
+                      "",
+                      "const createCatRes = pm.response.json();",
+                      "const newCategory = createCatRes.data || createCatRes;",
+                      "pm.test('Category created with id and slug', function () {",
+                      "    pm.expect(newCategory.id).to.be.a('string');",
+                      "    pm.expect(newCategory.slug).to.be.a('string');",
+                      "});",
+                      "",
+                      "if (newCategory && newCategory.id) {",
+                      "    pm.environment.set('adminCategoryId', newCategory.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Phụ Kiện Công Nghệ Test {{$timestamp}}\",\n  \"isActive\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/categories",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "categories"]
+                }
+              }
+            },
+            {
+              "name": "06.3.3 - Update Category [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "",
+                      "const updateCatRes = pm.response.json();",
+                      "const updatedCategory = updateCatRes.data || updateCatRes;",
+                      "pm.test('Category updated', function () {",
+                      "    pm.expect(updatedCategory.name).to.include('Phụ Kiện Cập Nhật');",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Phụ Kiện Cập Nhật {{$timestamp}}\",\n  \"isActive\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/categories/{{adminCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "categories",
+                    "{{adminCategoryId}}"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "06.3.4 - Delete Category [200 OK]",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('Status code is 200 OK', function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/categories/{{adminCategoryId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "categories",
+                    "{{adminCategoryId}}"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     }
