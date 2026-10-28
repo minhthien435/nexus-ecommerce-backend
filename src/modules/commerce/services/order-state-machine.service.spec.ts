@@ -238,7 +238,7 @@ describe('OrderStateMachineService', () => {
   });
 
   describe('expiry reservation finalization', () => {
-    it('unlocks the exact rows and leaves the session active while a sibling is pending', async () => {
+    it('leaves the session active while a sibling is pending', async () => {
       const current = {
         ...order(),
         checkoutSessionId: 'session-1',
@@ -248,10 +248,6 @@ describe('OrderStateMachineService', () => {
 
       await s.service.finalizeExpiry(orderId, s.manager as never);
 
-      expect(s.cartItemRepository.update).toHaveBeenCalledWith(
-        { reservedOrderId: orderId },
-        { reservedOrderId: null, reservationExpiresAt: null },
-      );
       expect(s.sessionQueryBuilder.setLock).toHaveBeenCalledWith(
         'pessimistic_write',
       );
@@ -277,17 +273,18 @@ describe('OrderStateMachineService', () => {
       );
     });
 
-    it('is a no-op for a missing order and only unlocks for an order without a session', async () => {
+    it('is a no-op for a missing order and for an order without a session', async () => {
       const missing = setup(null);
       await missing.service.finalizeExpiry(orderId, missing.manager as never);
-      expect(missing.cartItemRepository.update).not.toHaveBeenCalled();
+      expect(
+        missing.sessionRepository.createQueryBuilder,
+      ).not.toHaveBeenCalled();
 
       const noSession = setup(order());
       await noSession.service.finalizeExpiry(
         orderId,
         noSession.manager as never,
       );
-      expect(noSession.cartItemRepository.update).toHaveBeenCalledOnce();
       expect(
         noSession.sessionRepository.createQueryBuilder,
       ).not.toHaveBeenCalled();
