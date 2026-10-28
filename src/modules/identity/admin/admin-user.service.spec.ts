@@ -60,6 +60,7 @@ describe('AdminUserService', () => {
     };
 
     const manager = {
+      query: vi.fn().mockResolvedValue([]),
       getRepository: vi.fn((entity) => {
         if (entity === UserEntity)
           return { createQueryBuilder: () => lockBuilder, save };
@@ -134,6 +135,7 @@ describe('AdminUserService', () => {
     };
 
     const manager = {
+      query: vi.fn().mockResolvedValue([]),
       getRepository: vi.fn((entity) => {
         if (entity === UserEntity)
           return {
@@ -178,6 +180,7 @@ describe('AdminUserService', () => {
     };
     const userRoleRepo = {
       createQueryBuilder: vi.fn(() => insertBuilder),
+      exists: vi.fn().mockResolvedValue(false),
     };
     const auditRepo = {
       create: vi.fn((data) => data),
@@ -189,6 +192,7 @@ describe('AdminUserService', () => {
     };
 
     const manager = {
+      query: vi.fn().mockResolvedValue([]),
       getRepository: vi.fn((entity) => {
         if (entity === UserEntity)
           return { createQueryBuilder: () => lockBuilder };
@@ -241,6 +245,7 @@ describe('AdminUserService', () => {
       getOne: vi.fn().mockResolvedValue(record),
     };
     const manager = {
+      query: vi.fn().mockResolvedValue([]),
       getRepository: vi.fn((entity) => {
         if (entity === UserEntity)
           return { createQueryBuilder: () => lockBuilder };
