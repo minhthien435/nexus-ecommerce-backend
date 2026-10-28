@@ -332,9 +332,8 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     expect(orderSeller2!.total).toBe('600000.00');
     expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
 
-    // Stripe rows remain in the cart and are mapped to their exact seller order.
-    expect(s.manager.delete).not.toHaveBeenCalled();
-    expect(s.manager.update).toHaveBeenCalledTimes(2);
+    // Checked out rows are removed from the cart for each seller order.
+    expect(s.manager.delete).toHaveBeenCalledTimes(2);
     expect(s.inventoryReservation.reserve).toHaveBeenCalledOnce();
     expect(s.expiryOutbox.schedule).toHaveBeenCalledTimes(2);
     expect(s.expiryOutbox.reconcile).toHaveBeenCalledOnce();
@@ -476,10 +475,8 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         release();
       }
     });
-    s.manager.update.mockImplementation(async (...args: unknown[]) => {
-      const changes = args.at(-1) as { reservedOrderId?: string };
-      if (changes.reservedOrderId)
-        row.reservedOrderId = changes.reservedOrderId;
+    s.manager.delete.mockImplementation(async () => {
+      s.cartItemRepo.find.mockResolvedValue([]);
       return { affected: 1 };
     });
 
@@ -940,10 +937,6 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     );
     expect(s.orderItemRepo.find).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { orderId: unrelated.id } }),
-    );
-    expect(s.manager.update).toHaveBeenCalledWith(
-      expect.objectContaining({ reservedOrderId: expect.any(Object) }),
-      { reservedOrderId: null, reservationExpiresAt: null },
     );
     expect(s.manager.update).toHaveBeenCalledWith(
       { id: 'session-1' },

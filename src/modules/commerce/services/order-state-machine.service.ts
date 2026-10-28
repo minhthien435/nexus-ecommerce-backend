@@ -15,7 +15,6 @@ import {
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
-import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import {
   OrderExpiryTransitionApi,
@@ -99,12 +98,6 @@ export class OrderStateMachineService extends OrderExpiryTransitionApi {
       where: { id: orderId },
     });
     if (!order) return;
-    await manager
-      .getRepository(CartItemEntity)
-      .update(
-        { reservedOrderId: orderId },
-        { reservedOrderId: null, reservationExpiresAt: null },
-      );
     if (!order.checkoutSessionId) return;
     const session = await manager
       .getRepository(CheckoutSessionEntity)
