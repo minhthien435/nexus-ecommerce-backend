@@ -146,8 +146,8 @@ export class SellerInventoryService {
       const updated = (await manager.query(
         `INSERT INTO fulfillment.inventory_items
            (id, sku_id, warehouse_id, total_qty, reserved_qty,
-            unavailable_qty, version, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::int, 0, 0, 1, now(), now())
+            unavailable_qty, version, updated_at)
+         VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::int, 0, 0, 1, now())
          ON CONFLICT (sku_id, warehouse_id) DO UPDATE
          SET total_qty = inventory_items.total_qty + EXCLUDED.total_qty,
              version = inventory_items.version + 1,

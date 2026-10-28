@@ -117,6 +117,8 @@ describe('SellerInventoryService', () => {
     expect(updateSql).toContain(
       'inventory_items.total_qty + EXCLUDED.total_qty',
     );
+    expect(updateSql).toContain('unavailable_qty, version, updated_at');
+    expect(updateSql).not.toContain('version, created_at, updated_at');
   });
 
   it('returns the original result for an idempotent retry without touching stock', async () => {
