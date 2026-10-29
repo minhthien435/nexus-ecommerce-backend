@@ -13,6 +13,7 @@ import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import {
   ORDER_EXPIRY_QUEUE,
   type OrderExpiryJobPayload,
@@ -141,6 +142,9 @@ export class PaymentWebhookService {
               changedBy: null,
             });
             await manager.save(statusHistory);
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
 
             this.logger.log(
               `Order ${order.id} transitioned to PAID via Stripe event ${event.id}`,
@@ -151,6 +155,9 @@ export class PaymentWebhookService {
               payment.status = 'SUCCEEDED';
               await manager.save(payment);
             }
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
           } else {
             reconciliationRequired = true;
             reconciliationOrderId = order.id;

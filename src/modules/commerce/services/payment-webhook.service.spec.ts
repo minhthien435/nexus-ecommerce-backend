@@ -7,6 +7,7 @@ import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import type { OrderExpiryJobPayload } from '../order-expiry.constants.js';
 import { PaymentWebhookService } from './payment-webhook.service.js';
 import { StripeClientService } from './stripe-client.service.js';
@@ -22,6 +23,7 @@ describe('PaymentWebhookService', () => {
       findOne: vi.fn(),
       save: vi.fn().mockImplementation((entity) => Promise.resolve(entity)),
       create: vi.fn().mockImplementation((_entityClass, dto) => dto),
+      delete: vi.fn().mockResolvedValue({ affected: 1 }),
     } as unknown as EntityManager;
 
     dataSource = {
@@ -140,6 +142,9 @@ describe('PaymentWebhookService', () => {
       expect(result).toEqual({ received: true });
       expect(orderRecord.status).toBe('PAID');
       expect(paymentRecord.status).toBe('SUCCEEDED');
+      expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
+        reservedOrderId: 'order-123',
+      });
 
       // Verify OrderStatusHistory was created
       expect(manager.create).toHaveBeenCalledWith(OrderStatusHistoryEntity, {
@@ -203,6 +208,80 @@ describe('PaymentWebhookService', () => {
       expect(result).toEqual({ received: true });
       expect(orderRecord.status).toBe('PAID');
       expect(paymentRecord.status).toBe('SUCCEEDED');
+    });
+
+    it('idempotently heals reserved cart rows when the order is already PAID', async () => {
+      const pi = {
+        id: 'pi_paid_retry',
+        amount: 550000,
+        amount_received: 550000,
+        currency: 'vnd',
+      } as Stripe.PaymentIntent;
+      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue({
+        id: 'evt_paid_retry',
+        type: 'payment_intent.succeeded',
+        data: { object: pi },
+      } as Stripe.Event);
+      const payment = {
+        id: 'payment-paid',
+        orderId: 'order-paid',
+        providerPaymentId: pi.id,
+        status: 'SUCCEEDED',
+      } as PaymentEntity;
+      vi.mocked(manager.findOne)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(payment)
+        .mockResolvedValueOnce({
+          id: 'order-paid',
+          status: 'PAID',
+          total: '550000.00',
+          currency: 'VND',
+        } as OrderEntity);
+
+      await service.handleWebhook(rawBody, signature);
+
+      expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
+        reservedOrderId: 'order-paid',
+      });
+    });
+
+    it('rolls back webhook processing when exact cart cleanup fails', async () => {
+      const pi = {
+        id: 'pi_cleanup_failure',
+        amount: 550000,
+        amount_received: 550000,
+        currency: 'vnd',
+      } as Stripe.PaymentIntent;
+      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue({
+        id: 'evt_cleanup_failure',
+        type: 'payment_intent.succeeded',
+        data: { object: pi },
+      } as Stripe.Event);
+      vi.mocked(manager.findOne)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'payment-cleanup',
+          orderId: 'order-cleanup',
+          providerPaymentId: pi.id,
+          status: 'PENDING',
+        } as PaymentEntity)
+        .mockResolvedValueOnce({
+          id: 'order-cleanup',
+          status: 'PENDING_PAYMENT',
+          total: '550000.00',
+          currency: 'VND',
+        } as OrderEntity);
+      vi.mocked(manager.delete).mockRejectedValueOnce(
+        new Error('cart cleanup failed'),
+      );
+
+      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
+        'cart cleanup failed',
+      );
+      expect(manager.create).not.toHaveBeenCalledWith(
+        PaymentCallbackEntity,
+        expect.anything(),
+      );
     });
 
     it('throws NotFoundException if payment record does not exist for provider_payment_id', async () => {
@@ -406,6 +485,7 @@ describe('PaymentWebhookService', () => {
       // 3. Payment record has explicit diagnostic failureReason for reconciliation
       expect(paymentRecord.failureReason).toContain('RECONCILIATION_REQUIRED');
       expect(paymentRecord.failureReason).toContain('pi_cancelled_order');
+      expect(manager.delete).not.toHaveBeenCalled();
 
       // 4. OrderStatusHistoryEntity audit entry is created without changing order status
       expect(manager.create).toHaveBeenCalledWith(OrderStatusHistoryEntity, {
@@ -471,6 +551,7 @@ describe('PaymentWebhookService', () => {
       // Neither Order, Payment, nor OrderStatusHistory are queried or modified
       expect(manager.save).not.toHaveBeenCalled();
       expect(manager.create).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
     });
 
     it('handles payment_intent.payment_failed: updates payment to FAILED with failureReason', async () => {
@@ -507,6 +588,7 @@ describe('PaymentWebhookService', () => {
       expect(result).toEqual({ received: true });
       expect(paymentRecord.status).toBe('FAILED');
       expect(paymentRecord.failureReason).toBe('Your card was declined.');
+      expect(manager.delete).not.toHaveBeenCalled();
     });
 
     it('does not overwrite payment status to FAILED if payment is already SUCCEEDED', async () => {

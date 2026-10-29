@@ -407,9 +407,20 @@ export class OrderService {
         const sellerCartItemIds = orderData.items.map(
           (item) => item.cartItemId,
         );
-        await manager.delete(CartItemEntity, {
-          id: In(sellerCartItemIds),
-        });
+        if (isCod) {
+          await manager.delete(CartItemEntity, {
+            id: In(sellerCartItemIds),
+          });
+        } else {
+          await manager.update(
+            CartItemEntity,
+            { id: In(sellerCartItemIds) },
+            {
+              reservedOrderId: savedOrder.id,
+              reservationExpiresAt: expiresAt,
+            },
+          );
+        }
         savedOrder.items = orderItems;
         createdOrders.push(savedOrder);
       }
@@ -635,6 +646,12 @@ export class OrderService {
           manager,
         );
       }
+      await manager
+        .getRepository(CartItemEntity)
+        .update(
+          { reservedOrderId: In(pending.map((order) => order.id)) },
+          { reservedOrderId: null, reservationExpiresAt: null },
+        );
       await manager
         .getRepository(CheckoutSessionEntity)
         .update({ id: chosen.checkoutSessionId }, { status: 'CANCELLED' });
