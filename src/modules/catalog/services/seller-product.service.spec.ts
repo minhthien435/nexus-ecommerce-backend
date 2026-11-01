@@ -23,6 +23,9 @@ describe('SellerProductService', () => {
       delete: vi.fn(),
       update: vi.fn(),
       softRemove: vi.fn(),
+      getRepository: vi.fn().mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(null),
+      }),
     };
     dataSource = {
       manager,
@@ -85,6 +88,54 @@ describe('SellerProductService', () => {
     expect(dataSource.transaction).toHaveBeenCalledOnce();
     expect(manager.save).toHaveBeenCalledTimes(3);
     expect(result.status).toBe(ProductStatus.DRAFT);
+  });
+
+  it('links newly created products to the seller shop when one exists', async () => {
+    manager.getRepository.mockReturnValue({
+      findOne: vi.fn().mockResolvedValue({ id: 'shop-1' }),
+    });
+    manager.findOne
+      .mockResolvedValueOnce({ id: 'category-1', level: 3, isActive: true })
+      .mockResolvedValueOnce({
+        id: 'product-1',
+        sellerId: 'seller-1',
+        shopId: 'shop-1',
+        slug: 'product',
+        status: ProductStatus.DRAFT,
+        images: [],
+        skus: [],
+      });
+    await service.create(
+      {
+        categoryId: 'category-1',
+        name: 'Product',
+        images: [
+          { url: 'https://example.com/a.jpg', sortOrder: 0, isPrimary: true },
+        ],
+        skus: [
+          {
+            attributes: { color: 'Black' },
+            price: 10,
+            weightGrams: 1,
+            lengthCm: 1,
+            widthCm: 1,
+            heightCm: 1,
+          },
+        ],
+      } as any,
+      'seller-1',
+    );
+    expect(manager.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sellerId: 'seller-1', shopId: 'shop-1' }),
+    );
+    expect(manager.getRepository().findOne).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        sellerId: 'seller-1',
+        status: 'ACTIVE',
+      }),
+      select: { id: true },
+    });
   });
 
   it('includes soft-deleted products when allocating a unique slug', async () => {

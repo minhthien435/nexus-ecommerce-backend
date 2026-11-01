@@ -21,6 +21,7 @@ import {
 } from '../dtos/seller-product.dto.js';
 import { CatalogCacheService } from './catalog-cache.service.js';
 import { ProductSkuService } from './product-sku.service.js';
+import { ShopEntity } from '../../identity/domain/shop.entity.js';
 
 @Injectable()
 export class SellerProductService {
@@ -74,8 +75,17 @@ export class SellerProductService {
     try {
       await this.dataSource.transaction(async (manager) => {
         await this.assertLeafCategory(manager, dto.categoryId);
+        const shop = await manager.getRepository(ShopEntity).findOne({
+          where: {
+            sellerId: actorId,
+            status: 'ACTIVE',
+            deletedAt: IsNull(),
+          },
+          select: { id: true },
+        });
         let product = manager.create(ProductEntity, {
           sellerId: actorId,
+          shopId: shop?.id ?? null,
           categoryId: dto.categoryId,
           name: dto.name.trim(),
           slug: await this.uniqueSlug(manager, dto.name),

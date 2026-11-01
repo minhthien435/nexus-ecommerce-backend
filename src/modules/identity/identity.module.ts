@@ -35,6 +35,9 @@ import { PasswordResetService } from './auth/services/password-reset.service.js'
 import { RecaptchaService } from './auth/services/recaptcha.service.js';
 import { GoogleIdTokenService } from './auth/services/google-id-token.service.js';
 import { EmailModule } from '../../common/email/email.module.js';
+import { ShopEntity } from './domain/shop.entity.js';
+import { SellerShopController } from './controllers/seller-shop.controller.js';
+import { SellerShopService } from './services/seller-shop.service.js';
 
 @Module({
   imports: [
@@ -50,6 +53,7 @@ import { EmailModule } from '../../common/email/email.module.js';
       RolePrivilegeEntity,
       AuditLogEntity,
       IdentityOutboxEntity,
+      ShopEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -66,6 +70,7 @@ import { EmailModule } from '../../common/email/email.module.js';
     AdminUserController,
     IdentityAdminUserController,
     AdminDashboardController,
+    SellerShopController,
   ],
   providers: [
     AuthService,
@@ -80,6 +85,7 @@ import { EmailModule } from '../../common/email/email.module.js';
     PermissionsGuard,
     AdminUserService,
     PasswordResetService,
+    SellerShopService,
     {
       provide: IdentityPublicApi,
       useClass: IdentityPublicApiService,
