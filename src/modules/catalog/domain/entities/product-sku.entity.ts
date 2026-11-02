@@ -19,6 +19,15 @@ const decimalTransformer = {
   },
 };
 
+const nullableDecimalTransformer = {
+  from(value: string | number | null): number | null {
+    return value === null ? null : Number(value);
+  },
+  to(value: number | null): number | null {
+    return value;
+  },
+};
+
 @Entity({ name: 'product_skus', schema: 'catalog' })
 export class ProductSkuEntity {
   @PrimaryGeneratedColumn('uuid')
@@ -40,6 +49,16 @@ export class ProductSkuEntity {
     transformer: decimalTransformer,
   })
   price: number;
+
+  @Column({
+    name: 'original_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    nullable: true,
+    transformer: nullableDecimalTransformer,
+  })
+  originalPrice: number | null;
 
   @Column({ type: 'varchar', length: 3, default: 'VND' })
   currency: string;

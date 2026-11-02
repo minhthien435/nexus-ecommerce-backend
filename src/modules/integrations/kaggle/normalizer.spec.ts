@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAmazonRow, stableExternalId } from './normalizer.js';
 
 describe('Amazon dataset normalizer', () => {
-  it('normalizes a valid product to INR without importing review fields', () => {
+  it('normalizes a valid product to VND without importing review fields', () => {
     const result = normalizeAmazonRow(
       {
         product_id: ' A1 ',
@@ -22,7 +22,7 @@ describe('Amazon dataset normalizer', () => {
       externalId: 'A1',
       name: 'Demo Phone',
       categorySlug: 'electronics',
-      skus: [{ price: '999.50', currency: 'INR' }],
+      skus: [{ price: '999.50', currency: 'VND' }],
     });
     expect(result.product?.attributes).toEqual({});
   });

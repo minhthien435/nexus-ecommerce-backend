@@ -87,10 +87,9 @@ export class AuthService {
       const users = manager.getRepository(UserEntity);
       const user = await users
         .createQueryBuilder('user')
+        .withDeleted()
         .setLock('pessimistic_write')
         .where('user.email = :email', { email: dto.email })
-        .andWhere('user.deleted_at IS NULL')
-        .andWhere('user.status = :status', { status: 'ACTIVE' })
         .getOne();
       if (!user) return { unauthorized: true as const };
 
@@ -124,6 +123,37 @@ export class AuthService {
         }
         await users.save(user);
         return { unauthorized: true as const };
+      }
+
+      if (user.deletedAt) {
+        throw new ForbiddenException({
+          errorCode: 'ACCOUNT_DELETED',
+          message:
+            'Tài khoản này đã bị xóa hoặc không còn tồn tại trên hệ thống',
+        });
+      }
+
+      if (user.status === 'LOCKED') {
+        throw new ForbiddenException({
+          errorCode: 'ACCOUNT_LOCKED',
+          message:
+            'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+        });
+      }
+
+      if (user.status === 'SUSPENDED') {
+        throw new ForbiddenException({
+          errorCode: 'ACCOUNT_SUSPENDED',
+          message:
+            'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+        });
+      }
+
+      if (user.status !== 'ACTIVE') {
+        throw new ForbiddenException({
+          errorCode: 'ACCOUNT_INACTIVE',
+          message: 'Tài khoản không đủ điều kiện để đăng nhập',
+        });
       }
 
       user.failedLoginAttempts = 0;
@@ -172,8 +202,34 @@ export class AuthService {
         );
       }
       let user = bySubject ?? byEmail;
-      if (user && (user.deletedAt || user.status !== 'ACTIVE')) {
-        throw new ForbiddenException('Account is not eligible for login');
+      if (user) {
+        if (user.deletedAt) {
+          throw new ForbiddenException({
+            errorCode: 'ACCOUNT_DELETED',
+            message:
+              'Tài khoản này đã bị xóa hoặc không còn tồn tại trên hệ thống',
+          });
+        }
+        if (user.status === 'LOCKED') {
+          throw new ForbiddenException({
+            errorCode: 'ACCOUNT_LOCKED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          });
+        }
+        if (user.status === 'SUSPENDED') {
+          throw new ForbiddenException({
+            errorCode: 'ACCOUNT_SUSPENDED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          });
+        }
+        if (user.status !== 'ACTIVE') {
+          throw new ForbiddenException({
+            errorCode: 'ACCOUNT_INACTIVE',
+            message: 'Tài khoản không đủ điều kiện để đăng nhập',
+          });
+        }
       }
       if (user?.googleSub && user.googleSub !== identity.subject) {
         throw new ConflictException(

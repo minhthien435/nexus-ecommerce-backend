@@ -129,7 +129,7 @@ export function normalizeAmazonRow(
           externalId: `${externalId}:default`,
           attributes: { variant: 'default' },
           price: price!,
-          currency: 'INR',
+          currency: 'VND',
           weightGrams: 1,
           lengthCm: 1,
           widthCm: 1,

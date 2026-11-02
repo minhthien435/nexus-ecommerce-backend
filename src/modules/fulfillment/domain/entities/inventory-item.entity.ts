@@ -11,6 +11,15 @@ export class InventoryItemEntity {
   @Column('uuid', { name: 'warehouse_id' })
   warehouseId: string;
 
+  @Column('int', { name: 'total_qty' })
+  totalQuantity: number;
+
+  @Column('int', { name: 'reserved_qty' })
+  reservedQuantity: number;
+
+  @Column('int', { name: 'unavailable_qty' })
+  unavailableQuantity: number;
+
   @Column({
     type: 'int',
     name: 'available_qty',
@@ -19,4 +28,7 @@ export class InventoryItemEntity {
     update: false,
   })
   availableQuantity: number | null;
+
+  @Column('int', { default: 1 })
+  version: number;
 }

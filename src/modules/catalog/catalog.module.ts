@@ -8,6 +8,7 @@ import { AdminCategoryController } from './controllers/admin-category.controller
 import { CategoryController } from './controllers/category.controller.js';
 import { ProductController } from './controllers/product.controller.js';
 import { ProductSkuController } from './controllers/product-sku.controller.js';
+import { SellerProductController } from './controllers/seller-product.controller.js';
 import { CategoryEntity } from './domain/entities/category.entity.js';
 import { ProductEntity } from './domain/entities/product.entity.js';
 import { ProductImageEntity } from './domain/entities/product-image.entity.js';
@@ -21,7 +22,15 @@ import { CategoryService } from './services/category.service.js';
 import { ProductSearchService } from './services/product-search.service.js';
 import { ProductSkuService } from './services/product-sku.service.js';
 import { ProductImportService } from './services/product-import.service.js';
+import { SellerProductService } from './services/seller-product.service.js';
 import { ExternalReferenceEntity } from '../integrations/entities/external-reference.entity.js';
+import { PublicShopController } from './controllers/public-shop.controller.js';
+import { PublicShopService } from './services/public-shop.service.js';
+import { SellerBulkImportService } from './services/seller-bulk-import.service.js';
+import { ShopEntity } from '../identity/domain/shop.entity.js';
+import { AuctionEntity } from '../auction/entities/auction.entity.js';
+import { WarehouseEntity } from '../fulfillment/domain/entities/warehouse.entity.js';
+import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-item.entity.js';
 
 @Module({
   imports: [
@@ -31,6 +40,10 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
       ProductImageEntity,
       ProductSkuEntity,
       ExternalReferenceEntity,
+      ShopEntity,
+      AuctionEntity,
+      WarehouseEntity,
+      InventoryItemEntity,
     ]),
     IdentityModule,
     JwtModule,
@@ -40,6 +53,8 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
     AdminCategoryController,
     ProductController,
     ProductSkuController,
+    SellerProductController,
+    PublicShopController,
   ],
   providers: [
     CatalogCacheService,
@@ -47,6 +62,9 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
     ProductSearchService,
     ProductSkuService,
     ProductImportService,
+    SellerProductService,
+    PublicShopService,
+    SellerBulkImportService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,
@@ -59,6 +77,7 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
     ProductSearchService,
     ProductSkuService,
     ProductImportService,
+    SellerProductService,
     TypeOrmModule,
     CatalogCartApi,
   ],

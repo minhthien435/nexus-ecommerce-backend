@@ -1,14 +1,19 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { RefreshTokenEntity } from '../domain/refresh-token.entity.js';
 import { UserEntity } from '../domain/user.entity.js';
 import type { UserStatus } from '../domain/user-status.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
+import { RoleEntity } from '../rbac/entities/role.entity.js';
+import { AuditLogEntity } from '../domain/audit-log.entity.js';
+import { IdentityOutboxEntity } from '../domain/identity-outbox.entity.js';
 import { ListUsersQueryDto } from './dtos/list-users-query.dto.js';
 
 export type AdminUserView = {
@@ -71,14 +76,20 @@ export class AdminUserService {
     }
     if (query.role) {
       builder.andWhere(
-        `EXISTS (
-           SELECT 1
-             FROM identity.user_roles ur
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE ur.user_id = user.id
-              AND r.code = :role
-              AND r.deleted_at IS NULL
-         )`,
+        (qb) => {
+          const subQuery = qb
+            .subQuery()
+            .select('1')
+            .from(UserRoleEntity, 'ur')
+            .innerJoin(
+              RoleEntity,
+              'r',
+              'r.id = ur.roleId AND r.code = :role AND r.deletedAt IS NULL',
+            )
+            .where('ur.userId = user.id')
+            .getQuery();
+          return `EXISTS ${subQuery}`;
+        },
         { role: query.role },
       );
     }
@@ -126,7 +137,7 @@ export class AdminUserService {
       },
     });
     if (!user) throw new NotFoundException('User not found');
-    const roles = (await this.loadRoleMap([userId])).get(userId) ?? [];
+    const roles = (await this.loadRoleMap([user.id])).get(user.id) ?? [];
     return this.toView(user, roles);
   }
 
@@ -142,8 +153,9 @@ export class AdminUserService {
 
   async softDelete(actorId: string, userId: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
+      await this.lockAdminChanges(manager);
       const user = await this.lockUser(manager, userId);
-      await this.ensureNotLastAdmin(manager, userId);
+      await this.ensureNotLastAdmin(manager, userId, user.status);
       user.deletedAt = new Date();
       user.tokenVersion += 1;
       await manager.getRepository(UserEntity).save(user);
@@ -162,12 +174,20 @@ export class AdminUserService {
     await this.dataSource.transaction(async (manager) => {
       await this.lockUser(manager, userId);
       const role = await this.findActiveRole(manager, roleCode);
-      await manager.query(
-        `INSERT INTO identity.user_roles (user_id, role_id)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id, role_id) DO NOTHING`,
-        [userId, role.id],
-      );
+      if (
+        await manager
+          .getRepository(UserRoleEntity)
+          .exists({ where: { userId, roleId: role.id } })
+      )
+        return;
+      await manager
+        .getRepository(UserRoleEntity)
+        .createQueryBuilder()
+        .insert()
+        .into(UserRoleEntity)
+        .values({ userId, roleId: role.id })
+        .orIgnore()
+        .execute();
       await this.recordChange(manager, actorId, userId, 'USER_ROLE_ASSIGNED', {
         roleCode: role.code,
       });
@@ -180,10 +200,18 @@ export class AdminUserService {
     userId: string,
     roleCode: string,
   ): Promise<void> {
+    if (
+      actorId.toLowerCase() === userId.toLowerCase() &&
+      roleCode === 'ADMIN'
+    ) {
+      throw new ConflictException('You cannot revoke your own ADMIN role');
+    }
     await this.dataSource.transaction(async (manager) => {
-      await this.lockUser(manager, userId);
+      await this.lockAdminChanges(manager);
+      const user = await this.lockUser(manager, userId);
       const role = await this.findActiveRole(manager, roleCode);
-      if (role.code === 'ADMIN') await this.ensureNotLastAdmin(manager, userId);
+      if (role.code === 'ADMIN')
+        await this.ensureNotLastAdmin(manager, userId, user.status);
       const result = await manager
         .getRepository(UserRoleEntity)
         .delete({ userId, roleId: role.id });
@@ -195,23 +223,135 @@ export class AdminUserService {
     });
   }
 
+  async setStatus(
+    actorId: string,
+    userId: string,
+    status: 'ACTIVE' | 'LOCKED',
+    reason?: string,
+  ): Promise<AdminUserView> {
+    if (actorId.toLowerCase() === userId.toLowerCase() && status === 'LOCKED') {
+      throw new ConflictException('You cannot lock your own account');
+    }
+    await this.changeStatus(actorId, userId, status, reason);
+    return this.getById(userId);
+  }
+
+  async changeRoles(
+    actorId: string,
+    userId: string,
+    assign: string[] = [],
+    revoke: string[] = [],
+  ): Promise<AdminUserView> {
+    if (
+      assign.length + revoke.length === 0 ||
+      new Set([...assign, ...revoke]).size !== assign.length + revoke.length
+    ) {
+      throw new BadRequestException(
+        'Role changes must be nonempty, unique and disjoint',
+      );
+    }
+    if (
+      actorId.toLowerCase() === userId.toLowerCase() &&
+      revoke.includes('ADMIN')
+    ) {
+      throw new ConflictException('You cannot revoke your own ADMIN role');
+    }
+    await this.dataSource.transaction(async (manager) => {
+      await this.lockAdminChanges(manager);
+      const user = await this.lockUser(manager, userId);
+      const memberships = manager.getRepository(UserRoleEntity);
+      for (const code of assign) {
+        const role = await this.findActiveRole(manager, code);
+        if (await memberships.exists({ where: { userId, roleId: role.id } }))
+          continue;
+        await memberships
+          .createQueryBuilder()
+          .insert()
+          .into(UserRoleEntity)
+          .values({ userId, roleId: role.id })
+          .orIgnore()
+          .execute();
+        await this.recordChange(
+          manager,
+          actorId,
+          userId,
+          'USER_ROLE_ASSIGNED',
+          { roleCode: code },
+        );
+      }
+      for (const code of revoke) {
+        const role = await this.findActiveRole(manager, code);
+        if (code === 'ADMIN')
+          await this.ensureNotLastAdmin(manager, userId, user.status);
+        const result = await memberships.delete({ userId, roleId: role.id });
+        if (result.affected !== 1)
+          throw new NotFoundException('User role not found');
+        await this.recordChange(manager, actorId, userId, 'USER_ROLE_REVOKED', {
+          roleCode: code,
+        });
+      }
+    });
+    return this.getById(userId);
+  }
+
+  async resetPassword(
+    actorId: string,
+    userId: string,
+    newPassword: string,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const user = await this.lockUser(manager, userId);
+      if (
+        user.passwordHash &&
+        (await argon2.verify(user.passwordHash, newPassword))
+      ) {
+        throw new BadRequestException(
+          'New password must be different from current password',
+        );
+      }
+      user.passwordHash = await argon2.hash(newPassword, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+      });
+      user.tokenVersion += 1;
+      await manager.getRepository(UserEntity).save(user);
+      await this.revokeSessions(manager, userId);
+      await this.recordChange(
+        manager,
+        actorId,
+        userId,
+        'USER_PASSWORD_CHANGED',
+        {},
+      );
+    });
+  }
+
   private async changeStatus(
     actorId: string,
     userId: string,
     nextStatus: 'ACTIVE' | 'LOCKED',
+    reason?: string,
   ): Promise<void> {
+    if (
+      actorId.toLowerCase() === userId.toLowerCase() &&
+      nextStatus === 'LOCKED'
+    ) {
+      throw new ConflictException('You cannot lock your own account');
+    }
     await this.dataSource.transaction(async (manager) => {
+      await this.lockAdminChanges(manager);
       const user = await this.lockUser(manager, userId);
       if (nextStatus === 'LOCKED') {
         if (user.status === 'SUSPENDED') {
           throw new ConflictException('Suspended users cannot be locked');
         }
-        await this.ensureNotLastAdmin(manager, userId);
+        await this.ensureNotLastAdmin(manager, userId, user.status);
       } else if (user.status === 'SUSPENDED') {
         throw new ConflictException('Suspended users cannot be unlocked');
       }
 
-      if (user.status === nextStatus) return;
+      if (user.status === nextStatus && user.lockedUntil === null) return;
       const previousStatus = user.status;
       user.status = nextStatus;
       user.failedLoginAttempts = 0;
@@ -224,9 +364,19 @@ export class AdminUserService {
         actorId,
         userId,
         nextStatus === 'LOCKED' ? 'USER_LOCKED' : 'USER_UNLOCKED',
-        { previousStatus, status: nextStatus },
+        {
+          previousStatus,
+          status: nextStatus,
+          ...(reason !== undefined ? { reason } : {}),
+        },
       );
     });
+  }
+
+  private async lockAdminChanges(manager: EntityManager): Promise<void> {
+    // All admin-removal paths acquire this transaction-scoped lock BEFORE user
+    // row locks, so concurrent removals cannot both observe two active admins.
+    await manager.query('SELECT pg_advisory_xact_lock(16420, 1)');
   }
 
   private async lockUser(
@@ -248,45 +398,45 @@ export class AdminUserService {
     manager: EntityManager,
     roleCode: string,
   ): Promise<{ id: string; code: string }> {
-    const roles = await manager.query<Array<{ id: string; code: string }>>(
-      `SELECT id, code
-         FROM identity.roles
-        WHERE code = $1 AND deleted_at IS NULL
-        LIMIT 1`,
-      [roleCode],
-    );
-    if (roles.length === 0) throw new NotFoundException('Role not found');
-    return roles[0];
+    const role = await manager.getRepository(RoleEntity).findOne({
+      where: { code: roleCode, deletedAt: IsNull() },
+      select: { id: true, code: true },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+    return { id: role.id, code: role.code };
   }
 
   private async ensureNotLastAdmin(
     manager: EntityManager,
     userId: string,
+    status: UserStatus,
   ): Promise<void> {
-    const rows = await manager.query<
-      Array<{ is_admin: boolean; active_admins: string }>
-    >(
-      `SELECT
-         EXISTS (
-           SELECT 1
-             FROM identity.user_roles ur
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE ur.user_id = $1 AND r.code = 'ADMIN' AND r.deleted_at IS NULL
-         ) AS is_admin,
-         (
-           SELECT COUNT(DISTINCT u.id)::text
-             FROM identity.users u
-             JOIN identity.user_roles ur ON ur.user_id = u.id
-             JOIN identity.roles r ON r.id = ur.role_id
-            WHERE r.code = 'ADMIN'
-              AND r.deleted_at IS NULL
-              AND u.deleted_at IS NULL
-              AND u.status = 'ACTIVE'
-         ) AS active_admins`,
-      [userId],
-    );
-    if (rows[0]?.is_admin && Number(rows[0].active_admins) <= 1) {
-      throw new ConflictException('The last active administrator is protected');
+    if (status !== 'ACTIVE') return;
+    const adminRole = await manager.getRepository(RoleEntity).findOne({
+      where: { code: 'ADMIN', deletedAt: IsNull() },
+      select: { id: true },
+    });
+    if (!adminRole) return;
+
+    const isUserAdmin = await manager.getRepository(UserRoleEntity).exists({
+      where: { userId, roleId: adminRole.id },
+    });
+
+    if (isUserAdmin) {
+      const activeAdminsCount = await manager
+        .getRepository(UserEntity)
+        .createQueryBuilder('u')
+        .innerJoin(UserRoleEntity, 'ur', 'ur.userId = u.id')
+        .where('ur.roleId = :roleId', { roleId: adminRole.id })
+        .andWhere('u.deletedAt IS NULL')
+        .andWhere('u.status = :status', { status: 'ACTIVE' })
+        .getCount();
+
+      if (activeAdminsCount <= 1) {
+        throw new ConflictException(
+          'The last active administrator is protected',
+        );
+      }
     }
   }
 
@@ -307,34 +457,41 @@ export class AdminUserService {
     changes: Record<string, unknown>,
   ): Promise<void> {
     const payload = { actorId, userId, action, changes };
-    await manager.query(
-      `INSERT INTO identity.audit_logs
-         (actor_id, action, entity_type, entity_id, changes)
-       VALUES ($1, $2, 'USER', $3, $4::jsonb)`,
-      [actorId, action, userId, JSON.stringify(changes)],
-    );
-    await manager.query(
-      `INSERT INTO identity.outbox_events
-         (event_type, aggregate_type, aggregate_id, payload)
-       VALUES ($1, 'USER', $2, $3::jsonb)`,
-      [action, userId, JSON.stringify(payload)],
-    );
+
+    const auditRepo = manager.getRepository(AuditLogEntity);
+    const auditRecord = auditRepo.create({
+      actorId,
+      action,
+      entityType: 'USER',
+      entityId: userId,
+      changes,
+    });
+    await auditRepo.save(auditRecord);
+
+    const outboxRepo = manager.getRepository(IdentityOutboxEntity);
+    const outboxRecord = outboxRepo.create({
+      eventType: action,
+      aggregateType: 'USER',
+      aggregateId: userId,
+      payload,
+    });
+    await outboxRepo.save(outboxRecord);
   }
 
   private async loadRoleMap(userIds: string[]): Promise<Map<string, string[]>> {
     const map = new Map<string, string[]>();
     if (userIds.length === 0) return map;
-    const rows = await this.dataSource.query<
-      Array<{ user_id: string; code: string }>
-    >(
-      `SELECT ur.user_id, r.code
-         FROM identity.user_roles ur
-         JOIN identity.roles r ON r.id = ur.role_id
-        WHERE ur.user_id = ANY($1::uuid[])
-          AND r.deleted_at IS NULL
-        ORDER BY r.code`,
-      [userIds],
-    );
+
+    const rows = await this.dataSource
+      .getRepository(UserRoleEntity)
+      .createQueryBuilder('ur')
+      .innerJoin(RoleEntity, 'r', 'r.id = ur.roleId AND r.deletedAt IS NULL')
+      .select('ur.userId', 'user_id')
+      .addSelect('r.code', 'code')
+      .where('ur.userId IN (:...userIds)', { userIds })
+      .orderBy('r.code', 'ASC')
+      .getRawMany<{ user_id: string; code: string }>();
+
     for (const row of rows) {
       map.set(row.user_id, [...(map.get(row.user_id) ?? []), row.code]);
     }

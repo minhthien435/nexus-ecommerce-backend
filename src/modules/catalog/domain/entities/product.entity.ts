@@ -11,6 +11,13 @@ import {
 } from 'typeorm';
 import { CategoryEntity } from './category.entity.js';
 import { ProductSkuEntity } from './product-sku.entity.js';
+import { ProductImageEntity } from './product-image.entity.js';
+
+export enum ProductStatus {
+  DRAFT = 'DRAFT',
+  ACTIVE = 'ACTIVE',
+  HIDDEN = 'HIDDEN',
+}
 
 @Entity({ name: 'products', schema: 'catalog' })
 export class ProductEntity {
@@ -19,6 +26,9 @@ export class ProductEntity {
 
   @Column({ name: 'seller_id', type: 'uuid' })
   sellerId: string;
+
+  @Column({ name: 'shop_id', type: 'uuid', nullable: true })
+  shopId: string | null;
 
   @Column({ name: 'category_id', type: 'uuid' })
   categoryId: string;
@@ -35,8 +45,8 @@ export class ProductEntity {
   @Column({ type: 'varchar', nullable: true })
   brand: string | null;
 
-  @Column({ type: 'varchar', default: 'DRAFT' })
-  status: string;
+  @Column({ type: 'varchar', default: ProductStatus.DRAFT })
+  status: ProductStatus;
 
   @Column({ name: 'is_auction_eligible', type: 'boolean', default: true })
   isAuctionEligible: boolean;
@@ -62,4 +72,7 @@ export class ProductEntity {
 
   @OneToMany(() => ProductSkuEntity, (sku) => sku.product)
   skus?: ProductSkuEntity[];
+
+  @OneToMany(() => ProductImageEntity, (image) => image.product)
+  images?: ProductImageEntity[];
 }

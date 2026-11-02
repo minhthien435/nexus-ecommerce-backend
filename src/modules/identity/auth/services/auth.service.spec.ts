@@ -36,6 +36,7 @@ describe('AuthService', () => {
 
     query = {
       setLock: vi.fn().mockReturnThis(),
+      withDeleted: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       andWhere: vi.fn().mockReturnThis(),
       getOne: vi.fn(),
@@ -146,6 +147,8 @@ describe('AuthService', () => {
         email: 'user@example.com',
         fullName: 'Active User',
         passwordHash: 'hash:CorrectPassword1!',
+        status: 'ACTIVE',
+        deletedAt: null,
         failedLoginAttempts: 3,
         lockedUntil: null,
       });
@@ -158,12 +161,9 @@ describe('AuthService', () => {
       );
 
       expect(query.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(query.withDeleted).toHaveBeenCalled();
       expect(query.where).toHaveBeenCalledWith('user.email = :email', {
         email: 'user@example.com',
-      });
-      expect(query.andWhere).toHaveBeenCalledWith('user.deleted_at IS NULL');
-      expect(query.andWhere).toHaveBeenCalledWith('user.status = :status', {
-        status: 'ACTIVE',
       });
       expect(users.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -190,7 +190,7 @@ describe('AuthService', () => {
       });
     });
 
-    it('throws UnauthorizedException when user is not found or inactive', async () => {
+    it('throws UnauthorizedException when user is not found', async () => {
       query.getOne.mockResolvedValue(null);
 
       await expect(
@@ -288,6 +288,112 @@ describe('AuthService', () => {
       const lockedTime = savedUser.lockedUntil.getTime();
       expect(lockedTime).toBeGreaterThanOrEqual(beforeTime + 14 * 60 * 1000);
       expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException on incorrect password even if account is LOCKED, SUSPENDED, or DELETED (prevent enumeration)', async () => {
+      const lockedUser = Object.assign(new UserEntity(), {
+        id: 'user-locked',
+        email: 'locked@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        status: 'LOCKED',
+        deletedAt: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(lockedUser);
+
+      await expect(
+        service.login(
+          { email: 'locked@example.com', password: 'WrongPassword!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        new UnauthorizedException('Email hoặc mật khẩu không chính xác'),
+      );
+    });
+
+    it('throws ForbiddenException with ACCOUNT_LOCKED when password is correct but status is LOCKED', async () => {
+      const lockedUser = Object.assign(new UserEntity(), {
+        id: 'user-locked',
+        email: 'locked@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        status: 'LOCKED',
+        deletedAt: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(lockedUser);
+
+      await expect(
+        service.login(
+          { email: 'locked@example.com', password: 'CorrectPassword1!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_LOCKED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          }),
+        }),
+      );
+    });
+
+    it('throws ForbiddenException with ACCOUNT_SUSPENDED when password is correct but status is SUSPENDED', async () => {
+      const suspendedUser = Object.assign(new UserEntity(), {
+        id: 'user-suspended',
+        email: 'suspended@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        status: 'SUSPENDED',
+        deletedAt: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(suspendedUser);
+
+      await expect(
+        service.login(
+          { email: 'suspended@example.com', password: 'CorrectPassword1!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_SUSPENDED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          }),
+        }),
+      );
+    });
+
+    it('throws ForbiddenException with ACCOUNT_DELETED when password is correct but account is soft-deleted', async () => {
+      const deletedUser = Object.assign(new UserEntity(), {
+        id: 'user-deleted',
+        email: 'deleted@example.com',
+        passwordHash: 'hash:CorrectPassword1!',
+        status: 'ACTIVE',
+        deletedAt: new Date(),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      query.getOne.mockResolvedValue(deletedUser);
+
+      await expect(
+        service.login(
+          { email: 'deleted@example.com', password: 'CorrectPassword1!' },
+          {},
+        ),
+      ).rejects.toThrow(
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_DELETED',
+            message:
+              'Tài khoản này đã bị xóa hoặc không còn tồn tại trên hệ thống',
+          }),
+        }),
+      );
     });
   });
 
@@ -392,7 +498,7 @@ describe('AuthService', () => {
       expect(tokenService.createRefreshToken).not.toHaveBeenCalled();
     });
 
-    it('rejects inactive accounts without issuing tokens', async () => {
+    it('rejects suspended accounts with ACCOUNT_SUSPENDED without issuing tokens', async () => {
       const inactive = Object.assign(new UserEntity(), {
         id: 'inactive',
         email: identity.email,
@@ -405,12 +511,40 @@ describe('AuthService', () => {
         .mockResolvedValueOnce(inactive);
 
       await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
-        ForbiddenException,
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_SUSPENDED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          }),
+        }),
       );
       expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
     });
 
-    it('rejects deleted Google-linked accounts without issuing tokens', async () => {
+    it('rejects locked accounts with ACCOUNT_LOCKED without issuing tokens', async () => {
+      const locked = Object.assign(new UserEntity(), {
+        id: 'locked',
+        email: identity.email,
+        googleSub: identity.subject,
+        status: 'LOCKED',
+        deletedAt: null,
+      });
+      users.findOne.mockResolvedValueOnce(locked).mockResolvedValueOnce(locked);
+
+      await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_LOCKED',
+            message:
+              'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ bộ phận hỗ trợ',
+          }),
+        }),
+      );
+      expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects deleted Google-linked accounts with ACCOUNT_DELETED without issuing tokens', async () => {
       const deleted = Object.assign(new UserEntity(), {
         id: 'deleted',
         email: identity.email,
@@ -423,7 +557,13 @@ describe('AuthService', () => {
         .mockResolvedValueOnce(deleted);
 
       await expect(service.loginWithGoogle(identity, {})).rejects.toThrow(
-        ForbiddenException,
+        expect.objectContaining({
+          response: expect.objectContaining({
+            errorCode: 'ACCOUNT_DELETED',
+            message:
+              'Tài khoản này đã bị xóa hoặc không còn tồn tại trên hệ thống',
+          }),
+        }),
       );
       expect(tokenService.generateAccessToken).not.toHaveBeenCalled();
       expect(tokenService.createRefreshToken).not.toHaveBeenCalled();

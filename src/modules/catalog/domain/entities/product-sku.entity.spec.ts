@@ -1,9 +1,10 @@
 import 'reflect-metadata';
-import { DataSource } from 'typeorm';
+import { DataSource, ValueTransformer } from 'typeorm';
 import { describe, expect, it } from 'vitest';
 import { CategoryEntity } from './category.entity.js';
 import { ProductSkuEntity } from './product-sku.entity.js';
 import { ProductEntity } from './product.entity.js';
+import { ProductImageEntity } from './product-image.entity.js';
 
 class MetadataDataSource extends DataSource {
   buildEntityMetadatas() {
@@ -15,7 +16,12 @@ describe('ProductSkuEntity', () => {
   it('maps the existing catalog.product_skus table metadata', async () => {
     const dataSource = new MetadataDataSource({
       type: 'postgres',
-      entities: [CategoryEntity, ProductEntity, ProductSkuEntity],
+      entities: [
+        CategoryEntity,
+        ProductEntity,
+        ProductSkuEntity,
+        ProductImageEntity,
+      ],
     });
 
     await dataSource.buildEntityMetadatas();
@@ -50,6 +56,19 @@ describe('ProductSkuEntity', () => {
       scale: 2,
       isNullable: false,
     });
+    expect(metadata.findColumnWithPropertyName('originalPrice')).toMatchObject({
+      databaseName: 'original_price',
+      type: 'numeric',
+      precision: 18,
+      scale: 2,
+      isNullable: true,
+    });
+    const originalPriceTransformer = metadata.findColumnWithPropertyName(
+      'originalPrice',
+    )?.transformer as ValueTransformer;
+    expect(originalPriceTransformer.from(null)).toBeNull();
+    expect(originalPriceTransformer.from('149000.50')).toBe(149000.5);
+    expect(originalPriceTransformer.to(null)).toBeNull();
     expect(metadata.findColumnWithPropertyName('currency')).toMatchObject({
       type: 'varchar',
       length: '3',

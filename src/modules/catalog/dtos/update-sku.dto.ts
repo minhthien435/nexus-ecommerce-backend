@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsInt,
   IsNumber,
+  IsOptional,
   IsPositive,
   IsString,
   Matches,
@@ -14,6 +15,7 @@ function isEmptyUpdate(dto: UpdateSkuDto): boolean {
   return [
     dto.attributes,
     dto.price,
+    dto.originalPrice,
     dto.currency,
     dto.weightGrams,
     dto.lengthCm,
@@ -34,6 +36,11 @@ export class UpdateSkuDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   price?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  originalPrice?: number | null;
 
   @ValidateIf((_dto: UpdateSkuDto, value: unknown) => value !== undefined)
   @IsString()

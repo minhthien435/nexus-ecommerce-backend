@@ -19,6 +19,11 @@ export class CreateSkuDto {
   price: number;
 
   @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  originalPrice?: number;
+
+  @IsOptional()
   @IsString()
   @Matches(/^[A-Za-z]{3}$/, {
     message: 'Đơn vị tiền tệ phải gồm đúng 3 chữ cái',

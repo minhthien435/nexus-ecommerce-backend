@@ -196,6 +196,8 @@ describe('ProductSearchService', () => {
         {
           id: 'product-1',
           seller_id: 'seller-1',
+          shop_id: 'shop-1',
+          shop_slug: 'nexus-store',
           category_id: 'category-1',
           name: 'Phone',
           slug: 'phone',
@@ -219,6 +221,7 @@ describe('ProductSearchService', () => {
           sku_code: 'PHONE-BLACK',
           variant_attributes: { color: 'black' },
           price: '100.00',
+          original_price: '120.00',
           currency: 'VND',
           available_quantity: '3',
         },
@@ -230,7 +233,12 @@ describe('ProductSearchService', () => {
     expect(query.mock.calls[2][0]).toContain('HAVING SUM(i.available_qty) > 0');
     expect(detail.skus[0]).toMatchObject({
       skuCode: 'PHONE-BLACK',
+      originalPrice: '120.00',
       availableQuantity: 3,
+    });
+    expect(detail).toMatchObject({
+      shopId: 'shop-1',
+      shopSlug: 'nexus-store',
     });
     expect(detail.category).toEqual({
       id: 'category-1',
@@ -238,6 +246,7 @@ describe('ProductSearchService', () => {
       slug: 'electronics',
     });
     expect(query.mock.calls[0][0]).toContain('LEFT JOIN catalog.categories');
+    expect(query.mock.calls[0][0]).toContain('LEFT JOIN identity.shops');
   });
 
   it('returns 404 for a missing or inactive product slug', async () => {
@@ -245,5 +254,37 @@ describe('ProductSearchService', () => {
     await expect(service.getBySlug('missing')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('returns null shop fields for legacy products without an active shop', async () => {
+    query
+      .mockResolvedValueOnce([
+        {
+          id: 'legacy-product',
+          seller_id: 'seller-1',
+          shop_id: null,
+          shop_slug: null,
+          category_id: 'category-1',
+          name: 'Legacy product',
+          slug: 'legacy-product',
+          description: null,
+          brand: null,
+          is_auction_eligible: false,
+          attributes: null,
+          created_at: '2026-10-16T00:00:00Z',
+          updated_at: '2026-10-16T00:00:00Z',
+          cat_id: null,
+          cat_name: null,
+          cat_slug: null,
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const detail = await service.getBySlug('legacy-product');
+
+    expect(detail).toMatchObject({ shopId: null, shopSlug: null });
+    expect(query.mock.calls[0][0]).toContain("shop.status = 'ACTIVE'");
+    expect(query.mock.calls[0][0]).toContain('shop.deleted_at IS NULL');
   });
 });

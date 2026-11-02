@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { CategoryEntity } from '../domain/entities/category.entity.js';
 import { CatalogCartService } from './catalog-cart.service.js';
 import { ProductSkuEntity } from '../domain/entities/product-sku.entity.js';
+import { ProductImageEntity } from '../domain/entities/product-image.entity.js';
 import { ProductEntity } from '../domain/entities/product.entity.js';
 
 describe('CatalogCartService', () => {
@@ -81,7 +82,12 @@ describe('CatalogCartService', () => {
     }
     const source = new MetadataDataSource({
       type: 'postgres',
-      entities: [CategoryEntity, ProductEntity, ProductSkuEntity],
+      entities: [
+        CategoryEntity,
+        ProductEntity,
+        ProductSkuEntity,
+        ProductImageEntity,
+      ],
     });
     await source.buildEntityMetadatas();
     const rows = [

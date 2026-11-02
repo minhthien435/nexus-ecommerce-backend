@@ -66,6 +66,8 @@ export type ProductSearchPage = {
 export type ProductDetail = {
   id: string;
   sellerId: string;
+  shopId: string | null;
+  shopSlug: string | null;
   categoryId: string;
   name: string;
   slug: string;
@@ -87,6 +89,7 @@ export type ProductDetail = {
     skuCode: string;
     variantAttributes: Record<string, unknown> | null;
     price: string;
+    originalPrice: string | null;
     currency: string;
     availableQuantity: number;
   }>;
@@ -140,6 +143,8 @@ export class ProductSearchService {
       Array<{
         id: string;
         seller_id: string;
+        shop_id: string | null;
+        shop_slug: string | null;
         category_id: string;
         name: string;
         slug: string;
@@ -154,13 +159,16 @@ export class ProductSearchService {
         cat_slug: string | null;
       }>
     >(
-      `SELECT p.id, p.seller_id, p.category_id, p.name, p.slug,
+      `SELECT p.id, p.seller_id, shop.id AS shop_id, shop.slug AS shop_slug,
+              p.category_id, p.name, p.slug,
               p.description, p.brand, p.is_auction_eligible, p.attributes,
               p.created_at, p.updated_at,
               c.id AS cat_id, c.name AS cat_name, c.slug AS cat_slug
          FROM catalog.products p
          LEFT JOIN catalog.categories c
            ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
+         LEFT JOIN identity.shops shop
+           ON shop.id = p.shop_id AND shop.status = 'ACTIVE' AND shop.deleted_at IS NULL
         WHERE p.slug = $1
           AND p.status = 'ACTIVE'
           AND p.deleted_at IS NULL
@@ -191,11 +199,13 @@ export class ProductSearchService {
           sku_code: string;
           variant_attributes: Record<string, unknown> | null;
           price: string;
+          original_price: string | null;
           currency: string;
           available_quantity: string;
         }>
       >(
         `SELECT s.id, s.sku_code, s.variant_attributes, s.price::text,
+                s.original_price::text,
                 trim(s.currency) AS currency,
                 SUM(i.available_qty)::text AS available_quantity
            FROM catalog.product_skus s
@@ -212,6 +222,8 @@ export class ProductSearchService {
     const detail: ProductDetail = {
       id: product.id,
       sellerId: product.seller_id,
+      shopId: product.shop_id,
+      shopSlug: product.shop_slug,
       categoryId: product.category_id,
       name: product.name,
       slug: product.slug,
@@ -233,6 +245,7 @@ export class ProductSearchService {
         skuCode: sku.sku_code,
         variantAttributes: sku.variant_attributes,
         price: sku.price,
+        originalPrice: sku.original_price,
         currency: sku.currency,
         availableQuantity: Number(sku.available_quantity),
       })),

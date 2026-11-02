@@ -95,6 +95,9 @@ export class ProductSkuService {
   ): Promise<ProductSkuEntity> {
     const product = await this.getManagedProduct(productId, actorId);
     const attributes = this.normalizeAttributes(dto.attributes);
+    if (dto.originalPrice !== undefined && dto.originalPrice < dto.price) {
+      throw new BadRequestException('Giá gốc phải lớn hơn hoặc bằng giá bán');
+    }
     await this.assertAttributesUnique(productId, attributes);
 
     const baseCode = this.generateSkuCode(product.slug, attributes);
@@ -109,6 +112,7 @@ export class ProductSkuService {
       skuCode,
       attributes,
       price: dto.price,
+      originalPrice: dto.originalPrice ?? null,
       currency: (dto.currency ?? 'VND').trim().toUpperCase(),
       weightGrams: dto.weightGrams,
       lengthCm: dto.lengthCm,
@@ -164,6 +168,15 @@ export class ProductSkuService {
       sku.attributes = attributes;
     }
     if (dto.price !== undefined) sku.price = dto.price;
+    if (dto.originalPrice !== undefined) sku.originalPrice = dto.originalPrice;
+    const resultingPrice = dto.price ?? sku.price;
+    const resultingOriginalPrice = dto.originalPrice ?? sku.originalPrice;
+    if (
+      resultingOriginalPrice !== null &&
+      resultingOriginalPrice < resultingPrice
+    ) {
+      throw new BadRequestException('Giá gốc phải lớn hơn hoặc bằng giá bán');
+    }
     if (dto.currency !== undefined) {
       sku.currency = dto.currency.trim().toUpperCase();
     }
