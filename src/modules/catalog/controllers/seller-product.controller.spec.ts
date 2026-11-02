@@ -1,3 +1,5 @@
+import { RequestMethod } from '@nestjs/common';
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProductStatus } from '../domain/entities/product.entity.js';
 import { SellerProductController } from './seller-product.controller.js';
@@ -5,6 +7,7 @@ import { SellerProductController } from './seller-product.controller.js';
 describe('SellerProductController', () => {
   let controller: SellerProductController;
   let service: any;
+  let bulkImport: any;
 
   beforeEach(() => {
     service = {
@@ -15,7 +18,8 @@ describe('SellerProductController', () => {
       setStatus: vi.fn(),
       remove: vi.fn(),
     };
-    controller = new SellerProductController(service);
+    bulkImport = { template: vi.fn(), import: vi.fn() };
+    controller = new SellerProductController(service, bulkImport);
   });
 
   it('always passes the token-derived actor to seller operations', async () => {
@@ -39,5 +43,39 @@ describe('SellerProductController', () => {
   it('uses soft-delete service flow', async () => {
     await controller.remove('product-1', 'seller-1');
     expect(service.remove).toHaveBeenCalledWith('product-1', 'seller-1');
+  });
+
+  it('declares static GET bulk/template and POST bulk routes before :id handlers', () => {
+    expect(Reflect.getMetadata(PATH_METADATA, controller.template)).toBe(
+      'bulk/template',
+    );
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.template)).toBe(
+      RequestMethod.GET,
+    );
+    expect(Reflect.getMetadata(PATH_METADATA, controller.importCsv)).toBe(
+      'bulk',
+    );
+    expect(Reflect.getMetadata(METHOD_METADATA, controller.importCsv)).toBe(
+      RequestMethod.POST,
+    );
+  });
+
+  it('sets CSV download headers and delegates uploads with actor identity', async () => {
+    const buffer = Buffer.from('template');
+    bulkImport.template.mockReturnValue(buffer);
+    bulkImport.import.mockResolvedValue({ importedCount: 1, errors: [] });
+    const response = { setHeader: vi.fn() };
+    expect(controller.template(response as never)).toBe(buffer);
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'text/csv; charset=utf-8',
+    );
+    expect(response.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="product-import-template.csv"',
+    );
+    const file = { buffer: Buffer.from('csv') } as Express.Multer.File;
+    await controller.importCsv(file, 'seller-1');
+    expect(bulkImport.import).toHaveBeenCalledWith('seller-1', file.buffer);
   });
 });
