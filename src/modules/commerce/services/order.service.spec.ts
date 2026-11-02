@@ -45,7 +45,7 @@ function setup() {
     getOne: vi.fn().mockResolvedValue({
       id: 'session-1',
       status: 'INITIATED',
-      paymentMethod: 'STRIPE',
+      paymentMethod: 'PAYOS',
     }),
   };
 
@@ -311,7 +311,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     ]);
 
     const result = await s.service.checkout(userId, {
-      paymentMethod: 'STRIPE',
+      paymentMethod: 'PAYOS',
     });
 
     // Check checkout session totals:
@@ -332,7 +332,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     expect(orderSeller2!.total).toBe('600000.00');
     expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
 
-    // Stripe rows remain in the cart and are mapped to their exact seller order.
+    // PayOS rows remain in the cart and are mapped to their exact seller order.
     expect(s.manager.delete).not.toHaveBeenCalled();
     expect(s.manager.update).toHaveBeenCalledTimes(2);
     const cartReservations = s.manager.update.mock.calls.map((call) => ({
@@ -583,7 +583,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     );
     expect(candidatesQb.andWhere).toHaveBeenCalledWith(
       'checkoutSession.paymentMethod = :paymentMethod',
-      { paymentMethod: 'STRIPE' },
+      { paymentMethod: 'PAYOS' },
     );
     expect(candidatesQb.andWhere).toHaveBeenCalledWith(
       'order.status = :pendingStatus',
@@ -635,7 +635,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     });
   });
 
-  it('reconciles overdue Stripe orders before applying the buyer list status filter', async () => {
+  it('reconciles overdue PayOS orders before applying the buyer list status filter', async () => {
     const s = setup();
     const candidatesQb = candidateQueryBuilder(['order-1']);
     const listQb = {
@@ -874,8 +874,8 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
   it.each([
     ['COD', 'INITIATED'],
-    ['STRIPE', 'COMPLETED'],
-    ['STRIPE', 'CANCELLED'],
+    ['PAYOS', 'COMPLETED'],
+    ['PAYOS', 'CANCELLED'],
   ])(
     'rejects a %s session in %s before locking sibling orders',
     async (paymentMethod, status) => {

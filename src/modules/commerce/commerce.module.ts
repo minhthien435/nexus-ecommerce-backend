@@ -23,7 +23,7 @@ import { OrderService } from './services/order.service.js';
 import { OrderStateMachineService } from './services/order-state-machine.service.js';
 import { PaymentsService } from './services/payments.service.js';
 import { PaymentWebhookService } from './services/payment-webhook.service.js';
-import { StripeClientService } from './services/stripe-client.service.js';
+import { PayosClientService } from './services/payos-client.service.js';
 import { CartMergeApi } from './cart-merge.api.js';
 import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
 import { OrderExpirySchedulerApi } from './order-expiry-scheduler.api.js';
@@ -60,7 +60,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderStateMachineService,
     OrderExpiryOutboxService,
     OrderExpiryProcessor,
-    StripeClientService,
+    PayosClientService,
     PaymentsService,
     PaymentWebhookService,
     { provide: CartMergeApi, useExisting: CartWriteService },
@@ -81,7 +81,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderStateMachineService,
     PaymentsService,
     PaymentWebhookService,
-    StripeClientService,
+    PayosClientService,
   ],
 })
 export class CommerceModule {}

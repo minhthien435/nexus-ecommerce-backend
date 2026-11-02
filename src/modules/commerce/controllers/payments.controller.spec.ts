@@ -1,16 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RawBodyRequest } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Webhook } from '@payos/node';
 import { PaymentsController } from './payments.controller.js';
-import {
-  CreatePaymentIntentResult,
-  PaymentsService,
-} from '../services/payments.service.js';
+import { PaymentsService } from '../services/payments.service.js';
 import {
   PaymentWebhookService,
   WebhookProcessingResult,
 } from '../services/payment-webhook.service.js';
-import { CreatePaymentIntentDto } from '../dtos/create-payment-intent.dto.js';
+import {
+  CreatePayosPaymentLinkDto,
+  CreatePayosPaymentLinkResult,
+} from '../dtos/create-payos-payment-link.dto.js';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
@@ -19,57 +18,73 @@ describe('PaymentsController', () => {
 
   beforeEach(() => {
     paymentsService = {
-      createPaymentIntent: vi.fn(),
+      createPayosPaymentLink: vi.fn(),
     } as unknown as PaymentsService;
     paymentWebhookService = {
-      handleWebhook: vi.fn(),
+      handlePayosWebhook: vi.fn(),
     } as unknown as PaymentWebhookService;
     controller = new PaymentsController(paymentsService, paymentWebhookService);
   });
 
-  it('delegates createIntent to PaymentsService with authenticated userId and dto', async () => {
+  it('delegates createPayosLink to PaymentsService with authenticated userId and dto', async () => {
     const userId = 'user-uuid-1';
-    const dto: CreatePaymentIntentDto = {
+    const dto: CreatePayosPaymentLinkDto = {
       orderId: 'order-uuid-1',
     };
-    const expectedResult: CreatePaymentIntentResult = {
-      paymentId: 'payment-uuid-1',
+    const expectedResult: CreatePayosPaymentLinkResult = {
+      paymentId: 'payment-uuid-payos',
       orderId: 'order-uuid-1',
-      paymentIntentId: 'pi_123',
-      clientSecret: 'pi_123_secret',
-      amount: '550000.00',
+      orderCode: 123456789,
+      paymentLinkId: 'link_123',
+      checkoutUrl: 'https://pay.payos.vn/web/123',
+      qrCode: 'vietqr_string',
+      amount: 550000,
       currency: 'VND',
-      status: 'INITIATED',
+      status: 'PENDING',
     };
 
-    vi.mocked(paymentsService.createPaymentIntent).mockResolvedValue(
+    vi.mocked(paymentsService.createPayosPaymentLink).mockResolvedValue(
       expectedResult,
     );
 
-    const result = await controller.createIntent(userId, dto);
+    const result = await controller.createPayosLink(userId, dto);
 
-    expect(paymentsService.createPaymentIntent).toHaveBeenCalledWith(
+    expect(paymentsService.createPayosPaymentLink).toHaveBeenCalledWith(
       userId,
       dto,
     );
     expect(result).toBe(expectedResult);
   });
 
-  it('delegates handleWebhook to PaymentWebhookService with rawBody and signature', async () => {
-    const rawBody = Buffer.from('{"id":"evt_123"}');
-    const signature = 't=123,v1=abc';
-    const mockReq = { rawBody } as RawBodyRequest<Request>;
+  it('delegates handlePayosWebhook to PaymentWebhookService with payload body', async () => {
+    const webhookBody: Webhook = {
+      code: '00',
+      desc: 'success',
+      success: true,
+      data: {
+        orderCode: 123456,
+        amount: 50000,
+        description: 'Don hang test',
+        accountNumber: '123456789',
+        reference: 'TF123',
+        transactionDateTime: '2026-11-02 08:00:00',
+        currency: 'VND',
+        paymentLinkId: 'link_123',
+        code: '00',
+        desc: 'success',
+      },
+      signature: 'valid_signature',
+    };
     const expectedResult: WebhookProcessingResult = { received: true };
 
-    vi.mocked(paymentWebhookService.handleWebhook).mockResolvedValue(
+    vi.mocked(paymentWebhookService.handlePayosWebhook).mockResolvedValue(
       expectedResult,
     );
 
-    const result = await controller.handleWebhook(mockReq, signature);
+    const result = await controller.handlePayosWebhook(webhookBody);
 
-    expect(paymentWebhookService.handleWebhook).toHaveBeenCalledWith(
-      rawBody,
-      signature,
+    expect(paymentWebhookService.handlePayosWebhook).toHaveBeenCalledWith(
+      webhookBody,
     );
     expect(result).toBe(expectedResult);
   });

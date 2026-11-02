@@ -139,7 +139,7 @@ describe('OrderStateMachineService', () => {
     },
   );
 
-  it('hides a missing or other-buyer order behind 404', async () => {
+  it('hides a missing or other-buyer order', async () => {
     const missing = setup(null);
     await expect(
       missing.service.transition(missing.manager as never, {
@@ -149,6 +149,7 @@ describe('OrderStateMachineService', () => {
         expectedBuyerId: buyerId,
       }),
     ).rejects.toMatchObject({ status: 404 });
+    expect(missing.orderRepository.save).not.toHaveBeenCalled();
 
     const other = setup(order());
     await expect(
@@ -156,7 +157,7 @@ describe('OrderStateMachineService', () => {
         orderId,
         toStatus: 'CANCELLED',
         actorId: buyerId,
-        expectedBuyerId: '44444444-4444-4444-8444-444444444444',
+        expectedBuyerId: 'other-buyer',
       }),
     ).rejects.toMatchObject({ status: 404 });
     expect(other.orderRepository.save).not.toHaveBeenCalled();

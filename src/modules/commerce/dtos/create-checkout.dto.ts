@@ -51,14 +51,10 @@ export class CreateCheckoutDto {
   shippingAddress?: CustomShippingAddressDto;
 
   @IsOptional()
-  @IsIn(['STRIPE', 'COD'])
-  paymentMethod?: 'STRIPE' | 'COD' = 'STRIPE';
+  @IsIn(['PAYOS', 'COD'])
+  paymentMethod?: 'PAYOS' | 'COD' = 'PAYOS';
 
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
-
-  @IsOptional()
-  @IsString()
-  buyerNote?: string;
 }

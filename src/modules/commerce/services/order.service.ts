@@ -325,7 +325,7 @@ export class OrderService {
         buyerId: userId.toLowerCase(),
         status: 'INITIATED',
         shippingAddress: shippingSnapshot,
-        paymentMethod: dto.paymentMethod || 'STRIPE',
+        paymentMethod: dto.paymentMethod || 'PAYOS',
         subtotal: centsToMoney(sessionSubtotalCents),
         shippingFee: centsToMoney(sessionShippingFeeCents),
         discountAmount: '0.00',
@@ -339,7 +339,7 @@ export class OrderService {
 
       // Tạo các Orders và OrderItems theo từng Seller
       const createdOrders: OrderEntity[] = [];
-      const isCod = (dto.paymentMethod ?? 'STRIPE') === 'COD';
+      const isCod = (dto.paymentMethod ?? 'PAYOS') === 'COD';
       const initialStatus = isCod ? 'PROCESSING' : 'PENDING_PAYMENT';
       const orderHoldExpiresAt = isCod ? null : expiresAt;
 
@@ -463,7 +463,7 @@ export class OrderService {
    */
   async getBuyerOrders(userId: string, query: QueryOrdersDto) {
     const buyerId = userId.toLowerCase();
-    await this.reconcileExpiredStripeOrders(buyerId);
+    await this.reconcileExpiredPayosOrders(buyerId);
 
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(100, Math.max(1, query.limit || 10));
@@ -506,7 +506,7 @@ export class OrderService {
    */
   async getOrderById(userId: string, orderId: string) {
     const buyerId = userId.toLowerCase();
-    await this.reconcileExpiredStripeOrders(buyerId, orderId);
+    await this.reconcileExpiredPayosOrders(buyerId, orderId);
 
     const order = await this.orderRepo.findOne({
       where: { id: orderId, buyerId },
@@ -533,7 +533,7 @@ export class OrderService {
     return { ...order, history };
   }
 
-  private async reconcileExpiredStripeOrders(
+  private async reconcileExpiredPayosOrders(
     buyerId: string,
     orderId?: string,
   ): Promise<void> {
@@ -548,7 +548,7 @@ export class OrderService {
       .andWhere('order.holdExpiresAt IS NOT NULL')
       .andWhere('order.holdExpiresAt <= clock_timestamp()')
       .andWhere('checkoutSession.paymentMethod = :paymentMethod', {
-        paymentMethod: 'STRIPE',
+        paymentMethod: 'PAYOS',
       });
 
     if (orderId) {
@@ -602,12 +602,12 @@ export class OrderService {
         .getOne();
       if (
         !session ||
-        session.paymentMethod !== 'STRIPE' ||
+        session.paymentMethod !== 'PAYOS' ||
         !['INITIATED', 'PROCESSING'].includes(session.status)
       ) {
         throw new ConflictException({
           errorCode: 'CHECKOUT_SESSION_NOT_CANCELLABLE',
-          message: 'Only an active Stripe checkout session can be cancelled',
+          message: 'Only an active PayOS checkout session can be cancelled',
         });
       }
       const siblings = await manager
