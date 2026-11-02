@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  ParseUUIDPipe,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUserId } from '../../../common/auth/current-user-id.decorator.js';
 import { AccessTokenGuard } from '../../identity/auth/guards/access-token.guard.js';
 import { Permissions } from '../../identity/rbac/decorators/permissions.decorator.js';
@@ -38,22 +28,9 @@ export class CartController {
     return this.writer.addItem(userId, input);
   }
 
-  @Patch('items/:skuId')
+  @Patch('items')
   @Permissions('CART.UPDATE')
-  update(
-    @CurrentUserId() userId: string,
-    @Param('skuId', new ParseUUIDPipe()) skuId: string,
-    @Body() input: UpdateCartItemDto,
-  ) {
-    return this.writer.updateItem(userId, skuId, input);
-  }
-
-  @Delete('items/:skuId')
-  @Permissions('CART.REMOVE_ITEM')
-  remove(
-    @CurrentUserId() userId: string,
-    @Param('skuId', new ParseUUIDPipe()) skuId: string,
-  ) {
-    return this.writer.updateItem(userId, skuId, { quantity: 0 });
+  update(@CurrentUserId() userId: string, @Body() input: UpdateCartItemDto) {
+    return this.writer.updateItem(userId, input.skuId, input);
   }
 }

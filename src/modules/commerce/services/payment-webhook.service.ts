@@ -14,6 +14,7 @@ import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import {
   ORDER_EXPIRY_QUEUE,
   type OrderExpiryJobPayload,
@@ -95,7 +96,6 @@ export class PaymentWebhookService {
         });
 
         if (!payment) {
-          // PayOS webhook validation ping during webhook registration (orderCode: 123 or VQRIO123)
           if (
             verifiedData.orderCode === 123 ||
             verifiedData.description?.includes('VQRIO123')
@@ -147,6 +147,9 @@ export class PaymentWebhookService {
             this.logger.log(
               `Order ${order.id} is already in PAID state. Acknowledging safely.`,
             );
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
             payment.status = 'SUCCEEDED';
             await manager.save(payment);
           } else if (
@@ -162,6 +165,10 @@ export class PaymentWebhookService {
             const previousStatus = order.status;
             order.status = 'PAID';
             await manager.save(order);
+
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
 
             const statusHistory = manager.create(OrderStatusHistoryEntity, {
               orderId: order.id,

@@ -161,6 +161,32 @@ describe('CartService read cart', () => {
     expect(rows).toEqual(before);
   });
 
+  it('retains a reserved row and exposes its exact order and deadline', async () => {
+    const s = setup();
+    const reservationExpiresAt = new Date('2026-10-17T12:15:00Z');
+    s.items.find.mockResolvedValue([
+      {
+        ...item('a'),
+        reservedOrderId: '33333333-3333-4333-8333-333333333333',
+        reservationExpiresAt,
+      },
+    ] as never);
+    s.catalog.getCartSkus.mockResolvedValue([sku('a')] as never);
+    s.inventory.getDefaultWarehouseStock.mockResolvedValue([
+      { skuId: 'a', availableQuantity: 1 },
+    ] as never);
+
+    const result = await s.service.getCart(userId);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      isReserved: true,
+      reservedOrderId: '33333333-3333-4333-8333-333333333333',
+      reservationExpiresAt,
+      includedInSubtotal: false,
+    });
+    expect(result.subtotal).toBe('0.00');
+  });
+
   it('keeps invalid lines visible and excludes out-of-stock, insufficient and discontinued lines', async () => {
     const s = setup();
     s.items.find.mockResolvedValue([

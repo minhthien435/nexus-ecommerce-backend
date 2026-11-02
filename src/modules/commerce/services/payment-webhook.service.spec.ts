@@ -6,6 +6,7 @@ import type { Webhook, WebhookData } from '@payos/node';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import type { OrderExpiryJobPayload } from '../order-expiry.constants.js';
 import { PaymentWebhookService } from './payment-webhook.service.js';
 import { PayosClientService } from './payos-client.service.js';
@@ -63,8 +64,8 @@ describe('PaymentWebhookService', () => {
       total: '550000.00',
       currency: 'VND',
       shippingAddressSnapshot: { city: 'HCM' },
-      holdExpiresAt: new Date(),
       idempotencyKey: null,
+      holdExpiresAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -89,6 +90,7 @@ describe('PaymentWebhookService', () => {
       findOne: vi.fn(),
       save: vi.fn().mockImplementation((entity) => Promise.resolve(entity)),
       create: vi.fn().mockImplementation((_entityClass, dto) => dto),
+      delete: vi.fn().mockResolvedValue({ affected: 1 }),
     } as unknown as EntityManager;
 
     dataSource = {
@@ -136,6 +138,7 @@ describe('PaymentWebhookService', () => {
 
     expect(result).toEqual({ received: true, duplicate: true });
     expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('transitions order to PAID and payment to SUCCEEDED upon successful payment webhook', async () => {
@@ -149,6 +152,9 @@ describe('PaymentWebhookService', () => {
     expect(result).toEqual({ received: true });
     expect(mockOrder.status).toBe('PAID');
     expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
+      reservedOrderId: orderId,
+    });
     expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'PAID' }),
     );
@@ -156,6 +162,19 @@ describe('PaymentWebhookService', () => {
       expect.objectContaining({ status: 'SUCCEEDED' }),
     );
     expect(expiryQueue.getJob).toHaveBeenCalledWith(`order-expiry-${orderId}`);
+  });
+
+  it('rolls back webhook processing when exact cart cleanup fails', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce(mockOrder);
+    const deleteFailure = new Error('cart cleanup failed');
+    vi.mocked(manager.delete).mockRejectedValueOnce(deleteFailure);
+
+    await expect(
+      service.handlePayosWebhook(mockWebhookPayload),
+    ).rejects.toThrow(deleteFailure);
   });
 
   it('throws BadRequestException on amount mismatch against authoritative DB order total', async () => {
@@ -171,6 +190,7 @@ describe('PaymentWebhookService', () => {
       service.handlePayosWebhook(mockWebhookPayload),
     ).rejects.toThrow(BadRequestException);
     expect(mockOrder.status).toBe('PENDING_PAYMENT');
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('handles PayOS test ping (orderCode 123) by returning 200 OK without failing', async () => {
@@ -194,6 +214,7 @@ describe('PaymentWebhookService', () => {
     const result = await service.handlePayosWebhook(testPingPayload);
 
     expect(result).toEqual({ received: true });
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('throws NotFoundException when payment record is not found for non-test orderCode', async () => {
@@ -204,6 +225,7 @@ describe('PaymentWebhookService', () => {
     await expect(
       service.handlePayosWebhook(mockWebhookPayload),
     ).rejects.toThrow(NotFoundException);
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('handles idempotent webhook for order already in PAID status safely', async () => {
@@ -219,6 +241,9 @@ describe('PaymentWebhookService', () => {
 
     expect(result).toEqual({ received: true });
     expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
+      reservedOrderId: orderId,
+    });
     expect(manager.save).toHaveBeenCalledWith(mockPayment);
   });
 
@@ -238,6 +263,7 @@ describe('PaymentWebhookService', () => {
     expect(mockPayment.failureReason).toContain(
       'arrived while order is in state CANCELLED',
     );
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('marks payment FAILED when PayOS webhook indicates failure code', async () => {
@@ -265,6 +291,7 @@ describe('PaymentWebhookService', () => {
     expect(result).toEqual({ received: true });
     expect(mockPayment.status).toBe('FAILED');
     expect(mockPayment.failureReason).toContain('User cancelled');
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('recovers safely from concurrent duplicate insert collision (23505 unique error)', async () => {

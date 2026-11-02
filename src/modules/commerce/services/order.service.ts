@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -80,7 +81,7 @@ export class OrderService {
     // 3. Lấy thông tin SKU & Sản phẩm mới nhất từ Catalog
     const skuIds = cartItems.map((item) => item.skuId);
     const catalogSkus = await this.catalogApi.getCartSkus(skuIds);
-    const skuMap = new Map(catalogSkus.map((s) => [s.id, s]));
+    let skuMap = new Map(catalogSkus.map((s) => [s.id, s]));
 
     // Kiểm tra tính khả dụng của từng mặt hàng
     for (const item of cartItems) {
@@ -155,7 +156,7 @@ export class OrderService {
     }
 
     // 5. Gom nhóm các món hàng theo từng Người bán (Seller)
-    const itemsBySeller = new Map<string, typeof cartItems>();
+    let itemsBySeller = new Map<string, typeof cartItems>();
     for (const item of cartItems) {
       const sku = skuMap.get(item.skuId)!;
       const sellerId = sku.sellerId;
@@ -171,6 +172,72 @@ export class OrderService {
 
     // 7. Thực thi Transaction tạo CheckoutSession, Orders và OrderItems
     const result = await this.dataSource.transaction(async (manager) => {
+      const itemQuery = manager
+        .getRepository(CartItemEntity)
+        .createQueryBuilder('item')
+        .setLock('pessimistic_write')
+        .where('item.cartId = :cartId', { cartId: cart.id })
+        .orderBy('item.createdAt', 'ASC')
+        .addOrderBy('item.id', 'ASC');
+      if (dto.selectedCartItemIds?.length) {
+        itemQuery.andWhere('item.id IN (:...selectedIds)', {
+          selectedIds: dto.selectedCartItemIds,
+        });
+      }
+      cartItems = await itemQuery.getMany();
+      if (
+        cartItems.length === 0 ||
+        (dto.selectedCartItemIds?.length &&
+          cartItems.length !== new Set(dto.selectedCartItemIds).size)
+      ) {
+        throw new BadRequestException(
+          'Giỏ hàng trống hoặc không có sản phẩm nào được chọn',
+        );
+      }
+      for (const item of cartItems) {
+        if (
+          item.reservedOrderId &&
+          item.reservationExpiresAt &&
+          item.reservationExpiresAt <= now
+        ) {
+          item.reservedOrderId = null;
+          item.reservationExpiresAt = null;
+          await manager.update(
+            CartItemEntity,
+            { id: item.id },
+            { reservedOrderId: null, reservationExpiresAt: null },
+          );
+        }
+      }
+      if (cartItems.some((item) => Boolean(item.reservedOrderId))) {
+        throw new ConflictException({
+          errorCode: 'CART_ITEM_RESERVED',
+          message: 'A selected cart item is reserved by an active checkout',
+        });
+      }
+      const lockedSkus = await this.catalogApi.getCartSkus(
+        cartItems.map((item) => item.skuId),
+        manager,
+      );
+      skuMap = new Map(lockedSkus.map((sku) => [sku.id, sku]));
+      itemsBySeller = new Map();
+      for (const item of cartItems) {
+        const sku = skuMap.get(item.skuId);
+        if (
+          !sku ||
+          !sku.isActive ||
+          sku.productStatus !== 'ACTIVE' ||
+          sku.productDeletedAt
+        ) {
+          throw new BadRequestException(
+            `Sản phẩm "${sku?.productName || item.productNameSnapshot || 'Không xác định'}" hiện không còn mở bán`,
+          );
+        }
+        const sellerItems = itemsBySeller.get(sku.sellerId) ?? [];
+        sellerItems.push(item);
+        itemsBySeller.set(sku.sellerId, sellerItems);
+      }
+
       const receipts = await this.inventoryReservation.reserve(
         cartItems.map((item) => ({
           skuId: item.skuId,
@@ -196,10 +263,12 @@ export class OrderService {
         shippingFeeCents: bigint;
         totalCents: bigint;
         items: Array<{
+          cartItemId: string;
           skuId: string;
           productId: string;
           productName: string;
           attributes: Record<string, unknown> | null;
+          imageUrl: string | null;
           unitPrice: string;
           quantity: number;
           lineTotalCents: bigint;
@@ -217,10 +286,12 @@ export class OrderService {
 
           sellerSubtotalCents += lineTotalCents;
           sellerItemsData.push({
+            cartItemId: item.id,
             skuId: sku.id,
             productId: sku.productId,
             productName: sku.productName,
             attributes: sku.variantAttributes,
+            imageUrl: sku.primaryImageUrl || null,
             unitPrice: sku.price,
             quantity: item.quantity,
             lineTotalCents,
@@ -268,6 +339,9 @@ export class OrderService {
 
       // Tạo các Orders và OrderItems theo từng Seller
       const createdOrders: OrderEntity[] = [];
+      const isCod = (dto.paymentMethod ?? 'PAYOS') === 'COD';
+      const initialStatus = isCod ? 'PROCESSING' : 'PENDING_PAYMENT';
+      const orderHoldExpiresAt = isCod ? null : expiresAt;
 
       for (const orderData of ordersToCreate) {
         const order = manager.create(OrderEntity, {
@@ -276,7 +350,7 @@ export class OrderService {
           buyerId: userId.toLowerCase(),
           sellerId: orderData.sellerId,
           source: 'CART',
-          status: 'PENDING_PAYMENT',
+          status: initialStatus,
           subtotal: centsToMoney(orderData.subtotalCents),
           shippingFee: centsToMoney(orderData.shippingFeeCents),
           discountAmount: '0.00',
@@ -284,13 +358,24 @@ export class OrderService {
           total: centsToMoney(orderData.totalCents),
           currency: 'VND',
           shippingAddressSnapshot: shippingSnapshot,
-          holdExpiresAt: expiresAt,
+          holdExpiresAt: orderHoldExpiresAt,
           idempotencyKey: dto.idempotencyKey
             ? `${dto.idempotencyKey}-${orderData.sellerId}`
             : null,
         });
         const savedOrder = await manager.save(order);
-        await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
+        if (!isCod) {
+          await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
+        }
+
+        const initialHistory = manager.create(OrderStatusHistoryEntity, {
+          orderId: savedOrder.id,
+          fromStatus: null,
+          toStatus: initialStatus,
+          reason: isCod ? 'ORDER_CREATED_COD' : 'ORDER_CREATED',
+          changedBy: userId.toLowerCase(),
+        });
+        await manager.save(initialHistory);
 
         // Tạo OrderItems
         const orderItems = orderData.items.map((itemData) => {
@@ -302,7 +387,7 @@ export class OrderService {
                 'Inventory reservation did not return every requested SKU',
             });
           }
-          return manager.create(OrderItemEntity, {
+          const orderItem = manager.create(OrderItemEntity, {
             orderId: savedOrder.id,
             productId: itemData.productId,
             skuId: itemData.skuId,
@@ -314,15 +399,31 @@ export class OrderService {
             discountAmount: '0.00',
             lineTotal: centsToMoney(itemData.lineTotalCents),
           });
+          orderItem.imageUrl = itemData.imageUrl;
+          orderItem.primaryImageUrl = itemData.imageUrl;
+          return orderItem;
         });
         await manager.save(orderItems);
+        const sellerCartItemIds = orderData.items.map(
+          (item) => item.cartItemId,
+        );
+        if (isCod) {
+          await manager.delete(CartItemEntity, {
+            id: In(sellerCartItemIds),
+          });
+        } else {
+          await manager.update(
+            CartItemEntity,
+            { id: In(sellerCartItemIds) },
+            {
+              reservedOrderId: savedOrder.id,
+              reservationExpiresAt: expiresAt,
+            },
+          );
+        }
         savedOrder.items = orderItems;
         createdOrders.push(savedOrder);
       }
-
-      // Xóa các mặt hàng đã checkout khỏi giỏ hàng
-      const checkedOutItemIds = cartItems.map((item) => item.id);
-      await manager.delete(CartItemEntity, { id: In(checkedOutItemIds) });
 
       return {
         checkoutSessionId: savedSession.id,
@@ -333,11 +434,18 @@ export class OrderService {
         currency: savedSession.currency,
         orders: createdOrders.map((o) => ({
           id: o.id,
+          orderCode: o.orderNumber,
           orderNumber: o.orderNumber,
           sellerId: o.sellerId,
           status: o.status,
           total: o.total,
-          itemsCount: o.items?.length || 0,
+          totalAmount: o.total,
+          paymentMethod: savedSession.paymentMethod,
+          itemsCount:
+            o.items?.reduce(
+              (sum, item) => sum + (Number(item.quantity) || 0),
+              0,
+            ) || 0,
           holdExpiresAt: o.holdExpiresAt,
           paymentDeadlineAt: o.holdExpiresAt, // Alias tương thích cho FE
         })),
@@ -354,6 +462,9 @@ export class OrderService {
    * Lấy danh sách đơn hàng của người mua (phân trang chuẩn Envelope)
    */
   async getBuyerOrders(userId: string, query: QueryOrdersDto) {
+    const buyerId = userId.toLowerCase();
+    await this.reconcileExpiredPayosOrders(buyerId);
+
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
@@ -361,7 +472,8 @@ export class OrderService {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.items', 'items')
-      .where('order.buyerId = :userId', { userId: userId.toLowerCase() });
+      .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
+      .where('order.buyerId = :userId', { userId: buyerId });
 
     if (query.status) {
       qb.andWhere('order.status = :status', { status: query.status });
@@ -370,7 +482,13 @@ export class OrderService {
     qb.orderBy('order.createdAt', 'DESC').skip(skip).take(limit);
 
     const [orders, totalItems] = await qb.getManyAndCount();
-    const totalPages = Math.ceil(totalItems / limit);
+    await this.enrichOrdersWithImages(orders);
+    for (const order of orders) {
+      if (order.checkoutSession) {
+        order.paymentMethod = order.checkoutSession.paymentMethod;
+      }
+    }
+    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
 
     return {
       data: orders,
@@ -387,8 +505,11 @@ export class OrderService {
    * Xem chi tiết một đơn hàng theo ID
    */
   async getOrderById(userId: string, orderId: string) {
+    const buyerId = userId.toLowerCase();
+    await this.reconcileExpiredPayosOrders(buyerId, orderId);
+
     const order = await this.orderRepo.findOne({
-      where: { id: orderId, buyerId: userId.toLowerCase() },
+      where: { id: orderId, buyerId },
       relations: {
         items: true,
         checkoutSession: true,
@@ -399,6 +520,11 @@ export class OrderService {
       throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
     }
 
+    await this.enrichOrdersWithImages([order]);
+    if (order.checkoutSession) {
+      order.paymentMethod = order.checkoutSession.paymentMethod;
+    }
+
     const history = await this.orderHistoryRepo.find({
       where: { orderId },
       order: { createdAt: 'ASC', id: 'ASC' },
@@ -407,32 +533,136 @@ export class OrderService {
     return { ...order, history };
   }
 
+  private async reconcileExpiredPayosOrders(
+    buyerId: string,
+    orderId?: string,
+  ): Promise<void> {
+    const candidatesQuery = this.orderRepo
+      .createQueryBuilder('order')
+      .innerJoin('order.checkoutSession', 'checkoutSession')
+      .select('order.id', 'orderId')
+      .where('order.buyerId = :buyerId', { buyerId })
+      .andWhere('order.status = :pendingStatus', {
+        pendingStatus: 'PENDING_PAYMENT',
+      })
+      .andWhere('order.holdExpiresAt IS NOT NULL')
+      .andWhere('order.holdExpiresAt <= clock_timestamp()')
+      .andWhere('checkoutSession.paymentMethod = :paymentMethod', {
+        paymentMethod: 'PAYOS',
+      });
+
+    if (orderId) {
+      candidatesQuery.andWhere('order.id = :orderId', { orderId });
+    }
+
+    const candidates = await candidatesQuery.getRawMany<{ orderId: string }>();
+    for (const candidate of candidates) {
+      await this.dataSource.transaction('READ COMMITTED', async (manager) => {
+        const transition = await this.orderStateMachine.expire(
+          candidate.orderId,
+          manager,
+        );
+        if (transition.outcome !== 'EXPIRED') return;
+
+        await this.inventoryReservation.release(
+          transition.inventoryReceipts,
+          manager,
+        );
+        await this.orderStateMachine.finalizeExpiry(candidate.orderId, manager);
+      });
+    }
+  }
+
   async cancelOrder(userId: string, orderId: string) {
     const buyerId = userId.toLowerCase();
 
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      await this.orderStateMachine.transition(manager, {
-        orderId,
-        toStatus: 'CANCELLED',
-        actorId: buyerId,
-        expectedBuyerId: buyerId,
-        reason: 'CANCELLED_BY_BUYER',
+      const chosen = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, buyerId },
       });
-
-      const items = await manager.getRepository(OrderItemEntity).find({
-        select: { skuId: true, quantity: true, warehouseId: true },
-        where: { orderId },
-        order: { id: 'ASC' },
-      });
-      await this.inventoryReservation.release(
-        orderInventoryReceipts(items),
-        manager,
+      if (!chosen) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message: 'Order was not found',
+        });
+      }
+      if (!chosen.checkoutSessionId) {
+        throw new ConflictException({
+          errorCode: 'ORDER_SESSION_NOT_CANCELLABLE',
+          message: 'Order does not belong to a checkout session',
+        });
+      }
+      const session = await manager
+        .getRepository(CheckoutSessionEntity)
+        .createQueryBuilder('session')
+        .setLock('pessimistic_write')
+        .where('session.id = :sessionId', {
+          sessionId: chosen.checkoutSessionId,
+        })
+        .getOne();
+      if (
+        !session ||
+        session.paymentMethod !== 'PAYOS' ||
+        !['INITIATED', 'PROCESSING'].includes(session.status)
+      ) {
+        throw new ConflictException({
+          errorCode: 'CHECKOUT_SESSION_NOT_CANCELLABLE',
+          message: 'Only an active PayOS checkout session can be cancelled',
+        });
+      }
+      const siblings = await manager
+        .getRepository(OrderEntity)
+        .createQueryBuilder('order')
+        .setLock('pessimistic_write')
+        .where('order.checkoutSessionId = :sessionId', {
+          sessionId: chosen.checkoutSessionId,
+        })
+        .orderBy('order.id', 'ASC')
+        .getMany();
+      const pending = siblings.filter(
+        (order) => order.status === 'PENDING_PAYMENT',
       );
+      if (pending.length === 0) {
+        throw new ConflictException({
+          errorCode: 'ORDER_TRANSITION_NOT_ALLOWED',
+          message: 'Checkout session has no pending orders to cancel',
+        });
+      }
+      for (const order of pending) {
+        await this.orderStateMachine.transition(manager, {
+          orderId: order.id,
+          toStatus: 'CANCELLED',
+          actorId: buyerId,
+          expectedBuyerId: buyerId,
+          reason: 'CHECKOUT_CANCELLED_BY_BUYER',
+        });
+        const items = await manager.getRepository(OrderItemEntity).find({
+          select: { skuId: true, quantity: true, warehouseId: true },
+          where: { orderId: order.id },
+          order: { id: 'ASC' },
+        });
+        await this.inventoryReservation.release(
+          orderInventoryReceipts(items),
+          manager,
+        );
+      }
+      await manager
+        .getRepository(CartItemEntity)
+        .update(
+          { reservedOrderId: In(pending.map((order) => order.id)) },
+          { reservedOrderId: null, reservationExpiresAt: null },
+        );
+      await manager
+        .getRepository(CheckoutSessionEntity)
+        .update({ id: chosen.checkoutSessionId }, { status: 'CANCELLED' });
 
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, buyerId },
         relations: { items: true, checkoutSession: true },
       });
+      if (order) {
+        await this.enrichOrdersWithImages([order]);
+      }
       const history = await manager
         .getRepository(OrderStatusHistoryEntity)
         .find({
@@ -442,5 +672,41 @@ export class OrderService {
 
       return { ...order!, history };
     });
+  }
+
+  /**
+   * Đính kèm ảnh sản phẩm cho các mặt hàng trong đơn hàng
+   */
+  private async enrichOrdersWithImages(orders: OrderEntity[]): Promise<void> {
+    const productIds = Array.from(
+      new Set(
+        orders
+          .flatMap((o) => o.items || [])
+          .map((i) => i.productId)
+          .filter(Boolean),
+      ),
+    );
+    if (productIds.length === 0) return;
+
+    if (typeof this.dataSource?.query === 'function') {
+      const rows: Array<{ productId: string; url: string }> =
+        await this.dataSource.query(
+          `SELECT DISTINCT ON (product_id) product_id as "productId", url
+           FROM catalog.product_images
+           WHERE product_id = ANY($1)
+           ORDER BY product_id, is_primary DESC, sort_order ASC, id ASC`,
+          [productIds],
+        );
+      const imageMap = new Map(rows.map((r) => [r.productId, r.url]));
+
+      for (const order of orders) {
+        if (!order.items) continue;
+        for (const item of order.items) {
+          const url = imageMap.get(item.productId) || null;
+          item.imageUrl = url;
+          item.primaryImageUrl = url;
+        }
+      }
+    }
   }
 }

@@ -34,6 +34,7 @@ export class OrderExpiryProcessor extends WorkerHost {
         const transition = await this.transition.expire(orderId, manager);
         if (transition.outcome === 'EXPIRED') {
           await this.inventory.release(transition.inventoryReceipts, manager);
+          await this.transition.finalizeExpiry(orderId, manager);
         }
         return transition;
       },
@@ -62,7 +63,7 @@ export class OrderExpiryProcessor extends WorkerHost {
   private invalidJob(): never {
     throw new BadRequestException({
       errorCode: 'INVALID_ORDER_EXPIRY_JOB',
-      message: 'Expiry jobs require the stable job name and a valid order UUID',
+      message: 'Invalid order expiry payload',
     });
   }
 }

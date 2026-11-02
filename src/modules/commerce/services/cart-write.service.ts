@@ -65,6 +65,7 @@ export class CartWriteService {
           })
         : null;
       const quantity = (existing?.quantity ?? 0) + input.quantity;
+      this.assertNotReserved(existing, observedTime);
       if (quantity > MAX_QUANTITY) {
         throw new BadRequestException({
           errorCode: 'CART_QUANTITY_OVERFLOW',
@@ -187,6 +188,7 @@ export class CartWriteService {
             })
           : null;
         const quantity = quantityAdded + BigInt(existing?.quantity ?? 0);
+        this.assertNotReserved(existing, observedTime);
         const sku = skus.get(skuId);
         const reason =
           quantity > BigInt(MAX_QUANTITY)
@@ -235,10 +237,18 @@ export class CartWriteService {
     });
   }
 
-  async updateItem(userId: string, skuId: string, input: UpdateCartItemDto) {
+  async updateItem(
+    userId: string,
+    skuIdOrInput: string | UpdateCartItemDto,
+    maybeInput?: UpdateCartItemDto | { quantity: number; skuId?: string },
+  ) {
+    const rawSkuId =
+      typeof skuIdOrInput === 'string' ? skuIdOrInput : skuIdOrInput?.skuId;
+    const input = typeof skuIdOrInput === 'string' ? maybeInput : skuIdOrInput;
     if (
       !isUUID(userId) ||
-      !isUUID(skuId) ||
+      !isUUID(rawSkuId) ||
+      !input ||
       !Number.isInteger(input.quantity) ||
       input.quantity < 0 ||
       input.quantity > MAX_QUANTITY
@@ -249,7 +259,7 @@ export class CartWriteService {
       });
     }
     userId = userId.toLowerCase();
-    skuId = skuId.toLowerCase();
+    const skuId = rawSkuId.toLowerCase();
     const quantity = input.quantity;
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const observedTime = await this.lockAccountAndObserveTime(
@@ -278,6 +288,7 @@ export class CartWriteService {
           message: 'The requested cart item was not found',
         });
       }
+      this.assertNotReserved(existing, observedTime);
       if (quantity === 0) {
         await items.delete(existing.id);
         return this.reader.projectCart(cart, manager);
@@ -322,6 +333,27 @@ export class CartWriteService {
       });
     }
     return configs[0].value;
+  }
+
+  private assertNotReserved(
+    item: CartItemEntity | null,
+    observedTime?: Date,
+  ): void {
+    if (item?.reservedOrderId) {
+      if (
+        item.reservationExpiresAt &&
+        observedTime &&
+        item.reservationExpiresAt <= observedTime
+      ) {
+        item.reservedOrderId = null;
+        item.reservationExpiresAt = null;
+        return;
+      }
+      throw new ConflictException({
+        errorCode: 'CART_ITEM_RESERVED',
+        message: 'The cart item is reserved by an active checkout',
+      });
+    }
   }
 
   private isAvailable(sku: CartSku, existing: CartItemEntity | null) {
