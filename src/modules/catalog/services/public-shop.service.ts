@@ -56,8 +56,6 @@ export class PublicShopService {
       trustLevel: this.trustLevel(Number(shop.reputationScore)),
       totalProducts: Number(counts?.productCount ?? 0),
       activeAuctionsCount: Number(counts?.liveAuctionCount ?? 0),
-      productCount: Number(counts?.productCount ?? 0),
-      liveAuctionCount: Number(counts?.liveAuctionCount ?? 0),
       createdAt: shop.createdAt,
     };
   }
@@ -97,7 +95,19 @@ export class PublicShopService {
     const common = `FROM catalog.products p
       JOIN catalog.categories c ON c.id = p.category_id
       JOIN LATERAL (
-        SELECT s.id AS sku_id, s.sku_code, s.price, s.original_price, trim(s.currency) AS currency
+        SELECT s.id AS sku_id, s.sku_code, s.price, s.original_price, trim(s.currency) AS currency,
+          COALESCE((
+            SELECT SUM(ii.available_qty)
+            FROM fulfillment.inventory_items ii
+            JOIN fulfillment.warehouses w ON w.id = ii.warehouse_id
+              AND w.is_default = true AND w.is_active = true
+              AND NOT EXISTS (
+                SELECT 1 FROM fulfillment.warehouses other
+                WHERE other.is_default = true AND other.is_active = true
+                  AND other.id <> w.id
+              )
+            WHERE ii.sku_id = s.id
+          ), 0)::int AS available_quantity
         FROM catalog.product_skus s WHERE s.product_id = p.id AND s.is_active = true
         ORDER BY s.price ASC, s.id ASC LIMIT 1
       ) price ON true
@@ -116,6 +126,7 @@ export class PublicShopService {
                 c.id AS "categoryId", c.name AS "categoryName", image.url AS "imageUrl",
                 price.sku_id AS "skuId", price.sku_code AS "skuCode", price.price,
                 price.original_price AS "originalPrice", price.currency,
+                price.available_quantity AS "availableQuantity",
                 sold.sold_count AS "soldCount" ${common}
          ORDER BY ${order} LIMIT $7 OFFSET $8`,
         [...params, query.limit, (query.page - 1) * query.limit],
@@ -131,6 +142,7 @@ export class PublicShopService {
         price: Number(row.price),
         originalPrice:
           row.originalPrice === null ? null : Number(row.originalPrice),
+        availableQuantity: Number(row.availableQuantity ?? 0),
         soldCount: Number(row.soldCount),
       })),
       meta: {
