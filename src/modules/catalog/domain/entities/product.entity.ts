@@ -27,6 +27,9 @@ export class ProductEntity {
   @Column({ name: 'seller_id', type: 'uuid' })
   sellerId: string;
 
+  @Column({ name: 'shop_id', type: 'uuid', nullable: true })
+  shopId: string | null;
+
   @Column({ name: 'category_id', type: 'uuid' })
   categoryId: string;
 
