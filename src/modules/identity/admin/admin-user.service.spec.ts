@@ -6,6 +6,7 @@ import { RoleEntity } from '../rbac/entities/role.entity.js';
 import { AuditLogEntity } from '../domain/audit-log.entity.js';
 import { IdentityOutboxEntity } from '../domain/identity-outbox.entity.js';
 import { AdminUserService } from './admin-user.service.js';
+import { DataSource } from 'typeorm';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const actorId = '22222222-2222-4222-8222-222222222222';
@@ -31,6 +32,30 @@ function user() {
 }
 
 describe('AdminUserService', () => {
+  it('generates quoted PostgreSQL identifiers for email search', async () => {
+    const source = new DataSource({ type: 'postgres', entities: [UserEntity] });
+    await (
+      source as unknown as { buildMetadatas(): Promise<void> }
+    ).buildMetadatas();
+    const builder = source.getRepository(UserEntity).createQueryBuilder('user');
+    vi.spyOn(builder, 'getManyAndCount').mockResolvedValue([[], 0]);
+    const service = new AdminUserService(
+      { createQueryBuilder: () => builder } as never,
+      source,
+    );
+
+    await service.list({
+      search: 'abc',
+      page: 1,
+      limit: 20,
+      sortBy: 'fullName',
+      sortOrder: 'ASC',
+    });
+
+    expect(builder.getSql()).toContain('"user"."email" ILIKE');
+    expect(builder.getParameters().search).toBe('%abc%');
+  });
+
   it('locks an account, invalidates sessions and returns a safe projection', async () => {
     const record = user();
     const save = vi.fn(async (value) => value);
