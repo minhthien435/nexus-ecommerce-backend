@@ -20,7 +20,7 @@ export class PaymentEntity {
   @Column('uuid', { name: 'order_id', nullable: true })
   orderId: string | null;
 
-  @Column('varchar', { length: 30, default: 'STRIPE' })
+  @Column('varchar', { length: 30, default: 'PAYOS' })
   provider: string;
 
   @Column('varchar', {

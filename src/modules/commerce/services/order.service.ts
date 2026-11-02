@@ -254,7 +254,7 @@ export class OrderService {
         buyerId: userId.toLowerCase(),
         status: 'INITIATED',
         shippingAddress: shippingSnapshot,
-        paymentMethod: dto.paymentMethod || 'STRIPE',
+        paymentMethod: dto.paymentMethod || 'PAYOS',
         subtotal: centsToMoney(sessionSubtotalCents),
         shippingFee: centsToMoney(sessionShippingFeeCents),
         discountAmount: '0.00',

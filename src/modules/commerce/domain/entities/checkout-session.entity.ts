@@ -26,7 +26,7 @@ export class CheckoutSessionEntity {
   @Column('jsonb', { name: 'shipping_address' })
   shippingAddress: Record<string, unknown>;
 
-  @Column('varchar', { name: 'payment_method', length: 50, default: 'STRIPE' })
+  @Column('varchar', { name: 'payment_method', length: 50, default: 'PAYOS' })
   paymentMethod: string;
 
   @Column('numeric', { precision: 18, scale: 2, default: '0.00' })

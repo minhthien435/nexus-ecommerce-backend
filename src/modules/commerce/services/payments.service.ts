@@ -3,27 +3,24 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import {
+  CreatePayosPaymentLinkDto,
+  CreatePayosPaymentLinkResult,
+} from '../dtos/create-payos-payment-link.dto.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
-import { CreatePaymentIntentDto } from '../dtos/create-payment-intent.dto.js';
-import { toStripeAmount } from '../utils/stripe-amount.util.js';
-import { StripeClientService } from './stripe-client.service.js';
-
-export interface CreatePaymentIntentResult {
-  paymentId: string;
-  orderId: string;
-  paymentIntentId: string;
-  clientSecret: string;
-  amount: string;
-  currency: string;
-  status: string;
-}
+import {
+  formatPayosDescription,
+  generatePayosOrderCode,
+} from '../utils/payos-order-code.util.js';
+import { PayosClientService } from './payos-client.service.js';
 
 @Injectable()
 export class PaymentsService {
@@ -34,13 +31,18 @@ export class PaymentsService {
     private readonly orderRepository: Repository<OrderEntity>,
     @InjectRepository(PaymentEntity)
     private readonly paymentRepository: Repository<PaymentEntity>,
-    private readonly stripeClientService: StripeClientService,
+    private readonly payosClientService: PayosClientService,
+    private readonly configService: ConfigService,
   ) {}
 
-  async createPaymentIntent(
+  async createPayosPaymentLink(
     buyerId: string,
-    dto: CreatePaymentIntentDto,
-  ): Promise<CreatePaymentIntentResult> {
+    dto: CreatePayosPaymentLinkDto,
+  ): Promise<CreatePayosPaymentLinkResult> {
+    if (!this.payosClientService) {
+      throw new ServiceUnavailableException('PayOS service is not available');
+    }
+
     // 1. Authoritative order retrieval
     const order = await this.orderRepository.findOne({
       where: { id: dto.orderId },
@@ -51,7 +53,7 @@ export class PaymentsService {
     }
 
     // 2. Ownership verification
-    if (order.buyerId !== buyerId) {
+    if (order.buyerId.toLowerCase() !== buyerId.toLowerCase()) {
       throw new ForbiddenException(
         'You do not have permission to pay for this order',
       );
@@ -67,14 +69,19 @@ export class PaymentsService {
       );
     }
 
-    // 4. Authoritative amount & currency validation
-    let stripeAmount: number;
-    try {
-      stripeAmount = toStripeAmount(order.total, order.currency);
-    } catch (amountError) {
-      throw new BadRequestException((amountError as Error).message);
+    // 4. Authoritative amount & currency validation directly from DB
+    const numericTotal = Number(order.total);
+    if (isNaN(numericTotal) || numericTotal <= 0) {
+      throw new BadRequestException('Order total must be greater than 0');
     }
-    const stripeCurrency = order.currency.toLowerCase().trim();
+    const payosAmount = Math.round(numericTotal);
+
+    const currency = order.currency?.toUpperCase().trim();
+    if (currency !== 'VND') {
+      throw new BadRequestException(
+        `PayOS only supports VND currency, but order has currency '${order.currency}'`,
+      );
+    }
 
     // 5. Client Idempotency Key check
     if (dto.idempotencyKey) {
@@ -99,30 +106,41 @@ export class PaymentsService {
             `Payment attempt with this idempotency key has already ${existingByKey.status.toLowerCase()}`,
           );
         }
-        if (existingByKey.providerPaymentId) {
-          const stripe = this.stripeClientService.getClient();
-          const existingPi = await stripe.paymentIntents.retrieve(
-            existingByKey.providerPaymentId,
-          );
-          if (existingPi.client_secret) {
-            return {
-              paymentId: existingByKey.id,
-              orderId: order.id,
-              paymentIntentId: existingPi.id,
-              clientSecret: existingPi.client_secret,
-              amount: order.total,
-              currency: order.currency,
-              status: existingByKey.status,
+
+        // Return existing payment link data if cached in failureReason
+        if (existingByKey.failureReason) {
+          try {
+            const cached = JSON.parse(existingByKey.failureReason) as {
+              orderCode: number;
+              paymentLinkId: string;
+              checkoutUrl: string;
+              qrCode: string;
             };
+            if (cached.checkoutUrl && cached.orderCode) {
+              return {
+                paymentId: existingByKey.id,
+                orderId: order.id,
+                orderCode: cached.orderCode,
+                paymentLinkId: cached.paymentLinkId,
+                checkoutUrl: cached.checkoutUrl,
+                qrCode: cached.qrCode,
+                amount: payosAmount,
+                currency: 'VND',
+                status: existingByKey.status,
+              };
+            }
+          } catch {
+            // Ignore parse error and proceed
           }
         }
       }
     }
 
-    // 6. Check for an existing non-terminal payment attempt on this order
+    // 6. Check for active PayOS payment attempt on this order
     const activePayment = await this.paymentRepository.findOne({
       where: {
         orderId: order.id,
+        provider: 'PAYOS',
         status: In(['INITIATED', 'PENDING']),
       },
       order: { createdAt: 'DESC' },
@@ -130,33 +148,31 @@ export class PaymentsService {
 
     if (
       activePayment?.providerPaymentId &&
-      activePayment.amount === order.total &&
-      activePayment.currency === order.currency
+      activePayment.failureReason &&
+      Math.round(Number(activePayment.amount)) === payosAmount
     ) {
       try {
-        const stripe = this.stripeClientService.getClient();
-        const existingPi = await stripe.paymentIntents.retrieve(
-          activePayment.providerPaymentId,
-        );
-        if (
-          existingPi.status !== 'canceled' &&
-          existingPi.status !== 'requires_capture' &&
-          existingPi.client_secret
-        ) {
+        const cached = JSON.parse(activePayment.failureReason) as {
+          orderCode: number;
+          paymentLinkId: string;
+          checkoutUrl: string;
+          qrCode: string;
+        };
+        if (cached.checkoutUrl && cached.orderCode) {
           return {
             paymentId: activePayment.id,
             orderId: order.id,
-            paymentIntentId: existingPi.id,
-            clientSecret: existingPi.client_secret,
-            amount: order.total,
-            currency: order.currency,
+            orderCode: cached.orderCode,
+            paymentLinkId: cached.paymentLinkId,
+            checkoutUrl: cached.checkoutUrl,
+            qrCode: cached.qrCode,
+            amount: payosAmount,
+            currency: 'VND',
             status: activePayment.status,
           };
         }
-      } catch (retrieveError) {
-        this.logger.warn(
-          `Could not retrieve active PaymentIntent ${activePayment.providerPaymentId}: ${(retrieveError as Error).message}. Proceeding with new creation.`,
-        );
+      } catch {
+        // Fall through to create a new link
       }
     }
 
@@ -166,83 +182,89 @@ export class PaymentsService {
     });
     const attemptNo = previousAttempts + 1;
 
-    // 8. Stripe PaymentIntent Creation with deterministic idempotency key
-    const stripe = this.stripeClientService.getClient();
-    const stripeIdempotencyKey =
-      dto.idempotencyKey ?? `nexus_order_${order.id}_attempt_${attemptNo}`;
+    // 8. Generate unique safe integer orderCode
+    const orderCode = generatePayosOrderCode();
 
-    const paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount: stripeAmount,
-        currency: stripeCurrency,
-        metadata: {
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          buyerId: order.buyerId,
-        },
-      },
-      {
-        idempotencyKey: stripeIdempotencyKey,
-      },
-    );
+    // 9. Prepare and invoke PayOS SDK
+    const description = formatPayosDescription(order.orderNumber);
+    const cancelUrl =
+      this.configService.get<string>('PAYOS_CANCEL_URL')?.trim() ||
+      'http://localhost:5173/checkout/payment-result';
+    const returnUrl =
+      this.configService.get<string>('PAYOS_RETURN_URL')?.trim() ||
+      'http://localhost:5173/checkout/payment-result';
 
-    if (!paymentIntent.client_secret) {
-      throw new InternalServerErrorException(
-        'Stripe failed to return client_secret for PaymentIntent',
+    let payosResponse;
+    try {
+      payosResponse = await this.payosClientService.createPaymentLink({
+        orderCode,
+        amount: payosAmount,
+        description,
+        cancelUrl,
+        returnUrl,
+      });
+    } catch (payosError) {
+      const errorMsg = (payosError as Error)?.message || 'PayOS API error';
+      this.logger.error(
+        `Failed to create PayOS payment link for order ${order.id}: ${errorMsg}`,
+      );
+      throw new ServiceUnavailableException(
+        `Failed to create PayOS payment link: ${errorMsg}`,
       );
     }
 
-    // 9. Persist payment record with race-condition / unique-constraint recovery
+    // 10. Persist payment record
     const payment = this.paymentRepository.create({
       orderId: order.id,
       checkoutSessionId: order.checkoutSessionId,
-      provider: 'STRIPE',
-      providerPaymentId: paymentIntent.id,
+      provider: 'PAYOS',
+      providerPaymentId: String(orderCode),
       amount: order.total,
-      currency: order.currency,
-      status: 'INITIATED',
+      currency: 'VND',
+      status: 'PENDING',
       attemptNo,
       idempotencyKey: dto.idempotencyKey ?? null,
+      failureReason: JSON.stringify({
+        orderCode,
+        paymentLinkId: payosResponse.paymentLinkId,
+        checkoutUrl: payosResponse.checkoutUrl,
+        qrCode: payosResponse.qrCode,
+      }),
     });
 
     try {
       await this.paymentRepository.save(payment);
     } catch (dbError) {
       const pgCode = (dbError as { code?: string })?.code;
-      // PostgreSQL 23505: unique_violation on provider_payment_id or idempotency_key
       if (pgCode === '23505') {
         this.logger.warn(
-          `Unique constraint violation (23505) detected on payment persistence for order ${order.id}. Recovering existing record.`,
+          `Unique constraint violation (23505) on PayOS payment persistence for order ${order.id}. Recovering record.`,
         );
         const recovered = await this.paymentRepository.findOne({
           where: [
-            { providerPaymentId: paymentIntent.id },
+            { providerPaymentId: String(orderCode) },
             ...(dto.idempotencyKey
               ? [{ idempotencyKey: dto.idempotencyKey }]
               : []),
           ],
         });
-
         if (recovered) {
-          if (recovered.orderId !== order.id) {
-            throw new ConflictException(
-              'Idempotency key has already been used for a different order',
-            );
-          }
           return {
             paymentId: recovered.id,
             orderId: order.id,
-            paymentIntentId: paymentIntent.id,
-            clientSecret: paymentIntent.client_secret,
-            amount: order.total,
-            currency: order.currency,
+            orderCode,
+            paymentLinkId: payosResponse.paymentLinkId,
+            checkoutUrl: payosResponse.checkoutUrl,
+            qrCode: payosResponse.qrCode,
+            amount: payosAmount,
+            currency: 'VND',
             status: recovered.status,
           };
         }
       }
 
       this.logger.error(
-        `PaymentIntent ${paymentIntent.id} created, but database save failed for order ${order.id}: ${(dbError as Error).message}`,
+        `PayOS paymentLink created (${orderCode}), but DB save failed: ${(dbError as Error).message}`,
         (dbError as Error).stack,
       );
       throw dbError;
@@ -251,10 +273,12 @@ export class PaymentsService {
     return {
       paymentId: payment.id,
       orderId: order.id,
-      paymentIntentId: paymentIntent.id,
-      clientSecret: paymentIntent.client_secret,
-      amount: order.total,
-      currency: order.currency,
+      orderCode,
+      paymentLinkId: payosResponse.paymentLinkId,
+      checkoutUrl: payosResponse.checkoutUrl,
+      qrCode: payosResponse.qrCode,
+      amount: payosAmount,
+      currency: 'VND',
       status: payment.status,
     };
   }

@@ -1,22 +1,19 @@
 import {
   Body,
   Controller,
-  Headers,
   HttpCode,
   HttpStatus,
   Post,
-  Req,
   UseGuards,
 } from '@nestjs/common';
-import type { RawBodyRequest } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Webhook } from '@payos/node';
 import { CurrentUserId } from '../../../common/auth/current-user-id.decorator.js';
 import { AccessTokenGuard } from '../../identity/auth/guards/access-token.guard.js';
-import { CreatePaymentIntentDto } from '../dtos/create-payment-intent.dto.js';
 import {
-  CreatePaymentIntentResult,
-  PaymentsService,
-} from '../services/payments.service.js';
+  CreatePayosPaymentLinkDto,
+  CreatePayosPaymentLinkResult,
+} from '../dtos/create-payos-payment-link.dto.js';
+import { PaymentsService } from '../services/payments.service.js';
 import {
   PaymentWebhookService,
   WebhookProcessingResult,
@@ -29,21 +26,18 @@ export class PaymentsController {
     private readonly paymentWebhookService: PaymentWebhookService,
   ) {}
 
-  @Post('stripe/create-intent')
+  @Post('payos/create-link')
   @UseGuards(AccessTokenGuard)
-  createIntent(
+  createPayosLink(
     @CurrentUserId() userId: string,
-    @Body() dto: CreatePaymentIntentDto,
-  ): Promise<CreatePaymentIntentResult> {
-    return this.paymentsService.createPaymentIntent(userId, dto);
+    @Body() dto: CreatePayosPaymentLinkDto,
+  ): Promise<CreatePayosPaymentLinkResult> {
+    return this.paymentsService.createPayosPaymentLink(userId, dto);
   }
 
-  @Post('stripe/webhook')
+  @Post('payos/webhook')
   @HttpCode(HttpStatus.OK)
-  handleWebhook(
-    @Req() req: RawBodyRequest<Request>,
-    @Headers('stripe-signature') signature: string,
-  ): Promise<WebhookProcessingResult> {
-    return this.paymentWebhookService.handleWebhook(req.rawBody, signature);
+  handlePayosWebhook(@Body() body: Webhook): Promise<WebhookProcessingResult> {
+    return this.paymentWebhookService.handlePayosWebhook(body);
   }
 }

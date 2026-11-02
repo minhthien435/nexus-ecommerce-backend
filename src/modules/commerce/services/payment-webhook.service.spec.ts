@@ -1,23 +1,90 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource, EntityManager } from 'typeorm';
-import type Stripe from 'stripe';
 import type { Queue } from 'bullmq';
+import type { Webhook, WebhookData } from '@payos/node';
 import { OrderEntity } from '../domain/entities/order.entity.js';
-import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import type { OrderExpiryJobPayload } from '../order-expiry.constants.js';
 import { PaymentWebhookService } from './payment-webhook.service.js';
-import { StripeClientService } from './stripe-client.service.js';
+import { PayosClientService } from './payos-client.service.js';
 
 describe('PaymentWebhookService', () => {
   let service: PaymentWebhookService;
   let dataSource: DataSource;
-  let stripeClientService: StripeClientService;
+  let payosClientService: PayosClientService;
+  let expiryQueue: Queue<OrderExpiryJobPayload>;
   let manager: EntityManager;
 
+  const orderId = '33333333-3333-4333-8333-333333333333';
+  const orderCode = 1793584893952001;
+
+  let mockWebhookData: WebhookData;
+  let mockWebhookPayload: Webhook;
+  let mockOrder: OrderEntity;
+  let mockPayment: PaymentEntity;
+
   beforeEach(() => {
+    mockWebhookData = {
+      orderCode,
+      amount: 550000,
+      description: 'Don hang NEXUS-20261102-0',
+      accountNumber: '123456789',
+      reference: 'TF_PAYOS_998877',
+      transactionDateTime: '2026-11-02 08:30:00',
+      currency: 'VND',
+      paymentLinkId: 'link_payos_123',
+      code: '00',
+      desc: 'success',
+    };
+
+    mockWebhookPayload = {
+      code: '00',
+      desc: 'success',
+      success: true,
+      data: mockWebhookData,
+      signature: 'mock_valid_signature_hash',
+    };
+
+    mockOrder = {
+      id: orderId,
+      orderNumber: 'NEXUS-20261102-001',
+      checkoutSessionId: '44444444-4444-4444-8444-444444444444',
+      buyerId: 'buyer-uuid',
+      sellerId: 'seller-uuid',
+      source: 'CART',
+      auctionId: null,
+      status: 'PENDING_PAYMENT',
+      subtotal: '500000.00',
+      discountAmount: '0.00',
+      shippingFee: '50000.00',
+      tax: '0.00',
+      total: '550000.00',
+      currency: 'VND',
+      shippingAddressSnapshot: { city: 'HCM' },
+      holdExpiresAt: new Date(),
+      idempotencyKey: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    mockPayment = {
+      id: 'pay-uuid-payos-1',
+      checkoutSessionId: '44444444-4444-4444-8444-444444444444',
+      orderId,
+      provider: 'PAYOS',
+      providerPaymentId: String(orderCode),
+      amount: '550000.00',
+      currency: 'VND',
+      status: 'PENDING',
+      attemptNo: 1,
+      failureReason: null,
+      idempotencyKey: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
     manager = {
       findOne: vi.fn(),
       save: vi.fn().mockImplementation((entity) => Promise.resolve(entity)),
@@ -28,915 +95,195 @@ describe('PaymentWebhookService', () => {
       transaction: vi.fn().mockImplementation((cb) => cb(manager)),
     } as unknown as DataSource;
 
-    stripeClientService = {
-      constructWebhookEvent: vi.fn(),
-    } as unknown as StripeClientService;
+    payosClientService = {
+      verifyWebhook: vi
+        .fn()
+        .mockImplementation(() => Promise.resolve(mockWebhookData)),
+    } as unknown as PayosClientService;
 
-    service = new PaymentWebhookService(dataSource, stripeClientService);
+    expiryQueue = {
+      getJob: vi.fn().mockResolvedValue({
+        remove: vi.fn().mockResolvedValue(undefined),
+      }),
+    } as unknown as Queue<OrderExpiryJobPayload>;
+
+    service = new PaymentWebhookService(
+      dataSource,
+      payosClientService,
+      expiryQueue,
+    );
   });
 
-  describe('handleWebhook', () => {
-    const rawBody = Buffer.from('{"id":"evt_test_123"}');
-    const signature = 't=123,v1=abc';
+  it('rejects with BadRequestException when PayOS signature is invalid', async () => {
+    vi.mocked(payosClientService.verifyWebhook).mockRejectedValue(
+      new Error('Data not integrity'),
+    );
 
-    it('rejects if signature verification fails in StripeClientService', async () => {
-      vi.mocked(stripeClientService.constructWebhookEvent).mockImplementation(
-        () => {
-          throw new BadRequestException('Invalid Stripe webhook signature');
-        },
-      );
+    await expect(
+      service.handlePayosWebhook(mockWebhookPayload),
+    ).rejects.toThrow(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
 
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(dataSource.transaction).not.toHaveBeenCalled();
-    });
+  it('acknowledges duplicate PayOS event safely without re-processing side-effects', async () => {
+    vi.mocked(manager.findOne).mockResolvedValueOnce({
+      id: 'existing_cb_id',
+      providerEventId: 'payos_TF_PAYOS_998877',
+      processedAt: new Date(),
+    } as PaymentCallbackEntity);
 
-    it('returns { received: true, duplicate: true } when event was already processed previously', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_dup_1',
-        type: 'payment_intent.succeeded',
-        created: 123456789,
-        data: { object: {} as Stripe.PaymentIntent },
-      } as Stripe.Event;
+    const result = await service.handlePayosWebhook(mockWebhookPayload);
 
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne).mockResolvedValueOnce({
-        id: 'callback-1',
-        providerEventId: 'evt_dup_1',
-        processedAt: new Date(),
-      } as PaymentCallbackEntity);
+    expect(result).toEqual({ received: true, duplicate: true });
+    expect(manager.save).not.toHaveBeenCalled();
+  });
 
-      const result = await service.handleWebhook(rawBody, signature);
+  it('transitions order to PAID and payment to SUCCEEDED upon successful payment webhook', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null) // no duplicate callback
+      .mockResolvedValueOnce(mockPayment) // payment found
+      .mockResolvedValueOnce(mockOrder); // order found
 
-      expect(result).toEqual({ received: true, duplicate: true });
-      expect(manager.save).not.toHaveBeenCalled();
-    });
+    const result = await service.handlePayosWebhook(mockWebhookPayload);
 
-    it('handles concurrent duplicate event via PostgreSQL 23505 error gracefully', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_concurrent_1',
-        type: 'payment_intent.succeeded',
-        created: 123456789,
-        data: { object: {} as Stripe.PaymentIntent },
-      } as Stripe.Event;
+    expect(result).toEqual({ received: true });
+    expect(mockOrder.status).toBe('PAID');
+    expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'PAID' }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'SUCCEEDED' }),
+    );
+    expect(expiryQueue.getJob).toHaveBeenCalledWith(`order-expiry-${orderId}`);
+  });
 
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(dataSource.transaction).mockRejectedValueOnce({
-        code: '23505',
-        constraint: 'payment_callbacks_provider_event_id_key',
-        message: 'duplicate key value violates unique constraint',
+  it('throws BadRequestException on amount mismatch against authoritative DB order total', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce({
+        ...mockOrder,
+        total: '990000.00', // DB expects 990,000 but webhook sent 550,000
       });
 
-      const result = await service.handleWebhook(rawBody, signature);
+    await expect(
+      service.handlePayosWebhook(mockWebhookPayload),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockOrder.status).toBe('PENDING_PAYMENT');
+  });
 
-      expect(result).toEqual({ received: true, duplicate: true });
-    });
+  it('handles PayOS test ping (orderCode 123) by returning 200 OK without failing', async () => {
+    const testPingPayload: Webhook = {
+      code: '00',
+      desc: 'success',
+      success: true,
+      data: {
+        ...mockWebhookData,
+        orderCode: 123,
+        description: 'VQRIO123 test ping',
+      },
+      signature: 'valid_ping_sig',
+    };
+    vi.mocked(payosClientService.verifyWebhook).mockResolvedValue(
+      testPingPayload.data,
+    );
+    vi.mocked(manager.findOne).mockResolvedValueOnce(null); // no duplicate
+    vi.mocked(manager.findOne).mockResolvedValueOnce(null); // no payment record for 123
 
-    it('processes payment_intent.succeeded: updates order to PAID, payment to SUCCEEDED, and writes history', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_test_123',
-        amount: 550000,
-        amount_received: 550000,
-        currency: 'vnd',
-        metadata: { orderId: 'order-123' },
-      };
-      const event: Stripe.Event = {
-        id: 'evt_pi_succeeded_1',
-        type: 'payment_intent.succeeded',
-        created: 123456789,
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
+    const result = await service.handlePayosWebhook(testPingPayload);
 
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
+    expect(result).toEqual({ received: true });
+  });
 
-      const paymentRecord = {
-        id: 'payment-uuid-1',
-        orderId: 'order-123',
-        providerPaymentId: 'pi_test_123',
-        status: 'PENDING',
-      } as PaymentEntity;
+  it('throws NotFoundException when payment record is not found for non-test orderCode', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null) // no duplicate
+      .mockResolvedValueOnce(null); // payment not found
 
-      const orderRecord = {
-        id: 'order-123',
-        status: 'PENDING_PAYMENT',
-        total: '550000.00',
-        currency: 'VND',
-      } as OrderEntity;
+    await expect(
+      service.handlePayosWebhook(mockWebhookPayload),
+    ).rejects.toThrow(NotFoundException);
+  });
 
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null) // existingCallback -> not found
-        .mockResolvedValueOnce(paymentRecord) // PaymentEntity
-        .mockResolvedValueOnce(orderRecord); // OrderEntity
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      expect(orderRecord.status).toBe('PAID');
-      expect(paymentRecord.status).toBe('SUCCEEDED');
-
-      // Verify OrderStatusHistory was created
-      expect(manager.create).toHaveBeenCalledWith(OrderStatusHistoryEntity, {
-        orderId: 'order-123',
-        fromStatus: 'PENDING_PAYMENT',
-        toStatus: 'PAID',
-        reason: 'Stripe payment succeeded (pi_test_123)',
-        changedBy: null,
+  it('handles idempotent webhook for order already in PAID status safely', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null) // no duplicate callback record
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce({
+        ...mockOrder,
+        status: 'PAID',
       });
 
-      // Verify PaymentCallback was created
-      expect(manager.create).toHaveBeenCalledWith(
-        PaymentCallbackEntity,
-        expect.objectContaining({
-          provider: 'STRIPE',
-          providerEventId: 'evt_pi_succeeded_1',
-        }),
-      );
-    });
+    const result = await service.handlePayosWebhook(mockWebhookPayload);
 
-    it('processes payment_intent.succeeded on USD currency with minor units conversion', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_test_usd',
-        amount: 2550,
-        amount_received: 2550,
-        currency: 'usd',
-        metadata: { orderId: 'order-usd' },
-      };
-      const event: Stripe.Event = {
-        id: 'evt_usd_1',
-        type: 'payment_intent.succeeded',
-        created: 123456789,
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
+    expect(result).toEqual({ received: true });
+    expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(manager.save).toHaveBeenCalledWith(mockPayment);
+  });
 
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-
-      const paymentRecord = {
-        id: 'payment-usd-1',
-        orderId: 'order-usd',
-        providerPaymentId: 'pi_test_usd',
-        status: 'PENDING',
-      } as PaymentEntity;
-
-      const orderRecord = {
-        id: 'order-usd',
-        status: 'PENDING_PAYMENT',
-        total: '25.50',
-        currency: 'USD',
-      } as OrderEntity;
-
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(paymentRecord)
-        .mockResolvedValueOnce(orderRecord);
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      expect(orderRecord.status).toBe('PAID');
-      expect(paymentRecord.status).toBe('SUCCEEDED');
-    });
-
-    it('throws NotFoundException if payment record does not exist for provider_payment_id', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_unknown',
-        amount: 550000,
-        currency: 'vnd',
-      };
-      const event: Stripe.Event = {
-        id: 'evt_not_found',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null) // callback
-        .mockResolvedValueOnce(null); // payment not found
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        NotFoundException,
-      );
-    });
-
-    it('throws NotFoundException if order does not exist for payment.orderId', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_order_not_found',
-        amount: 550000,
-        currency: 'vnd',
-      };
-      const event: Stripe.Event = {
-        id: 'evt_order_not_found',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null) // callback
-        .mockResolvedValueOnce({
-          id: 'pay-1',
-          orderId: 'ghost-order',
-          providerPaymentId: 'pi_order_not_found',
-        } as PaymentEntity) // payment
-        .mockResolvedValueOnce(null); // order not found
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        NotFoundException,
-      );
-    });
-
-    it('throws BadRequestException if metadata.orderId does not match order.id', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_mismatch_meta',
-        amount: 550000,
-        currency: 'vnd',
-        metadata: { orderId: 'different-order' },
-      };
-      const event: Stripe.Event = {
-        id: 'evt_meta_mismatch',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: 'pay-1',
-          orderId: 'order-actual',
-          providerPaymentId: 'pi_mismatch_meta',
-        } as PaymentEntity)
-        .mockResolvedValueOnce({
-          id: 'order-actual',
-          total: '550000.00',
-          currency: 'VND',
-        } as OrderEntity);
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        BadRequestException,
-      );
-    });
-
-    it('throws BadRequestException if received amount does not match expected order amount', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_wrong_amount',
-        amount: 100000, // expected 550000
-        currency: 'vnd',
-      };
-      const event: Stripe.Event = {
-        id: 'evt_wrong_amount',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: 'pay-1',
-          orderId: 'order-1',
-          providerPaymentId: 'pi_wrong_amount',
-        } as PaymentEntity)
-        .mockResolvedValueOnce({
-          id: 'order-1',
-          total: '550000.00',
-          currency: 'VND',
-        } as OrderEntity);
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        BadRequestException,
-      );
-    });
-
-    it('throws BadRequestException if received currency does not match order currency', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_wrong_curr',
-        amount: 550000,
-        currency: 'usd',
-      };
-      const event: Stripe.Event = {
-        id: 'evt_wrong_curr',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: 'pay-1',
-          orderId: 'order-1',
-          providerPaymentId: 'pi_wrong_curr',
-        } as PaymentEntity)
-        .mockResolvedValueOnce({
-          id: 'order-1',
-          total: '550000.00',
-          currency: 'VND',
-        } as OrderEntity);
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        BadRequestException,
-      );
-    });
-
-    it('handles successful payment for CANCELLED order safely: preserves CANCELLED, flags payment, writes history and callback with reconciliation required', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_cancelled_order',
-        amount: 550000,
-        currency: 'vnd',
-      };
-      const event: Stripe.Event = {
-        id: 'evt_cancelled_order_succ',
-        type: 'payment_intent.succeeded',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-
-      const paymentRecord = {
-        id: 'pay-cancelled',
-        orderId: 'order-cancelled',
-        providerPaymentId: 'pi_cancelled_order',
-        status: 'PENDING',
-        failureReason: null,
-      } as PaymentEntity;
-
-      const orderRecord = {
-        id: 'order-cancelled',
+  it('marks payment SUCCEEDED with reconciliation reason if order is in terminal CANCELLED state', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce({
+        ...mockOrder,
         status: 'CANCELLED',
-        total: '550000.00',
-        currency: 'VND',
-      } as OrderEntity;
-
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(paymentRecord)
-        .mockResolvedValueOnce(orderRecord);
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      // 1. Order status must NEVER be transitioned to PAID or resurrected
-      expect(orderRecord.status).toBe('CANCELLED');
-
-      // 2. Payment status is SUCCEEDED (funds collected at Stripe)
-      expect(paymentRecord.status).toBe('SUCCEEDED');
-
-      // 3. Payment record has explicit diagnostic failureReason for reconciliation
-      expect(paymentRecord.failureReason).toContain('RECONCILIATION_REQUIRED');
-      expect(paymentRecord.failureReason).toContain('pi_cancelled_order');
-
-      // 4. OrderStatusHistoryEntity audit entry is created without changing order status
-      expect(manager.create).toHaveBeenCalledWith(OrderStatusHistoryEntity, {
-        orderId: 'order-cancelled',
-        fromStatus: 'CANCELLED',
-        toStatus: 'CANCELLED',
-        reason: expect.stringContaining('RECONCILIATION_REQUIRED'),
-        changedBy: null,
       });
 
-      // 5. PaymentCallbackEntity maskedPayload records reconciliation required
-      expect(manager.create).toHaveBeenCalledWith(
-        PaymentCallbackEntity,
-        expect.objectContaining({
-          provider: 'STRIPE',
-          providerEventId: 'evt_cancelled_order_succ',
-          maskedPayload: expect.objectContaining({
-            reconciliationRequired: true,
-            orderId: 'order-cancelled',
-            orderStatus: 'CANCELLED',
-            reconciliationReason: expect.stringContaining(
-              'RECONCILIATION_REQUIRED',
-            ),
-          }),
-        }),
-      );
-    });
-
-    it('does not repeat reconciliation side effects or audit logs upon duplicate delivery for a cancelled order', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_cancelled_dup',
-        type: 'payment_intent.succeeded',
-        created: 123456789,
-        data: {
-          object: {
-            id: 'pi_cancelled_dup',
-            amount: 550000,
-            currency: 'vnd',
-          } as Stripe.PaymentIntent,
-        },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-
-      // Pre-existing callback in DB from prior delivery
-      vi.mocked(manager.findOne).mockResolvedValueOnce({
-        id: 'callback-existing-1',
-        provider: 'STRIPE',
-        providerEventId: 'evt_cancelled_dup',
-        processedAt: new Date(),
-        maskedPayload: {
-          reconciliationRequired: true,
-          orderId: 'order-cancelled',
-          orderStatus: 'CANCELLED',
-        },
-      } as PaymentCallbackEntity);
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true, duplicate: true });
-      // Neither Order, Payment, nor OrderStatusHistory are queried or modified
-      expect(manager.save).not.toHaveBeenCalled();
-      expect(manager.create).not.toHaveBeenCalled();
-    });
-
-    it('handles payment_intent.payment_failed: updates payment to FAILED with failureReason', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_failed_123',
-        last_payment_error: {
-          message: 'Your card was declined.',
-        } as Stripe.PaymentIntent.LastPaymentError,
-      };
-      const event: Stripe.Event = {
-        id: 'evt_failed_1',
-        type: 'payment_intent.payment_failed',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-
-      const paymentRecord = {
-        id: 'pay-fail',
-        orderId: 'order-fail',
-        providerPaymentId: 'pi_failed_123',
-        status: 'PENDING',
-        failureReason: null,
-      } as PaymentEntity;
-
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null) // callback
-        .mockResolvedValueOnce(paymentRecord); // payment
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      expect(paymentRecord.status).toBe('FAILED');
-      expect(paymentRecord.failureReason).toBe('Your card was declined.');
-    });
-
-    it('does not overwrite payment status to FAILED if payment is already SUCCEEDED', async () => {
-      const pi: Partial<Stripe.PaymentIntent> = {
-        id: 'pi_stale_fail',
-        last_payment_error: {
-          message: 'Network error',
-        } as Stripe.PaymentIntent.LastPaymentError,
-      };
-      const event: Stripe.Event = {
-        id: 'evt_stale_fail',
-        type: 'payment_intent.payment_failed',
-        data: { object: pi as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-
-      const paymentRecord = {
-        id: 'pay-succ',
-        orderId: 'order-succ',
-        providerPaymentId: 'pi_stale_fail',
-        status: 'SUCCEEDED',
-        failureReason: null,
-      } as PaymentEntity;
-
-      vi.mocked(manager.findOne)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(paymentRecord);
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      expect(paymentRecord.status).toBe('SUCCEEDED');
-      expect(paymentRecord.failureReason).toBeNull();
-    });
-
-    it('safely ignores unhandled Stripe event types (e.g. customer.created) and saves callback', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_customer_created',
-        type: 'customer.created' as any,
-        created: 123456789,
-        data: { object: { id: 'cus_123' } },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(manager.findOne).mockResolvedValueOnce(null);
-
-      const result = await service.handleWebhook(rawBody, signature);
-
-      expect(result).toEqual({ received: true });
-      expect(manager.create).toHaveBeenCalledWith(
-        PaymentCallbackEntity,
-        expect.objectContaining({
-          provider: 'STRIPE',
-          providerEventId: 'evt_customer_created',
-        }),
-      );
-    });
-
-    it('rethrows unexpected database errors so Stripe gets a 500 and retries', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_db_error',
-        type: 'payment_intent.succeeded',
-        data: { object: { id: 'pi_1' } as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(dataSource.transaction).mockRejectedValueOnce(
-        new Error('Database connection lost'),
-      );
-
-      await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
-        'Database connection lost',
-      );
-    });
-
-    it('does NOT treat non-callback 23505 errors as duplicate and rethrows them for retry', async () => {
-      const event: Stripe.Event = {
-        id: 'evt_other_conflict',
-        type: 'payment_intent.succeeded',
-        data: { object: { id: 'pi_1' } as Stripe.PaymentIntent },
-      } as Stripe.Event;
-
-      vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-        event,
-      );
-      vi.mocked(dataSource.transaction).mockRejectedValueOnce({
-        code: '23505',
-        constraint: 'orders_order_number_key',
-        message:
-          'duplicate key value violates unique constraint "orders_order_number_key"',
-      });
-
-      await expect(
-        service.handleWebhook(rawBody, signature),
-      ).rejects.toMatchObject({
-        code: '23505',
-        constraint: 'orders_order_number_key',
-      });
-    });
-
-    describe('Order expiry BullMQ job cancellation', () => {
-      let mockJob: { remove: ReturnType<typeof vi.fn> };
-      let mockQueue: Queue<OrderExpiryJobPayload>;
-      let serviceWithQueue: PaymentWebhookService;
-
-      beforeEach(() => {
-        mockJob = {
-          remove: vi.fn().mockResolvedValue(undefined),
-        };
-        mockQueue = {
-          getJob: vi.fn().mockResolvedValue(mockJob),
-        } as unknown as Queue<OrderExpiryJobPayload>;
-
-        serviceWithQueue = new PaymentWebhookService(
-          dataSource,
-          stripeClientService,
-          mockQueue,
-        );
-      });
-
-      it('cancels expiry job in BullMQ when payment_intent.succeeded transitions order to PAID', async () => {
-        const orderId = 'B569FEE0-D7E6-455E-A2E4-E583FFFEA22D';
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_expiry_test',
-          amount: 500000,
-          amount_received: 500000,
-          currency: 'vnd',
-          metadata: { orderId },
-        };
-        const event: Stripe.Event = {
-          id: 'evt_expiry_success',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        const paymentRecord = {
-          id: 'payment-1',
-          orderId,
-          providerPaymentId: 'pi_expiry_test',
-          status: 'PENDING',
-        } as PaymentEntity;
-
-        const orderRecord = {
-          id: orderId,
-          status: 'PENDING_PAYMENT',
-          total: '500000.00',
-          currency: 'VND',
-        } as OrderEntity;
-
-        vi.mocked(manager.findOne)
-          .mockResolvedValueOnce(null) // no existing callback
-          .mockResolvedValueOnce(paymentRecord)
-          .mockResolvedValueOnce(orderRecord);
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true });
-        expect(orderRecord.status).toBe('PAID');
-        expect(paymentRecord.status).toBe('SUCCEEDED');
-
-        // Check correct normalized job ID is retrieved and removed
-        expect(mockQueue.getJob).toHaveBeenCalledWith(
-          `order-expiry-${orderId.toLowerCase()}`,
-        );
-        expect(mockJob.remove).toHaveBeenCalledTimes(1);
-      });
-
-      it('does not cancel expiry job when webhook is duplicate', async () => {
-        const event: Stripe.Event = {
-          id: 'evt_dup_expiry',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: {} as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-        vi.mocked(manager.findOne).mockResolvedValueOnce({
-          id: 'callback-dup',
-          providerEventId: 'evt_dup_expiry',
-          processedAt: new Date(),
-        } as PaymentCallbackEntity);
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true, duplicate: true });
-        expect(mockQueue.getJob).not.toHaveBeenCalled();
-      });
-
-      it('does not cancel expiry job when concurrent duplicate 23505 occurs', async () => {
-        const event: Stripe.Event = {
-          id: 'evt_concurrent_expiry',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: {} as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-        vi.mocked(dataSource.transaction).mockRejectedValueOnce({
-          code: '23505',
-          constraint: 'payment_callbacks_provider_event_id_key',
-          message: 'duplicate key value violates unique constraint',
-        });
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true, duplicate: true });
-        expect(mockQueue.getJob).not.toHaveBeenCalled();
-      });
-
-      it('gracefully handles case when expiry job does not exist in queue', async () => {
-        const orderId = '00000000-0000-0000-0000-000000000001';
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_no_job',
-          amount: 100000,
-          amount_received: 100000,
-          currency: 'vnd',
-          metadata: { orderId },
-        };
-        const event: Stripe.Event = {
-          id: 'evt_no_job',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        vi.mocked(manager.findOne)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({
-            id: 'pay-1',
-            orderId,
-            providerPaymentId: 'pi_no_job',
-            status: 'PENDING',
-          } as PaymentEntity)
-          .mockResolvedValueOnce({
-            id: orderId,
-            status: 'PENDING_PAYMENT',
-            total: '100000.00',
-            currency: 'VND',
-          } as OrderEntity);
-
-        vi.mocked(mockQueue.getJob).mockResolvedValueOnce(undefined);
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true });
-        expect(mockQueue.getJob).toHaveBeenCalledWith(
-          `order-expiry-${orderId}`,
-        );
-        expect(mockJob.remove).not.toHaveBeenCalled();
-      });
-
-      it('does not crash webhook and preserves PAID state when job removal throws an error', async () => {
-        const orderId = '00000000-0000-0000-0000-000000000002';
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_locked_job',
-          amount: 200000,
-          amount_received: 200000,
-          currency: 'vnd',
-          metadata: { orderId },
-        };
-        const event: Stripe.Event = {
-          id: 'evt_locked_job',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        const orderRecord = {
-          id: orderId,
-          status: 'PENDING_PAYMENT',
-          total: '200000.00',
-          currency: 'VND',
-        } as OrderEntity;
-
-        vi.mocked(manager.findOne)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({
-            id: 'pay-2',
-            orderId,
-            providerPaymentId: 'pi_locked_job',
-            status: 'PENDING',
-          } as PaymentEntity)
-          .mockResolvedValueOnce(orderRecord);
-
-        mockJob.remove.mockRejectedValueOnce(
-          new Error(
-            'Job could not be removed because it is locked by another worker',
-          ),
-        );
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true });
-        expect(orderRecord.status).toBe('PAID');
-        expect(mockJob.remove).toHaveBeenCalledTimes(1);
-      });
-
-      it('does not cancel expiry job when payment fails (payment_intent.payment_failed)', async () => {
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_failed',
-          last_payment_error: {
-            message: 'Insufficient funds',
-          } as unknown as Stripe.PaymentIntent.LastPaymentError,
-        };
-        const event: Stripe.Event = {
-          id: 'evt_payment_failed',
-          type: 'payment_intent.payment_failed',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        const paymentRecord = {
-          id: 'pay-failed',
-          providerPaymentId: 'pi_failed',
-          status: 'PENDING',
-        } as PaymentEntity;
-
-        vi.mocked(manager.findOne)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce(paymentRecord);
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true });
-        expect(paymentRecord.status).toBe('FAILED');
-        expect(mockQueue.getJob).not.toHaveBeenCalled();
-      });
-
-      it('does not cancel expiry job and does not modify order when order is in terminal/ineligible status', async () => {
-        const orderId = '00000000-0000-0000-0000-000000000003';
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_terminal',
-          amount: 300000,
-          amount_received: 300000,
-          currency: 'vnd',
-          metadata: { orderId },
-        };
-        const event: Stripe.Event = {
-          id: 'evt_terminal',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        const orderRecord = {
-          id: orderId,
-          status: 'CANCELLED',
-          total: '300000.00',
-          currency: 'VND',
-        } as OrderEntity;
-
-        vi.mocked(manager.findOne)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({
-            id: 'pay-3',
-            orderId,
-            providerPaymentId: 'pi_terminal',
-            status: 'PENDING',
-          } as PaymentEntity)
-          .mockResolvedValueOnce(orderRecord);
-
-        const result = await serviceWithQueue.handleWebhook(rawBody, signature);
-
-        expect(result).toEqual({ received: true });
-        expect(orderRecord.status).toBe('CANCELLED');
-        expect(mockQueue.getJob).not.toHaveBeenCalled();
-      });
-
-      it('does not cancel expiry job when database transaction fails and rolls back', async () => {
-        const orderId = '00000000-0000-0000-0000-000000000004';
-        const pi: Partial<Stripe.PaymentIntent> = {
-          id: 'pi_rollback',
-          amount: 400000,
-          amount_received: 400000,
-          currency: 'vnd',
-          metadata: { orderId },
-        };
-        const event: Stripe.Event = {
-          id: 'evt_rollback',
-          type: 'payment_intent.succeeded',
-          created: 123456789,
-          data: { object: pi as Stripe.PaymentIntent },
-        } as Stripe.Event;
-
-        vi.mocked(stripeClientService.constructWebhookEvent).mockReturnValue(
-          event,
-        );
-
-        vi.mocked(dataSource.transaction).mockRejectedValueOnce(
-          new Error('DB transaction deadlock / failure'),
-        );
-
-        await expect(
-          serviceWithQueue.handleWebhook(rawBody, signature),
-        ).rejects.toThrow('DB transaction deadlock / failure');
-
-        expect(mockQueue.getJob).not.toHaveBeenCalled();
-      });
-    });
+    const result = await service.handlePayosWebhook(mockWebhookPayload);
+
+    expect(result).toEqual({ received: true });
+    expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(mockPayment.failureReason).toContain(
+      'arrived while order is in state CANCELLED',
+    );
+  });
+
+  it('marks payment FAILED when PayOS webhook indicates failure code', async () => {
+    const failedPayload: Webhook = {
+      code: '01',
+      desc: 'User cancelled',
+      success: false,
+      data: {
+        ...mockWebhookData,
+        code: '01',
+        desc: 'User cancelled',
+      },
+      signature: 'valid_sig',
+    };
+    vi.mocked(payosClientService.verifyWebhook).mockResolvedValue(
+      failedPayload.data,
+    );
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce(mockOrder);
+
+    const result = await service.handlePayosWebhook(failedPayload);
+
+    expect(result).toEqual({ received: true });
+    expect(mockPayment.status).toBe('FAILED');
+    expect(mockPayment.failureReason).toContain('User cancelled');
+  });
+
+  it('recovers safely from concurrent duplicate insert collision (23505 unique error)', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce(mockOrder);
+
+    const duplicateError = new Error('unique constraint violation') as Error & {
+      code?: string;
+      constraint?: string;
+    };
+    duplicateError.code = '23505';
+    duplicateError.constraint = 'payment_callbacks_provider_event_id_key';
+
+    vi.mocked(dataSource.transaction).mockRejectedValueOnce(duplicateError);
+
+    const result = await service.handlePayosWebhook(mockWebhookPayload);
+
+    expect(result).toEqual({ received: true, duplicate: true });
   });
 });

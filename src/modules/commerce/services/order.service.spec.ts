@@ -240,7 +240,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     ]);
 
     const result = await s.service.checkout(userId, {
-      paymentMethod: 'STRIPE',
+      paymentMethod: 'PAYOS',
     });
 
     // Check checkout session totals:
