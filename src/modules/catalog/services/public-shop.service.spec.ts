@@ -59,10 +59,56 @@ describe('PublicShopService', () => {
       activeAuctionsCount: 1,
       ratingAvg: 4.5,
     });
+    expect(result).not.toHaveProperty('productCount');
+    expect(result).not.toHaveProperty('liveAuctionCount');
     expect(dataSource.query.mock.calls[0][0]).not.toMatch(
       /phone|email|identity_number/,
     );
   });
+
+  it.each([
+    ['7', 7],
+    [null, 0],
+  ])(
+    'returns numeric available quantity for the storefront SKU (%s)',
+    async (availableQuantity, expected) => {
+      const dataSource = {
+        query: vi
+          .fn()
+          .mockResolvedValueOnce([shop()])
+          .mockResolvedValueOnce([
+            {
+              id: 'product-id',
+              price: '10.00',
+              originalPrice: null,
+              availableQuantity,
+              soldCount: '0',
+            },
+          ])
+          .mockResolvedValueOnce([{ total: 1 }]),
+      };
+
+      const result = await new PublicShopService(dataSource as never).products(
+        'shop',
+        {
+          sort: 'newest',
+          page: 1,
+          limit: 20,
+        },
+      );
+
+      expect(result.items[0]).toMatchObject({
+        id: 'product-id',
+        availableQuantity: expected,
+      });
+      const sql = dataSource.query.mock.calls[1][0] as string;
+      expect(sql).toContain('SUM(ii.available_qty)');
+      expect(sql).toContain('w.is_default = true');
+      expect(sql).toContain('w.is_active = true');
+      expect(sql).toContain('NOT EXISTS');
+      expect(sql).toContain('other.id <> w.id');
+    },
+  );
 
   it('rejects inverted price ranges before product reads', async () => {
     const dataSource = { query: vi.fn().mockResolvedValueOnce([shop()]) };
