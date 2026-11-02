@@ -18,8 +18,9 @@ import { RbacService } from '../src/modules/identity/rbac/rbac.service.js';
 const userId = '11111111-1111-4111-8111-111111111111';
 const otherUser = '22222222-2222-4222-8222-222222222222';
 const skuId = 'BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB';
+const remainingSku = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const base = '/api/v1/commerce/cart';
-const path = `${base}/items/${skuId}`;
+const path = `${base}/items`;
 const expiresAt = new Date('2026-10-24T12:00:00Z');
 
 describe('PATCH commerce cart items (HTTP with transactional mock persistence)', () => {
@@ -58,6 +59,11 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
         changes,
       ),
     ),
+    create: vi.fn((data: any) => ({ id: 'new-line', ...data })),
+    save: vi.fn(async (entity: any) => {
+      rows.push(entity);
+      return entity;
+    }),
     delete: vi.fn(async (id) => {
       rows = rows.filter((row) => row.id !== id);
     }),
@@ -72,6 +78,8 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       if (sql.includes('pg_advisory_xact_lock')) return [];
       if (sql.includes('clock_timestamp'))
         return [{ observedTime: new Date('2026-10-17T12:00:00Z') }];
+      if (sql.includes('commerce.service_configs'))
+        return [{ value: 7 }];
       throw new Error('Unexpected SQL');
     }),
   };
@@ -86,6 +94,32 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
         throw error;
       }
     }),
+  };
+
+  const addRemainingLine = () => {
+    rows.push({
+      ...rows[0],
+      id: 'remaining-line',
+      skuId: remainingSku,
+      quantity: 3,
+      productNameSnapshot: 'Remaining snapshot',
+      unitPriceSnapshot: '90000.00',
+    });
+    catalog.getCartSkus.mockResolvedValue([
+      {
+        id: remainingSku,
+        productId: 'product',
+        productName: 'Remaining current name',
+        price: '120000.00',
+        currency: 'VND',
+        isActive: true,
+        productStatus: 'ACTIVE',
+        productDeletedAt: null,
+      },
+    ]);
+    inventory.getDefaultWarehouseStock.mockResolvedValue([
+      { skuId: remainingSku, availableQuantity: 10 },
+    ]);
   };
 
   beforeAll(async () => {
@@ -164,249 +198,214 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       { skuId: skuId.toLowerCase(), availableQuantity: 2147483647 },
     ]);
   });
+
   afterAll(async () => app.close());
 
-  it('rejects missing and invalid JWTs before any transaction', async () => {
-    await request(app.getHttpServer())
-      .patch(path)
-      .send({ quantity: 1 })
-      .expect(401);
-    await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', 'Bearer invalid')
-      .send({ quantity: 1 })
-      .expect(401);
-    expect(source.transaction).not.toHaveBeenCalled();
+  describe('Route and obsolete endpoints checks', () => {
+    it('returns 404 for obsolete PATCH /api/v1/commerce/cart/items/:skuId', async () => {
+      await request(app.getHttpServer())
+        .patch(`${base}/items/${skuId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ quantity: 1 })
+        .expect(404);
+      expect(source.transaction).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for obsolete DELETE /api/v1/commerce/cart/items/:skuId', async () => {
+      await request(app.getHttpServer())
+        .delete(`${base}/items/${skuId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+      expect(source.transaction).not.toHaveBeenCalled();
+    });
   });
 
-  it('requires CART.UPDATE before any transaction', async () => {
-    rbac.hasAllPermissions.mockResolvedValue(false);
-    await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 1 })
-      .expect(403);
-    expect(rbac.hasAllPermissions).toHaveBeenCalledWith(userId, [
-      'CART.UPDATE',
-    ]);
-    expect(source.transaction).not.toHaveBeenCalled();
-  });
+  describe('Authentication & Authorization', () => {
+    it('rejects missing and invalid JWTs before any transaction', async () => {
+      await request(app.getHttpServer())
+        .patch(path)
+        .send({ skuId, quantity: 1 })
+        .expect(401);
+      await request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', 'Bearer invalid')
+        .send({ skuId, quantity: 1 })
+        .expect(401);
+      expect(source.transaction).not.toHaveBeenCalled();
+    });
 
-  it.each([
-    {},
-    ...[-1, 1.5, 2147483648, '1', null, true].map((quantity) => ({ quantity })),
-    ...[
-      'skuId',
-      'userId',
-      'productId',
-      'sellerId',
-      'price',
-      'unitPriceSnapshot',
-      'expiresAt',
-    ].map((key) => ({ quantity: 1, [key]: userId })),
-  ])(
-    'rejects invalid and extra payload %j before any transaction',
-    async (body) => {
+    it('requires CART.UPDATE before any transaction', async () => {
+      rbac.hasAllPermissions.mockResolvedValue(false);
       await request(app.getHttpServer())
         .patch(path)
         .set('Authorization', `Bearer ${token}`)
-        .send(body)
-        .expect(400);
+        .send({ skuId, quantity: 1 })
+        .expect(403);
+      expect(rbac.hasAllPermissions).toHaveBeenCalledWith(userId, [
+        'CART.UPDATE',
+      ]);
       expect(source.transaction).not.toHaveBeenCalled();
-    },
-  );
-
-  it('rejects a malformed path UUID before any transaction', async () => {
-    await request(app.getHttpServer())
-      .patch(`${base}/items/bad`)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 1 })
-      .expect(400);
-    expect(source.transaction).not.toHaveBeenCalled();
+    });
   });
 
-  it.each([0, 2147483647])(
-    'accepts boundary quantity %s, canonicalizes SKU and returns 200 with the cart envelope',
-    async (quantity) => {
-      const response = await request(app.getHttpServer())
-        .patch(`${path}?userId=${otherUser}`)
+  describe('DTO and Validation', () => {
+    it.each([
+      {},
+      { skuId },
+      { quantity: 1 },
+      { skuId: 'not-a-uuid', quantity: 1 },
+      ...[-1, 1.5, 2147483648, '1', null, true].map((quantity) => ({ skuId, quantity })),
+      ...[
+        'userId',
+        'productId',
+        'sellerId',
+        'price',
+        'unitPriceSnapshot',
+        'expiresAt',
+      ].map((key) => ({ skuId, quantity: 1, [key]: userId })),
+    ])(
+      'rejects invalid and extra payload %j before any transaction',
+      async (body) => {
+        await request(app.getHttpServer())
+          .patch(path)
+          .set('Authorization', `Bearer ${token}`)
+          .send(body)
+          .expect(400);
+        expect(source.transaction).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('Update Quantity (quantity > 0)', () => {
+    it.each([1, 2147483647])(
+      'accepts boundary positive quantity %s, canonicalizes SKU and returns 200 with the cart envelope',
+      async (quantity) => {
+        const response = await request(app.getHttpServer())
+          .patch(`${path}?userId=${otherUser}`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ skuId, quantity })
+          .expect(200);
+        expect(response.body).toMatchObject({
+          success: true,
+          data: {
+            cartId: 'own-cart',
+            expiresAt: expiresAt.toISOString(),
+            subtotal: quantity === 1 ? '120000.00' : '257698037640000.00',
+          },
+        });
+        expect(carts.findOne).toHaveBeenCalledWith({
+          where: { userId, status: 'ACTIVE' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        expect(items.findOne).toHaveBeenCalledWith({
+          where: { cartId: 'own-cart', skuId: skuId.toLowerCase() },
+          lock: { mode: 'pessimistic_write' },
+        });
+      },
+    );
+
+    it('PATCHes 2 to 3 at the current price and GET observes 3 with the original snapshot and expiry', async () => {
+      const patch = await request(app.getHttpServer())
+        .patch(path)
         .set('Authorization', `Bearer ${token}`)
-        .send({ quantity })
+        .send({ skuId, quantity: 3 })
+        .expect(200);
+      const get = await request(app.getHttpServer())
+        .get(base)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(get.body.data).toEqual(patch.body.data);
+      expect(get.body.data).toMatchObject({
+        cartId: 'own-cart',
+        expiresAt: expiresAt.toISOString(),
+        subtotal: '360000.00',
+        items: [
+          expect.objectContaining({
+            quantity: 3,
+            unitPriceSnapshot: '100000.00',
+            unitPrice: '120000.00',
+            lineTotal: '360000.00',
+          }),
+        ],
+      });
+    });
+
+    it('returns 409 without partial mutation when absolute requested stock is insufficient', async () => {
+      inventory.getDefaultWarehouseStock.mockResolvedValue([
+        { skuId: skuId.toLowerCase(), availableQuantity: 2 },
+      ]);
+      const response = await request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 3 })
+        .expect(409);
+      expect(response.body).toMatchObject({
+        success: false,
+        errorCode: 'INSUFFICIENT_STOCK',
+      });
+      expect(rows[0].quantity).toBe(2);
+    });
+
+    it('cannot target another account through query parameters or ownership', async () => {
+      await request(app.getHttpServer())
+        .patch(`${path}?userId=${userId}`)
+        .set('Authorization', `Bearer ${otherToken}`)
+        .send({ skuId, quantity: 1 })
+        .expect(404);
+      expect(rows[0].quantity).toBe(2);
+      expect(catalog.getCartSkus).not.toHaveBeenCalled();
+      expect(items.delete).not.toHaveBeenCalled();
+      expect(carts.findOne).toHaveBeenCalledWith({
+        where: { userId: otherUser, status: 'ACTIVE' },
+        lock: { mode: 'pessimistic_write' },
+      });
+    });
+  });
+
+  describe('Remove Item (quantity === 0)', () => {
+    it('accepts quantity 0 and returns 200 with empty cart', async () => {
+      const response = await request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 0 })
         .expect(200);
       expect(response.body).toMatchObject({
         success: true,
         data: {
           cartId: 'own-cart',
           expiresAt: expiresAt.toISOString(),
-          subtotal: quantity === 0 ? '0.00' : '257698037640000.00',
+          subtotal: '0.00',
+          items: [],
         },
       });
-      expect(carts.findOne).toHaveBeenCalledWith({
-        where: { userId, status: 'ACTIVE' },
-        lock: { mode: 'pessimistic_write' },
-      });
-      expect(items.findOne).toHaveBeenCalledWith({
-        where: { cartId: 'own-cart', skuId: skuId.toLowerCase() },
-        lock: { mode: 'pessimistic_write' },
-      });
-    },
-  );
-
-  it('PATCHes 2 to 3 at the current price and GET observes 3 with the original snapshot and expiry', async () => {
-    const patch = await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 })
-      .expect(200);
-    const get = await request(app.getHttpServer())
-      .get(base)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-    expect(get.body.data).toEqual(patch.body.data);
-    expect(get.body.data).toMatchObject({
-      cartId: 'own-cart',
-      expiresAt: expiresAt.toISOString(),
-      subtotal: '360000.00',
-      items: [
-        expect.objectContaining({
-          quantity: 3,
-          unitPriceSnapshot: '100000.00',
-          unitPrice: '120000.00',
-          lineTotal: '360000.00',
-        }),
-      ],
-    });
-  });
-
-  it('deletes a missing Catalog SKU and GET retains the same empty cart', async () => {
-    catalog.getCartSkus.mockResolvedValue([]);
-    const patch = await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 0 })
-      .expect(200);
-    const get = await request(app.getHttpServer())
-      .get(base)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-    expect(get.body.data).toEqual(patch.body.data);
-    expect(get.body.data).toMatchObject({
-      cartId: 'own-cart',
-      expiresAt: expiresAt.toISOString(),
-      items: [],
-      subtotal: '0.00',
-    });
-    expect(catalog.getCartSkus).not.toHaveBeenCalled();
-    expect(inventory.getDefaultWarehouseStock).not.toHaveBeenCalled();
-  });
-
-  it('cannot target another account through query parameters or ownership', async () => {
-    await request(app.getHttpServer())
-      .patch(`${path}?userId=${userId}`)
-      .set('Authorization', `Bearer ${otherToken}`)
-      .send({ quantity: 0 })
-      .expect(404);
-    expect(rows[0].quantity).toBe(2);
-    expect(catalog.getCartSkus).not.toHaveBeenCalled();
-    expect(items.delete).not.toHaveBeenCalled();
-    expect(carts.findOne).toHaveBeenCalledWith({
-      where: { userId: otherUser, status: 'ACTIVE' },
-      lock: { mode: 'pessimistic_write' },
-    });
-  });
-
-  it('returns 409 without partial mutation when absolute requested stock is insufficient', async () => {
-    inventory.getDefaultWarehouseStock.mockResolvedValue([
-      { skuId: skuId.toLowerCase(), availableQuantity: 2 },
-    ]);
-    const response = await request(app.getHttpServer())
-      .patch(path)
-      .set('Authorization', `Bearer ${token}`)
-      .send({ quantity: 3 })
-      .expect(409);
-    expect(response.body).toMatchObject({
-      success: false,
-      errorCode: 'INSUFFICIENT_STOCK',
-    });
-    expect(rows[0].quantity).toBe(2);
-  });
-
-  describe('DELETE cart items', () => {
-    const remainingSku = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-    const addRemainingLine = () => {
-      rows.push({
-        ...rows[0],
-        id: 'remaining-line',
-        skuId: remainingSku,
-        quantity: 3,
-        productNameSnapshot: 'Remaining snapshot',
-        unitPriceSnapshot: '90000.00',
-      });
-      catalog.getCartSkus.mockResolvedValue([
-        {
-          id: remainingSku,
-          productId: 'product',
-          productName: 'Remaining current name',
-          price: '120000.00',
-          currency: 'VND',
-          isActive: true,
-          productStatus: 'ACTIVE',
-          productDeletedAt: null,
-        },
-      ]);
-      inventory.getDefaultWarehouseStock.mockResolvedValue([
-        { skuId: remainingSku, availableQuantity: 10 },
-      ]);
-    };
-
-    afterEach(() => vi.restoreAllMocks());
-
-    it('rejects missing and invalid JWTs before any transaction', async () => {
-      await request(app.getHttpServer()).delete(path).expect(401);
-      await request(app.getHttpServer())
-        .delete(path)
-        .set('Authorization', 'Bearer invalid')
-        .expect(401);
-      expect(source.transaction).not.toHaveBeenCalled();
-    });
-
-    it('requires CART.REMOVE_ITEM before any transaction', async () => {
-      rbac.hasAllPermissions.mockResolvedValue(false);
-      await request(app.getHttpServer())
-        .delete(path)
-        .set('Authorization', `Bearer ${token}`)
-        .expect(403);
-      expect(rbac.hasAllPermissions).toHaveBeenCalledExactlyOnceWith(userId, [
-        'CART.REMOVE_ITEM',
-      ]);
-      expect(source.transaction).not.toHaveBeenCalled();
-    });
-
-    it('succeeds with REMOVE_ITEM granted and UPDATE absent', async () => {
-      rbac.hasAllPermissions.mockImplementation(
-        async (_user, permissions) =>
-          permissions.length === 1 && permissions[0] === 'CART.REMOVE_ITEM',
-      );
-      await request(app.getHttpServer())
-        .delete(path)
-        .set('Authorization', `Bearer ${token}`)
-        .expect(200);
-      expect(rbac.hasAllPermissions).toHaveBeenCalledExactlyOnceWith(userId, [
-        'CART.REMOVE_ITEM',
-      ]);
+      expect(items.delete).toHaveBeenCalledWith('line');
       expect(rows).toEqual([]);
     });
 
-    it('rejects a malformed path UUID before any transaction', async () => {
-      await request(app.getHttpServer())
-        .delete(`${base}/items/bad`)
+    it('deletes a missing Catalog SKU when quantity is 0 and GET retains the same empty cart', async () => {
+      catalog.getCartSkus.mockResolvedValue([]);
+      const patch = await request(app.getHttpServer())
+        .patch(path)
         .set('Authorization', `Bearer ${token}`)
-        .expect(400);
-      expect(source.transaction).not.toHaveBeenCalled();
+        .send({ skuId, quantity: 0 })
+        .expect(200);
+      const get = await request(app.getHttpServer())
+        .get(base)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(get.body.data).toEqual(patch.body.data);
+      expect(get.body.data).toMatchObject({
+        cartId: 'own-cart',
+        expiresAt: expiresAt.toISOString(),
+        items: [],
+        subtotal: '0.00',
+      });
+      expect(catalog.getCartSkus).not.toHaveBeenCalled();
+      expect(inventory.getDefaultWarehouseStock).not.toHaveBeenCalled();
     });
 
     it.each(['missing', 'discontinued'])(
-      'removes a %s Catalog SKU and GET retains the same empty cart',
+      'removes a %s Catalog SKU with quantity 0 and GET retains the same empty cart',
       async (state) => {
         if (state === 'missing') catalog.getCartSkus.mockResolvedValue([]);
         else {
@@ -416,8 +415,9 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
         }
         const before = structuredClone(cart);
         const deletion = await request(app.getHttpServer())
-          .delete(path)
+          .patch(path)
           .set('Authorization', `Bearer ${token}`)
+          .send({ skuId, quantity: 0 })
           .expect(200);
         const get = await request(app.getHttpServer())
           .get(base)
@@ -441,12 +441,13 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       },
     );
 
-    it('removes only the requested line and preserves other snapshots and expiry', async () => {
+    it('removes only the requested line when quantity is 0 and preserves other snapshots and expiry', async () => {
       addRemainingLine();
       const before = structuredClone({ cart, remaining: rows[1] });
       const response = await request(app.getHttpServer())
-        .delete(path)
+        .patch(path)
         .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 0 })
         .expect(200);
       expect(response.body.data).toMatchObject({
         cartId: 'own-cart',
@@ -489,8 +490,9 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       if (state === 'missing line') rows[0].skuId = remainingSku;
       const before = structuredClone({ cart, rows });
       const response = await request(app.getHttpServer())
-        .delete(path)
+        .patch(path)
         .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 0 })
         .expect(404);
       expect(response.body.errorCode).toBe(
         state === 'missing line' ? 'CART_ITEM_NOT_FOUND' : 'CART_NOT_FOUND',
@@ -502,12 +504,12 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       expect(inventory.getDefaultWarehouseStock).not.toHaveBeenCalled();
     });
 
-    it('cannot use a supplied userId to delete another JWT account cart', async () => {
+    it('cannot use a supplied userId in query to modify another user cart', async () => {
       const before = structuredClone({ cart, rows });
       await request(app.getHttpServer())
-        .delete(`${path}?userId=${userId}`)
+        .patch(`${path}?userId=${userId}`)
         .set('Authorization', `Bearer ${otherToken}`)
-        .send({ userId })
+        .send({ skuId, quantity: 0 })
         .expect(404);
       expect(carts.findOne).toHaveBeenCalledExactlyOnceWith({
         where: { userId: otherUser, status: 'ACTIVE' },
@@ -517,46 +519,6 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       expect(items.delete).not.toHaveBeenCalled();
     });
 
-    it('delegates exactly to quantity zero with one shared transaction and projection manager', async () => {
-      const update = vi.spyOn(app.get(CartWriteService), 'updateItem');
-      const project = vi.spyOn(app.get(CartService), 'projectCart');
-      await request(app.getHttpServer())
-        .delete(`${path}?userId=${otherUser}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ quantity: 99, userId: otherUser })
-        .expect(200);
-      expect(update).toHaveBeenCalledExactlyOnceWith(userId, skuId, {
-        quantity: 0,
-      });
-      expect(source.transaction).toHaveBeenCalledExactlyOnceWith(
-        'READ COMMITTED',
-        expect.any(Function),
-      );
-      expect(manager.query.mock.calls).toEqual([
-        [
-          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-          [`commerce:cart:${userId}`],
-        ],
-        ['SELECT clock_timestamp() AS "observedTime"'],
-      ]);
-      expect(carts.findOne).toHaveBeenCalledExactlyOnceWith({
-        where: { userId, status: 'ACTIVE' },
-        lock: { mode: 'pessimistic_write' },
-      });
-      expect(items.findOne).toHaveBeenCalledExactlyOnceWith({
-        where: { cartId: 'own-cart', skuId: skuId.toLowerCase() },
-        lock: { mode: 'pessimistic_write' },
-      });
-      expect(items.delete).toHaveBeenCalledExactlyOnceWith('line');
-      expect(project).toHaveBeenCalledExactlyOnceWith(cart, manager);
-      expect(carts.findOne.mock.invocationCallOrder[0]).toBeGreaterThan(
-        manager.query.mock.invocationCallOrder[1],
-      );
-      expect(project.mock.invocationCallOrder[0]).toBeGreaterThan(
-        items.delete.mock.invocationCallOrder[0],
-      );
-    });
-
     it('propagates a deletion failure and restores mock transaction state', async () => {
       const before = structuredClone({ cart, rows });
       items.delete.mockImplementationOnce(async (id) => {
@@ -564,8 +526,9 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
         throw new Error('Deletion failed');
       });
       await request(app.getHttpServer())
-        .delete(path)
+        .patch(path)
         .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 0 })
         .expect(500);
       expect(items.delete).toHaveBeenCalledExactlyOnceWith('line');
       expect({ cart, rows }).toEqual(before);
@@ -584,8 +547,9 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
           inventory.getDefaultWarehouseStock.mockResolvedValueOnce([]);
         }
         const response = await request(app.getHttpServer())
-          .delete(path)
+          .patch(path)
           .set('Authorization', `Bearer ${token}`)
+          .send({ skuId, quantity: 0 })
           .expect(dependency === 'catalog' ? 500 : 503);
         if (dependency === 'inventory') {
           expect(response.body.errorCode).toBe('INVENTORY_UNAVAILABLE');
@@ -594,5 +558,71 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
         expect({ cart, rows }).toEqual(before);
       },
     );
+  });
+
+  describe('POST and PATCH response parity', () => {
+    it('returns consistent complete cart envelope for POST and PATCH', async () => {
+      const postRes = await request(app.getHttpServer())
+        .post(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 1 })
+        .expect(201);
+
+      const patchRes = await request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 4 })
+        .expect(200);
+
+      // Verify identical top-level and data fields
+      expect(Object.keys(postRes.body)).toEqual(Object.keys(patchRes.body));
+      expect(Object.keys(postRes.body.data).sort()).toEqual(
+        Object.keys(patchRes.body.data).sort(),
+      );
+
+      // Verify complete cart structure on PATCH
+      expect(patchRes.body).toMatchObject({
+        success: true,
+        data: {
+          cartId: 'own-cart',
+          expiresAt: expiresAt.toISOString(),
+          currency: 'VND',
+          subtotal: '480000.00',
+          hasExcludedItems: false,
+          excludedItemCount: 0,
+          items: [
+            expect.objectContaining({
+              skuId: skuId.toLowerCase(),
+              quantity: 4,
+              unitPrice: '120000.00',
+              lineTotal: '480000.00',
+              includedInSubtotal: true,
+            }),
+          ],
+        },
+      });
+
+      // Verify PATCH with 0 returns complete refreshed cart with items = []
+      const removeRes = await request(app.getHttpServer())
+        .patch(path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ skuId, quantity: 0 })
+        .expect(200);
+
+      expect(Object.keys(removeRes.body.data).sort()).toEqual(
+        Object.keys(postRes.body.data).sort(),
+      );
+      expect(removeRes.body).toMatchObject({
+        success: true,
+        data: {
+          cartId: 'own-cart',
+          expiresAt: expiresAt.toISOString(),
+          subtotal: '0.00',
+          items: [],
+          hasExcludedItems: false,
+          excludedItemCount: 0,
+        },
+      });
+    });
   });
 });

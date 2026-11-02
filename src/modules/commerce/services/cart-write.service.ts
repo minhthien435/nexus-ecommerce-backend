@@ -237,10 +237,18 @@ export class CartWriteService {
     });
   }
 
-  async updateItem(userId: string, skuId: string, input: UpdateCartItemDto) {
+  async updateItem(
+    userId: string,
+    skuIdOrInput: string | UpdateCartItemDto,
+    maybeInput?: UpdateCartItemDto | { quantity: number; skuId?: string },
+  ) {
+    const rawSkuId =
+      typeof skuIdOrInput === 'string' ? skuIdOrInput : skuIdOrInput?.skuId;
+    const input = typeof skuIdOrInput === 'string' ? maybeInput : skuIdOrInput;
     if (
       !isUUID(userId) ||
-      !isUUID(skuId) ||
+      !isUUID(rawSkuId) ||
+      !input ||
       !Number.isInteger(input.quantity) ||
       input.quantity < 0 ||
       input.quantity > MAX_QUANTITY
@@ -251,7 +259,7 @@ export class CartWriteService {
       });
     }
     userId = userId.toLowerCase();
-    skuId = skuId.toLowerCase();
+    const skuId = rawSkuId.toLowerCase();
     const quantity = input.quantity;
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const observedTime = await this.lockAccountAndObserveTime(

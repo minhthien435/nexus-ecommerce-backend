@@ -1,10 +1,7 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
-  Param,
-  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -38,22 +35,12 @@ export class CartController {
     return this.writer.addItem(userId, input);
   }
 
-  @Patch('items/:skuId')
+  @Patch('items')
   @Permissions('CART.UPDATE')
   update(
     @CurrentUserId() userId: string,
-    @Param('skuId', new ParseUUIDPipe()) skuId: string,
     @Body() input: UpdateCartItemDto,
   ) {
-    return this.writer.updateItem(userId, skuId, input);
-  }
-
-  @Delete('items/:skuId')
-  @Permissions('CART.REMOVE_ITEM')
-  remove(
-    @CurrentUserId() userId: string,
-    @Param('skuId', new ParseUUIDPipe()) skuId: string,
-  ) {
-    return this.writer.updateItem(userId, skuId, { quantity: 0 });
+    return this.writer.updateItem(userId, input.skuId, input);
   }
 }
