@@ -210,7 +210,7 @@ export class SellerBulkImportService {
             manager.create(ProductSkuEntity, {
               productId: product.id,
               skuCode: row.skuCode,
-              attributes: {},
+              attributes: { variant: 'Default' },
               price: row.price,
               originalPrice: row.originalPrice,
               currency: 'VND',

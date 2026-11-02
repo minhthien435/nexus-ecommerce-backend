@@ -64,8 +64,9 @@ describe('SellerProductController', () => {
     const buffer = Buffer.from('template');
     bulkImport.template.mockReturnValue(buffer);
     bulkImport.import.mockResolvedValue({ importedCount: 1, errors: [] });
-    const response = { setHeader: vi.fn() };
-    expect(controller.template(response as never)).toBe(buffer);
+    const response = { setHeader: vi.fn(), send: vi.fn() };
+    controller.template(response as never);
+    expect(response.send).toHaveBeenCalledWith(buffer);
     expect(response.setHeader).toHaveBeenCalledWith(
       'Content-Type',
       'text/csv; charset=utf-8',
@@ -74,8 +75,8 @@ describe('SellerProductController', () => {
       'Content-Disposition',
       'attachment; filename="product-import-template.csv"',
     );
-    const file = { buffer: Buffer.from('csv') } as Express.Multer.File;
-    await controller.importCsv(file, 'seller-1');
-    expect(bulkImport.import).toHaveBeenCalledWith('seller-1', file.buffer);
+    const upload = { buffer: Buffer.from('csv') } as Express.Multer.File;
+    await controller.importCsv(upload, 'seller-1');
+    expect(bulkImport.import).toHaveBeenCalledWith('seller-1', upload.buffer);
   });
 });
