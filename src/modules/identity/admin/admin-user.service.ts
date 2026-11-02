@@ -67,7 +67,7 @@ export class AdminUserService {
 
     if (query.search) {
       builder.andWhere(
-        '(user.full_name ILIKE :search OR user.email::text ILIKE :search OR user.phone ILIKE :search)',
+        '(user.full_name ILIKE :search OR user.email ILIKE :search OR user.phone ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
