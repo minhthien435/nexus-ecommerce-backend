@@ -44,13 +44,13 @@ export class SellerProductController {
 
   @Permissions('PRODUCT.CREATE')
   @Get('bulk/template')
-  template(@Res({ passthrough: true }) response: Response) {
+  template(@Res() response: Response) {
     response.setHeader('Content-Type', 'text/csv; charset=utf-8');
     response.setHeader(
       'Content-Disposition',
       'attachment; filename="product-import-template.csv"',
     );
-    return this.bulkImport.template();
+    response.send(this.bulkImport.template());
   }
 
   @Permissions('PRODUCT.CREATE')

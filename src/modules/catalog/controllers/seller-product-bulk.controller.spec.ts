@@ -57,11 +57,18 @@ describe('SellerProductController bulk HTTP contract', () => {
   it('serves the template with download headers', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/catalog/seller/products/bulk/template')
+      .buffer(true)
+      .parse((incoming, callback) => {
+        const chunks: Buffer[] = [];
+        incoming.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        incoming.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
       .expect(200);
     expect(response.headers['content-type']).toContain('text/csv');
     expect(response.headers['content-disposition']).toContain(
       'product-import-template.csv',
     );
+    expect([...response.body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   });
 
   it('accepts POST bulk and delegates the in-memory CSV buffer', async () => {

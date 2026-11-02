@@ -132,6 +132,10 @@ describe('SellerBulkImportService', () => {
     ])
       expect(h.manager.create).toHaveBeenCalledWith(entity, expect.anything());
     expect(h.manager.create).toHaveBeenCalledWith(
+      ProductSkuEntity,
+      expect.objectContaining({ attributes: { variant: 'Default' } }),
+    );
+    expect(h.manager.create).toHaveBeenCalledWith(
       InventoryItemEntity,
       expect.objectContaining({
         totalQuantity: 5,
