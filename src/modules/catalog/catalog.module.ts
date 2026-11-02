@@ -24,6 +24,13 @@ import { ProductSkuService } from './services/product-sku.service.js';
 import { ProductImportService } from './services/product-import.service.js';
 import { SellerProductService } from './services/seller-product.service.js';
 import { ExternalReferenceEntity } from '../integrations/entities/external-reference.entity.js';
+import { PublicShopController } from './controllers/public-shop.controller.js';
+import { PublicShopService } from './services/public-shop.service.js';
+import { SellerBulkImportService } from './services/seller-bulk-import.service.js';
+import { ShopEntity } from '../identity/domain/shop.entity.js';
+import { AuctionEntity } from '../auction/entities/auction.entity.js';
+import { WarehouseEntity } from '../fulfillment/domain/entities/warehouse.entity.js';
+import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-item.entity.js';
 
 @Module({
   imports: [
@@ -33,6 +40,10 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
       ProductImageEntity,
       ProductSkuEntity,
       ExternalReferenceEntity,
+      ShopEntity,
+      AuctionEntity,
+      WarehouseEntity,
+      InventoryItemEntity,
     ]),
     IdentityModule,
     JwtModule,
@@ -43,6 +54,7 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
     ProductController,
     ProductSkuController,
     SellerProductController,
+    PublicShopController,
   ],
   providers: [
     CatalogCacheService,
@@ -51,6 +63,8 @@ import { ExternalReferenceEntity } from '../integrations/entities/external-refer
     ProductSkuService,
     ProductImportService,
     SellerProductService,
+    PublicShopService,
+    SellerBulkImportService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,
