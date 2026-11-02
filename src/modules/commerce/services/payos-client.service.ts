@@ -8,6 +8,7 @@ import {
   PayOS,
   type CreatePaymentLinkRequest,
   type CreatePaymentLinkResponse,
+  type PaymentLink,
   type Webhook,
   type WebhookData,
 } from '@payos/node';
@@ -78,5 +79,37 @@ export class PayosClientService {
   async verifyWebhook(webhook: Webhook): Promise<WebhookData> {
     const client = this.getClient();
     return client.webhooks.verify(webhook);
+  }
+
+  async cancelPaymentLink(
+    orderCodeOrLinkId: number | string,
+    cancellationReason?: string,
+  ): Promise<PaymentLink> {
+    const client = this.getClient();
+    if (typeof orderCodeOrLinkId === 'number') {
+      return client.paymentRequests.cancel(
+        orderCodeOrLinkId,
+        cancellationReason,
+      );
+    }
+    const numericCode = Number(orderCodeOrLinkId);
+    if (!Number.isNaN(numericCode) && Number.isSafeInteger(numericCode)) {
+      return client.paymentRequests.cancel(numericCode, cancellationReason);
+    }
+    return client.paymentRequests.cancel(orderCodeOrLinkId, cancellationReason);
+  }
+
+  async getPaymentLink(
+    orderCodeOrLinkId: number | string,
+  ): Promise<PaymentLink> {
+    const client = this.getClient();
+    if (typeof orderCodeOrLinkId === 'number') {
+      return client.paymentRequests.get(orderCodeOrLinkId);
+    }
+    const numericCode = Number(orderCodeOrLinkId);
+    if (!Number.isNaN(numericCode) && Number.isSafeInteger(numericCode)) {
+      return client.paymentRequests.get(numericCode);
+    }
+    return client.paymentRequests.get(orderCodeOrLinkId);
   }
 }

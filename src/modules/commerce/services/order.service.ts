@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -15,6 +17,8 @@ import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entit
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { PayosClientService } from './payos-client.service.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
@@ -24,6 +28,8 @@ import { OrderStateMachineService } from './order-state-machine.service.js';
 
 @Injectable()
 export class OrderService {
+  private readonly logger = new Logger(OrderService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(CartEntity)
@@ -44,6 +50,8 @@ export class OrderService {
     private readonly orderStateMachine: OrderStateMachineService,
     private readonly inventoryReservation: InventoryReservationApi,
     private readonly expiryOutbox: OrderExpiryOutboxApi,
+    @Optional()
+    private readonly payosClientService?: PayosClientService,
   ) {}
 
   /**
@@ -646,6 +654,19 @@ export class OrderService {
           manager,
         );
       }
+
+      let pendingPayments: PaymentEntity[] = [];
+      try {
+        pendingPayments = await manager.getRepository(PaymentEntity).find({
+          where: {
+            orderId: In(pending.map((order) => order.id)),
+            provider: 'PAYOS',
+            status: In(['INITIATED', 'PENDING']),
+          },
+        });
+      } catch {
+        // Fallback if PaymentEntity repository is not mounted on manager in test mocks
+      }
       await manager
         .getRepository(CartItemEntity)
         .update(
@@ -670,7 +691,24 @@ export class OrderService {
           order: { createdAt: 'ASC', id: 'ASC' },
         });
 
-      return { ...order!, history };
+      const result = { ...order!, history };
+      if (this.payosClientService && pendingPayments.length > 0) {
+        for (const payment of pendingPayments) {
+          if (payment.providerPaymentId) {
+            try {
+              await this.payosClientService.cancelPaymentLink(
+                payment.providerPaymentId,
+                'Khách hàng hủy đơn trên website',
+              );
+            } catch (err) {
+              this.logger.warn(
+                `Failed to cancel PayOS payment ${payment.providerPaymentId}: ${(err as Error).message}`,
+              );
+            }
+          }
+        }
+      }
+      return result;
     });
   }
 

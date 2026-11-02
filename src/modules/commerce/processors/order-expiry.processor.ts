@@ -1,8 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger, Optional } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { DelayedError, type Job } from 'bullmq';
-import { DataSource } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 import { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { PayosClientService } from '../services/payos-client.service.js';
 import {
   ORDER_EXPIRY_JOB,
   ORDER_EXPIRY_QUEUE,
@@ -15,10 +17,14 @@ const UUID_PATTERN =
 
 @Processor(ORDER_EXPIRY_QUEUE)
 export class OrderExpiryProcessor extends WorkerHost {
+  private readonly logger = new Logger(OrderExpiryProcessor.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly transition: OrderExpiryTransitionApi,
     private readonly inventory: InventoryReservationApi,
+    @Optional()
+    private readonly payosClientService?: PayosClientService,
   ) {
     super();
   }
@@ -35,6 +41,30 @@ export class OrderExpiryProcessor extends WorkerHost {
         if (transition.outcome === 'EXPIRED') {
           await this.inventory.release(transition.inventoryReceipts, manager);
           await this.transition.finalizeExpiry(orderId, manager);
+
+          if (this.payosClientService) {
+            const pendingPayment = await manager
+              .getRepository(PaymentEntity)
+              .findOne({
+                where: {
+                  orderId,
+                  provider: 'PAYOS',
+                  status: In(['INITIATED', 'PENDING']),
+                },
+              });
+            if (pendingPayment?.providerPaymentId) {
+              try {
+                await this.payosClientService.cancelPaymentLink(
+                  pendingPayment.providerPaymentId,
+                  'Đơn hàng hết hạn thanh toán 15 phút',
+                );
+              } catch (err) {
+                this.logger.warn(
+                  `Failed to cancel PayOS link on expiry for order ${orderId}: ${(err as Error).message}`,
+                );
+              }
+            }
+          }
         }
         return transition;
       },
