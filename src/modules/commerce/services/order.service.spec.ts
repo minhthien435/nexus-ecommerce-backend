@@ -159,6 +159,8 @@ function setup() {
       if (entity.name === 'OrderStatusHistoryEntity') return orderHistoryRepo;
       if (entity.name === 'CheckoutSessionEntity')
         return transactionCheckoutSessionRepo;
+      if (entity.name === 'PaymentEntity')
+        return { find: vi.fn().mockResolvedValue([]) };
       throw new Error(`Unexpected repository: ${entity.name}`);
     }),
   };

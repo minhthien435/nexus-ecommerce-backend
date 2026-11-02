@@ -194,6 +194,15 @@ export class PaymentsService {
       this.configService.get<string>('PAYOS_RETURN_URL')?.trim() ||
       'http://localhost:5173/checkout/payment-result';
 
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    const holdExpiresSeconds = order.holdExpiresAt
+      ? Math.floor(new Date(order.holdExpiresAt).getTime() / 1000)
+      : 0;
+    const expiredAt =
+      holdExpiresSeconds > nowInSeconds + 60
+        ? holdExpiresSeconds
+        : nowInSeconds + 15 * 60;
+
     let payosResponse;
     try {
       payosResponse = await this.payosClientService.createPaymentLink({
@@ -202,6 +211,7 @@ export class PaymentsService {
         description,
         cancelUrl,
         returnUrl,
+        expiredAt,
       });
     } catch (payosError) {
       const errorMsg = (payosError as Error)?.message || 'PayOS API error';

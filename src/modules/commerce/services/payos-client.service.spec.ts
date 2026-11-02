@@ -143,4 +143,86 @@ describe('PayosClientService', () => {
       'Failed to initialize PayOS client: Connection refused to initialization provider',
     );
   });
+
+  describe('paymentRequests operations', () => {
+    let mockPaymentRequests: {
+      create: ReturnType<typeof vi.fn>;
+      cancel: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+
+    beforeEach(() => {
+      vi.mocked(configService.get).mockImplementation((key: string) => {
+        switch (key) {
+          case 'PAYOS_CLIENT_ID':
+            return 'mock-client-id';
+          case 'PAYOS_API_KEY':
+            return 'mock-api-key';
+          case 'PAYOS_CHECKSUM_KEY':
+            return 'mock-checksum-key';
+          default:
+            return undefined;
+        }
+      });
+
+      mockPaymentRequests = {
+        create: vi.fn(),
+        cancel: vi.fn(),
+        get: vi.fn(),
+      };
+
+      vi.spyOn(service, 'getClient').mockReturnValue({
+        paymentRequests: mockPaymentRequests,
+        webhooks: { verify: vi.fn() },
+      } as unknown as payosNode.PayOS);
+    });
+
+    it('delegates createPaymentLink to client.paymentRequests.create', async () => {
+      const mockPayload = {
+        orderCode: 123456,
+        amount: 50000,
+        description: 'Test order',
+        cancelUrl: 'http://localhost/cancel',
+        returnUrl: 'http://localhost/return',
+        expiredAt: 1700000000,
+      };
+      mockPaymentRequests.create.mockResolvedValue({
+        checkoutUrl: 'https://pay.payos.vn/web/123',
+      });
+
+      const result = await service.createPaymentLink(mockPayload);
+      expect(mockPaymentRequests.create).toHaveBeenCalledWith(mockPayload);
+      expect(result.checkoutUrl).toBe('https://pay.payos.vn/web/123');
+    });
+
+    it('delegates cancelPaymentLink with number orderCode', async () => {
+      mockPaymentRequests.cancel.mockResolvedValue({ status: 'CANCELLED' });
+
+      const result = await service.cancelPaymentLink(123456, 'User cancelled');
+      expect(mockPaymentRequests.cancel).toHaveBeenCalledWith(
+        123456,
+        'User cancelled',
+      );
+      expect(result.status).toBe('CANCELLED');
+    });
+
+    it('delegates cancelPaymentLink with string orderCode parsed to number', async () => {
+      mockPaymentRequests.cancel.mockResolvedValue({ status: 'CANCELLED' });
+
+      const result = await service.cancelPaymentLink('123456', 'Expired');
+      expect(mockPaymentRequests.cancel).toHaveBeenCalledWith(
+        123456,
+        'Expired',
+      );
+      expect(result.status).toBe('CANCELLED');
+    });
+
+    it('delegates getPaymentLink with number and string orderCode', async () => {
+      mockPaymentRequests.get.mockResolvedValue({ status: 'PAID' });
+
+      const result = await service.getPaymentLink('999999');
+      expect(mockPaymentRequests.get).toHaveBeenCalledWith(999999);
+      expect(result.status).toBe('PAID');
+    });
+  });
 });

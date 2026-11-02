@@ -116,6 +116,7 @@ describe('PaymentsService', () => {
         amount: 550000,
         cancelUrl: 'http://localhost:5173/cancel',
         returnUrl: 'http://localhost:5173/return',
+        expiredAt: expect.any(Number),
       }),
     );
 
