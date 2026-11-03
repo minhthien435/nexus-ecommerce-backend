@@ -17,6 +17,7 @@ import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
+import { QuerySellerOrdersDto } from '../dtos/query-seller-orders.dto.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
@@ -502,6 +503,102 @@ export class OrderService {
   }
 
   /**
+   * Lấy danh sách đơn hàng thuộc đúng tài khoản người bán đang đăng nhập.
+   */
+  async getSellerOrders(sellerId: string, query: QuerySellerOrdersDto) {
+    const normalizedSellerId = sellerId.toLowerCase();
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 10));
+    const skip = (page - 1) * limit;
+
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.items', 'items')
+      .where('order.sellerId = :sellerId', {
+        sellerId: normalizedSellerId,
+      });
+
+    if (query.status) {
+      qb.andWhere('order.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('order.createdAt', 'DESC')
+      .addOrderBy('order.id', 'DESC')
+      .skip(skip)
+      .take(limit);
+
+    const [orders, total] = await qb.getManyAndCount();
+    await this.enrichOrdersWithImages(orders);
+
+    return {
+      data: orders.map((order) => this.toSellerOrderSummary(order)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
+  /**
+   * Xem chi tiết đơn hàng của người bán. Ownership nằm ngay trong truy vấn để
+   * không làm lộ sự tồn tại của đơn hàng thuộc shop khác.
+   */
+  async getSellerOrderDetail(sellerId: string, orderId: string) {
+    const order = await this.orderRepo.findOne({
+      where: {
+        id: orderId,
+        sellerId: sellerId.toLowerCase(),
+      },
+      relations: { items: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
+    }
+
+    await this.enrichOrdersWithImages([order]);
+    const history = await this.orderHistoryRepo.find({
+      where: { orderId: order.id },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+
+    return {
+      id: order.id,
+      orderCode: order.orderNumber,
+      status: order.status,
+      subtotal: order.subtotal,
+      shippingFee: order.shippingFee,
+      discountAmount: order.discountAmount,
+      tax: order.tax,
+      totalAmount: order.total,
+      currency: order.currency,
+      shippingAddress: order.shippingAddressSnapshot,
+      items: (order.items ?? []).map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        skuId: item.skuId,
+        productNameSnapshot: item.productNameSnapshot,
+        skuAttributesSnapshot: item.skuAttributesSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        discountAmount: item.discountAmount,
+        lineTotal: item.lineTotal,
+        imageUrl: item.imageUrl ?? null,
+      })),
+      history: history.map((entry) => ({
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        reason: entry.reason,
+        createdAt: entry.createdAt,
+      })),
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    };
+  }
+
+  /**
    * Xem chi tiết một đơn hàng theo ID
    */
   async getOrderById(userId: string, orderId: string) {
@@ -708,5 +805,39 @@ export class OrderService {
         }
       }
     }
+  }
+
+  private toSellerOrderSummary(order: OrderEntity) {
+    const shippingAddress = order.shippingAddressSnapshot ?? {};
+    const items = order.items ?? [];
+
+    return {
+      id: order.id,
+      orderCode: order.orderNumber,
+      status: order.status,
+      subtotal: order.subtotal,
+      shippingFee: order.shippingFee,
+      totalAmount: order.total,
+      currency: order.currency,
+      buyerName: this.snapshotString(shippingAddress, 'recipientName'),
+      buyerPhone: this.snapshotString(shippingAddress, 'recipientPhone'),
+      itemCount: items.reduce((total, item) => total + item.quantity, 0),
+      itemsSummary: items.map((item) => ({
+        productName: item.productNameSnapshot,
+        skuAttributes: item.skuAttributesSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        imageUrl: item.imageUrl ?? null,
+      })),
+      createdAt: order.createdAt,
+    };
+  }
+
+  private snapshotString(
+    snapshot: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = snapshot[key];
+    return typeof value === 'string' ? value : null;
   }
 }
