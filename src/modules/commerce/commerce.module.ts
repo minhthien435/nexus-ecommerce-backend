@@ -7,6 +7,7 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { UserAddressEntity } from '../identity/users/entities/user-address.entity.js';
 import { CartController } from './controllers/cart.controller.js';
 import { OrderController } from './controllers/order.controller.js';
+import { SellerOrderController } from './controllers/seller-order.controller.js';
 import { PaymentsController } from './controllers/payments.controller.js';
 import { CartEntity } from './domain/entities/cart.entity.js';
 import { CartItemEntity } from './domain/entities/cart-item.entity.js';
@@ -52,7 +53,12 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     FulfillmentModule,
     BullModule.registerQueue({ name: ORDER_EXPIRY_QUEUE }),
   ],
-  controllers: [CartController, OrderController, PaymentsController],
+  controllers: [
+    CartController,
+    OrderController,
+    SellerOrderController,
+    PaymentsController,
+  ],
   providers: [
     CartService,
     CartWriteService,
