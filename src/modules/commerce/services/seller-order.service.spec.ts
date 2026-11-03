@@ -25,7 +25,7 @@ function setup() {
     transaction: vi.fn(
       async (_mode: unknown, callback: (manager: unknown) => unknown) => {
         return callback({
-          getRepository: (entity: unknown) => {
+          getRepository: (_entity: unknown) => {
             return {
               findOne: orderRepo.findOne,
             };
