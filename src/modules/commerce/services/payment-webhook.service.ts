@@ -4,11 +4,12 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
-import type Stripe from 'stripe';
+import type { Webhook, WebhookData } from '@payos/node';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
@@ -18,8 +19,7 @@ import {
   ORDER_EXPIRY_QUEUE,
   type OrderExpiryJobPayload,
 } from '../order-expiry.constants.js';
-import { toStripeAmount } from '../utils/stripe-amount.util.js';
-import { StripeClientService } from './stripe-client.service.js';
+import { PayosClientService } from './payos-client.service.js';
 
 export interface WebhookProcessingResult {
   received: boolean;
@@ -32,197 +32,181 @@ export class PaymentWebhookService {
 
   constructor(
     private readonly dataSource: DataSource,
-    private readonly stripeClientService: StripeClientService,
+    private readonly payosClientService: PayosClientService,
     @Optional()
     @InjectQueue(ORDER_EXPIRY_QUEUE)
     private readonly expiryQueue?: Queue<OrderExpiryJobPayload>,
   ) {}
 
-  async handleWebhook(
-    rawBody: Buffer | undefined,
-    signature: string | undefined,
-  ): Promise<WebhookProcessingResult> {
-    // 1. Verify signature and construct verified event
-    const event = this.stripeClientService.constructWebhookEvent(
-      rawBody,
-      signature,
-    );
+  async handlePayosWebhook(body: Webhook): Promise<WebhookProcessingResult> {
+    if (!this.payosClientService) {
+      throw new ServiceUnavailableException('PayOS service is not available');
+    }
+
+    if (!body) {
+      throw new BadRequestException('Missing PayOS webhook payload');
+    }
+
+    // 1. Verify webhook signature using PayOS SDK
+    let verifiedData: WebhookData;
+    try {
+      verifiedData = await this.payosClientService.verifyWebhook(body);
+    } catch (verifyError) {
+      const errorMsg =
+        (verifyError as Error)?.message || 'Signature verification failed';
+      this.logger.warn(`Failed to verify PayOS webhook signature: ${errorMsg}`);
+      throw new BadRequestException(
+        `Invalid PayOS webhook signature: ${errorMsg}`,
+      );
+    }
+
+    if (!verifiedData || !verifiedData.orderCode) {
+      throw new BadRequestException(
+        'PayOS webhook missing orderCode in verified data',
+      );
+    }
+
+    // 2. Formulate unique event ID for idempotency deduplication
+    const providerEventId = verifiedData.reference
+      ? `payos_${verifiedData.reference}`
+      : `payos_${verifiedData.orderCode}_${verifiedData.paymentLinkId || 'default'}`;
 
     let orderIdToCancelExpiry: string | null = null;
 
-    // 2. Process inside a database transaction with idempotency
     try {
+      // 3. Process inside a database transaction with idempotency
       const result = await this.dataSource.transaction(async (manager) => {
-        // Pre-check for duplicate event already committed
-        const existingCallback = await manager.findOne(PaymentCallbackEntity, {
-          where: { providerEventId: event.id },
+        // Pre-check within transaction for duplicate callback
+        const inTxExisting = await manager.findOne(PaymentCallbackEntity, {
+          where: { providerEventId },
         });
-
-        if (existingCallback) {
+        if (inTxExisting) {
           this.logger.warn(
-            `Duplicate Stripe webhook event '${event.id}' (${event.type}) already processed at ${existingCallback.processedAt.toISOString()}. Skipping side effects.`,
+            `Duplicate PayOS webhook event '${providerEventId}' already processed at ${inTxExisting.processedAt.toISOString()}. Skipping side effects.`,
           );
           return { received: true, duplicate: true };
         }
 
-        // 3. Process business event types
-        let reconciliationRequired = false;
-        let reconciliationReason: string | null = null;
-        let reconciliationOrderId: string | null = null;
-        let reconciliationOrderStatus: string | null = null;
+        // Locate PaymentEntity by orderCode (stored in providerPaymentId)
+        const payment = await manager.findOne(PaymentEntity, {
+          where: {
+            provider: 'PAYOS',
+            providerPaymentId: String(verifiedData.orderCode),
+          },
+        });
 
-        if (event.type === 'payment_intent.succeeded') {
-          const pi = event.data.object as Stripe.PaymentIntent;
-
-          const payment = await manager.findOne(PaymentEntity, {
-            where: { providerPaymentId: pi.id },
-            lock: { mode: 'pessimistic_write' },
-          });
-
-          if (!payment) {
-            throw new NotFoundException(
-              `Payment record for provider_payment_id '${pi.id}' not found`,
-            );
-          }
-
-          const order = await manager.findOne(OrderEntity, {
-            where: { id: payment.orderId! },
-            lock: { mode: 'pessimistic_write' },
-          });
-
-          if (!order) {
-            throw new NotFoundException(
-              `Order '${payment.orderId}' for payment '${payment.id}' not found`,
-            );
-          }
-
-          // Metadata consistency check
-          if (pi.metadata?.orderId && pi.metadata.orderId !== order.id) {
-            throw new BadRequestException(
-              `PaymentIntent metadata.orderId ('${pi.metadata.orderId}') does not match order id ('${order.id}')`,
-            );
-          }
-
-          // Amount and currency verification using authoritative Stripe amount rules
-          const expectedStripeAmount = toStripeAmount(
-            order.total,
-            order.currency,
-          );
-          const receivedAmount = pi.amount_received ?? pi.amount;
-
-          if (receivedAmount !== expectedStripeAmount) {
-            throw new BadRequestException(
-              `Received amount (${receivedAmount}) does not match expected order amount (${expectedStripeAmount})`,
-            );
-          }
-
+        if (!payment) {
           if (
-            pi.currency.toLowerCase().trim() !==
-            order.currency.toLowerCase().trim()
+            verifiedData.orderCode === 123 ||
+            verifiedData.description?.includes('VQRIO123')
           ) {
-            throw new BadRequestException(
-              `Received currency ('${pi.currency}') does not match order currency ('${order.currency}')`,
+            this.logger.log(
+              'Received PayOS webhook validation ping (test orderCode 123). Acknowledging 200 OK.',
             );
+            return { received: true };
           }
 
-          // Order state transition
-          if (order.status === 'PENDING_PAYMENT') {
+          this.logger.error(
+            `Payment record not found for PayOS orderCode ${verifiedData.orderCode}`,
+          );
+          throw new NotFoundException(
+            `Payment record for orderCode '${verifiedData.orderCode}' not found`,
+          );
+        }
+
+        // Locate OrderEntity
+        const order = await manager.findOne(OrderEntity, {
+          where: { id: payment.orderId! },
+        });
+
+        if (!order) {
+          this.logger.error(
+            `Order with id '${payment.orderId}' not found for PayOS payment ${payment.id}`,
+          );
+          throw new NotFoundException(
+            `Order with id '${payment.orderId}' not found`,
+          );
+        }
+
+        // Authoritative amount validation directly against order.total
+        const expectedAmount = Math.round(Number(order.total));
+        if (Number(verifiedData.amount) !== expectedAmount) {
+          this.logger.error(
+            `CRITICAL_PAYMENT_MISMATCH: RECONCILIATION_REQUIRED: PayOS payment amount (${verifiedData.amount}) does not match order ${order.id} expected total (${expectedAmount})`,
+          );
+          throw new BadRequestException(
+            `PayOS payment amount does not match authoritative order total: expected ${expectedAmount}, received ${verifiedData.amount}`,
+          );
+        }
+
+        // Process status based on PayOS return code (code "00" = SUCCESS)
+        const isSuccess = verifiedData.code === '00' || body.code === '00';
+
+        if (isSuccess) {
+          if (order.status === 'PAID') {
+            this.logger.log(
+              `Order ${order.id} is already in PAID state. Acknowledging safely.`,
+            );
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
+            payment.status = 'SUCCEEDED';
+            await manager.save(payment);
+          } else if (
+            ['CANCELLED', 'REFUNDED', 'EXPIRED'].includes(order.status)
+          ) {
+            this.logger.error(
+              `CRITICAL_PAYMENT_MISMATCH: RECONCILIATION_REQUIRED: PayOS payment (${verifiedData.orderCode}) succeeded for order ${order.id} in terminal/ineligible state '${order.status}'. Order remains '${order.status}'. Manual reconciliation or refund required.`,
+            );
+            payment.status = 'SUCCEEDED';
+            payment.failureReason = `PayOS payment arrived while order is in state ${order.status}`;
+            await manager.save(payment);
+          } else {
             const previousStatus = order.status;
             order.status = 'PAID';
             await manager.save(order);
 
-            payment.status = 'SUCCEEDED';
-            await manager.save(payment);
+            await manager.delete(CartItemEntity, {
+              reservedOrderId: order.id,
+            });
 
             const statusHistory = manager.create(OrderStatusHistoryEntity, {
               orderId: order.id,
               fromStatus: previousStatus,
               toStatus: 'PAID',
-              reason: `Stripe payment succeeded (${pi.id})`,
+              reason: `PayOS payment confirmed via webhook (${verifiedData.orderCode})`,
               changedBy: null,
             });
             await manager.save(statusHistory);
-            await manager.delete(CartItemEntity, {
-              reservedOrderId: order.id,
-            });
 
-            this.logger.log(
-              `Order ${order.id} transitioned to PAID via Stripe event ${event.id}`,
-            );
-            orderIdToCancelExpiry = order.id;
-          } else if (order.status === 'PAID') {
-            if (payment.status !== 'SUCCEEDED') {
-              payment.status = 'SUCCEEDED';
-              await manager.save(payment);
-            }
-            await manager.delete(CartItemEntity, {
-              reservedOrderId: order.id,
-            });
-          } else {
-            reconciliationRequired = true;
-            reconciliationOrderId = order.id;
-            reconciliationOrderStatus = order.status;
-            reconciliationReason = `RECONCILIATION_REQUIRED: Stripe payment (${pi.id}) succeeded for order ${order.id} in terminal/ineligible state '${order.status}'. Order remains '${order.status}'. Manual reconciliation or refund required.`;
-            this.logger.error(
-              `CRITICAL_PAYMENT_MISMATCH: ${reconciliationReason}`,
-            );
-
-            if (payment.status !== 'SUCCEEDED') {
-              payment.status = 'SUCCEEDED';
-            }
-            payment.failureReason = reconciliationReason;
+            payment.status = 'SUCCEEDED';
             await manager.save(payment);
 
-            const statusHistory = manager.create(OrderStatusHistoryEntity, {
-              orderId: order.id,
-              fromStatus: order.status,
-              toStatus: order.status,
-              reason: reconciliationReason,
-              changedBy: null,
-            });
-            await manager.save(statusHistory);
-          }
-        } else if (event.type === 'payment_intent.payment_failed') {
-          const pi = event.data.object as Stripe.PaymentIntent;
-
-          const payment = await manager.findOne(PaymentEntity, {
-            where: { providerPaymentId: pi.id },
-            lock: { mode: 'pessimistic_write' },
-          });
-
-          if (payment) {
-            // Do not allow a stale failure event to overwrite an already-succeeded payment
-            if (payment.status !== 'SUCCEEDED') {
-              payment.status = 'FAILED';
-              payment.failureReason =
-                pi.last_payment_error?.message ?? 'Payment failed';
-              await manager.save(payment);
-            }
-          } else {
-            this.logger.warn(
-              `Received payment_intent.payment_failed for unknown providerPaymentId: ${pi.id}`,
+            this.logger.log(
+              `Order ${order.id} transitioned to PAID via PayOS event ${providerEventId}`,
             );
+
+            orderIdToCancelExpiry = order.id;
           }
         } else {
-          this.logger.log(`Ignored unhandled Stripe event type: ${event.type}`);
+          // PayOS payment failure / cancellation
+          if (payment.status !== 'SUCCEEDED') {
+            payment.status = 'FAILED';
+            payment.failureReason = `PayOS code ${verifiedData.code}: ${verifiedData.desc || 'Payment failed'}`;
+            await manager.save(payment);
+          }
         }
 
-        // 4. Save callback record in the same atomic transaction
+        // Record callback for durable idempotency
         const callback = manager.create(PaymentCallbackEntity, {
-          provider: 'STRIPE',
-          providerEventId: event.id,
+          providerEventId,
+          provider: 'PAYOS',
           maskedPayload: {
-            id: event.id,
-            type: event.type,
-            created: event.created,
-            ...(reconciliationRequired
-              ? {
-                  reconciliationRequired: true,
-                  reconciliationReason,
-                  orderId: reconciliationOrderId,
-                  orderStatus: reconciliationOrderStatus,
-                }
-              : {}),
+            orderCode: verifiedData.orderCode,
+            paymentLinkId: verifiedData.paymentLinkId,
+            reference: verifiedData.reference,
+            code: verifiedData.code,
+            amount: verifiedData.amount,
           },
           processedAt: new Date(),
         });
@@ -231,7 +215,7 @@ export class PaymentWebhookService {
         return { received: true };
       });
 
-      // 5. Post-commit side effects: Cancel order expiry BullMQ job if order transitioned to PAID
+      // 4. Post-commit side effects: Cancel BullMQ order expiry job if order transitioned to PAID
       if (orderIdToCancelExpiry) {
         await this.cancelOrderExpiryJob(orderIdToCancelExpiry);
       }
@@ -243,20 +227,19 @@ export class PaymentWebhookService {
         constraint?: string;
         message?: string;
       };
-      // Check PostgreSQL unique-violation code 23505 specifically for provider_event_id
       if (
         pgError?.code === '23505' &&
         (pgError?.constraint === 'payment_callbacks_provider_event_id_key' ||
           pgError?.message?.includes('payment_callbacks_provider_event_id_key'))
       ) {
         this.logger.warn(
-          `Concurrent duplicate Stripe webhook event '${event.id}' detected during callback insert. Acknowledging safely.`,
+          `Concurrent duplicate PayOS webhook event '${providerEventId}' detected during callback insert. Acknowledging safely.`,
         );
         return { received: true, duplicate: true };
       }
 
       this.logger.error(
-        `Failed to process Stripe webhook event '${event.id}' (${event.type}): ${(error as Error).message}`,
+        `Failed to process PayOS webhook event '${providerEventId}': ${(error as Error).message}`,
         (error as Error).stack,
       );
       throw error;
@@ -271,9 +254,7 @@ export class PaymentWebhookService {
       return;
     }
 
-    const normalizedOrderId = orderId.toLowerCase();
-    const jobId = `order-expiry-${normalizedOrderId}`;
-
+    const jobId = `order-expiry-${orderId.toLowerCase()}`;
     try {
       const job = await this.expiryQueue.getJob(jobId);
       if (job) {
@@ -286,11 +267,9 @@ export class PaymentWebhookService {
           `Order expiry job '${jobId}' not found for order ${orderId}; it may have already completed or not been scheduled`,
         );
       }
-    } catch (queueError) {
+    } catch (jobError) {
       this.logger.warn(
-        `Failed to cancel order expiry job '${jobId}' for order ${orderId}: ${(queueError as Error).message}. ` +
-          `Order status is already committed as PAID; OrderExpiryProcessor will safely skip expiry.`,
-        (queueError as Error).stack,
+        `Failed to cancel order expiry job '${jobId}' for order ${orderId}: ${(jobError as Error).message}. Order status is already committed as PAID; OrderExpiryProcessor will safely skip expiry.`,
       );
     }
   }

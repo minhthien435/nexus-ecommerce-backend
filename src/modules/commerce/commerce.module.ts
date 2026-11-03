@@ -7,6 +7,7 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { UserAddressEntity } from '../identity/users/entities/user-address.entity.js';
 import { CartController } from './controllers/cart.controller.js';
 import { OrderController } from './controllers/order.controller.js';
+import { SellerOrderController } from './controllers/seller-order.controller.js';
 import { PaymentsController } from './controllers/payments.controller.js';
 import { CartEntity } from './domain/entities/cart.entity.js';
 import { CartItemEntity } from './domain/entities/cart-item.entity.js';
@@ -23,7 +24,7 @@ import { OrderService } from './services/order.service.js';
 import { OrderStateMachineService } from './services/order-state-machine.service.js';
 import { PaymentsService } from './services/payments.service.js';
 import { PaymentWebhookService } from './services/payment-webhook.service.js';
-import { StripeClientService } from './services/stripe-client.service.js';
+import { PayosClientService } from './services/payos-client.service.js';
 import { CartMergeApi } from './cart-merge.api.js';
 import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
 import { OrderExpirySchedulerApi } from './order-expiry-scheduler.api.js';
@@ -52,7 +53,12 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     FulfillmentModule,
     BullModule.registerQueue({ name: ORDER_EXPIRY_QUEUE }),
   ],
-  controllers: [CartController, OrderController, PaymentsController],
+  controllers: [
+    CartController,
+    OrderController,
+    SellerOrderController,
+    PaymentsController,
+  ],
   providers: [
     CartService,
     CartWriteService,
@@ -60,7 +66,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderStateMachineService,
     OrderExpiryOutboxService,
     OrderExpiryProcessor,
-    StripeClientService,
+    PayosClientService,
     PaymentsService,
     PaymentWebhookService,
     { provide: CartMergeApi, useExisting: CartWriteService },
@@ -81,7 +87,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderStateMachineService,
     PaymentsService,
     PaymentWebhookService,
-    StripeClientService,
+    PayosClientService,
   ],
 })
 export class CommerceModule {}

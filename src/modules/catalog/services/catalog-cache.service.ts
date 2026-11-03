@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Redis } from 'ioredis';
 
 const SEARCH_PREFIX = 'catalog:search:v3:';
-const DETAIL_PREFIX = 'catalog:detail:v2:';
+const DETAIL_PREFIX = 'catalog:detail:v3:';
 const CACHE_TTL_SECONDS = 300;
 
 @Injectable()

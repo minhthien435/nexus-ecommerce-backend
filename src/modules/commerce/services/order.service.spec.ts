@@ -48,7 +48,7 @@ function setup() {
     getOne: vi.fn().mockResolvedValue({
       id: 'session-1',
       status: 'INITIATED',
-      paymentMethod: 'STRIPE',
+      paymentMethod: 'PAYOS',
     }),
   };
 
@@ -162,6 +162,8 @@ function setup() {
       if (entity.name === 'OrderStatusHistoryEntity') return orderHistoryRepo;
       if (entity.name === 'CheckoutSessionEntity')
         return transactionCheckoutSessionRepo;
+      if (entity.name === 'PaymentEntity')
+        return { find: vi.fn().mockResolvedValue([]) };
       throw new Error(`Unexpected repository: ${entity.name}`);
     }),
   };
@@ -314,7 +316,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     ]);
 
     const result = await s.service.checkout(userId, {
-      paymentMethod: 'STRIPE',
+      paymentMethod: 'PAYOS',
     });
 
     // Check checkout session totals:
@@ -335,7 +337,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     expect(orderSeller2!.total).toBe('600000.00');
     expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
 
-    // Stripe rows remain in the cart and are mapped to their exact seller order.
+    // PayOS rows remain in the cart and are mapped to their exact seller order.
     expect(s.manager.delete).not.toHaveBeenCalled();
     expect(s.manager.update).toHaveBeenCalledTimes(2);
     const cartReservations = s.manager.update.mock.calls.map((call) => ({
@@ -586,7 +588,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     );
     expect(candidatesQb.andWhere).toHaveBeenCalledWith(
       'checkoutSession.paymentMethod = :paymentMethod',
-      { paymentMethod: 'STRIPE' },
+      { paymentMethod: 'PAYOS' },
     );
     expect(candidatesQb.andWhere).toHaveBeenCalledWith(
       'order.status = :pendingStatus',
@@ -638,7 +640,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     });
   });
 
-  it('reconciles overdue Stripe orders before applying the buyer list status filter', async () => {
+  it('reconciles overdue PayOS orders before applying the buyer list status filter', async () => {
     const s = setup();
     const candidatesQb = candidateQueryBuilder(['order-1']);
     const listQb = {
@@ -877,8 +879,8 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
   it.each([
     ['COD', 'INITIATED'],
-    ['STRIPE', 'COMPLETED'],
-    ['STRIPE', 'CANCELLED'],
+    ['PAYOS', 'COMPLETED'],
+    ['PAYOS', 'CANCELLED'],
   ])(
     'rejects a %s session in %s before locking sibling orders',
     async (paymentMethod, status) => {
@@ -1057,6 +1059,7 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     },
     createdAt: new Date('2026-11-03T08:30:00Z'),
     updatedAt: new Date('2026-11-03T08:45:00Z'),
+    checkoutSession: { paymentMethod: 'PAYOS' },
     items: [
       {
         id: '77777777-7777-4777-8777-777777777777',
@@ -1111,11 +1114,13 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
       page: 2,
       limit: 10,
       total: 11,
+      totalItems: 11,
       totalPages: 2,
     });
     expect(result.data[0]).toMatchObject({
       orderCode: sellerOrder.orderNumber,
       totalAmount: '580000.00',
+      paymentMethod: 'PAYOS',
       buyerName: 'Nguyen Van A',
       buyerPhone: '0987654321',
       itemCount: 2,
@@ -1152,20 +1157,21 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
       s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
     ).query = vi.fn().mockResolvedValue([]);
 
-    const result = await s.service.getSellerOrderDetail(
+    const result = await s.service.getSellerOrderById(
       seller1.toUpperCase(),
       sellerOrder.id,
     );
 
     expect(s.orderRepo.findOne).toHaveBeenCalledWith({
       where: { id: sellerOrder.id, sellerId: seller1 },
-      relations: { items: true },
+      relations: { items: true, checkoutSession: true },
     });
     expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
       where: { orderId: sellerOrder.id },
       order: { createdAt: 'ASC', id: 'ASC' },
     });
     expect(result.shippingAddress).toEqual({ recipientName: 'Nguyen Van A' });
+    expect(result.paymentMethod).toBe('PAYOS');
     expect(result.items[0].imageUrl).toBeNull();
     expect(result.history).toEqual([
       {
@@ -1184,7 +1190,7 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     s.orderRepo.findOne.mockResolvedValue(null);
 
     await expect(
-      s.service.getSellerOrderDetail(seller2, sellerOrder.id),
+      s.service.getSellerOrderById(seller2, sellerOrder.id),
     ).rejects.toThrow(NotFoundException);
     expect(s.orderHistoryRepo.find).not.toHaveBeenCalled();
   });

@@ -11,16 +11,16 @@ Commit triển khai: `a5800c5f48d316afb335ee2e8926d77c472f1bbf`.
 | Thành phần       | Đường dẫn                                                             |      Dòng | Vai trò                                                                                   |
 | ---------------- | --------------------------------------------------------------------- | --------: | ----------------------------------------------------------------------------------------- |
 | Query DTO        | `src/modules/commerce/dtos/query-seller-orders.dto.ts`                |      5–31 | Khai báo trạng thái Seller được phép lọc; kiểm tra `page`, `limit`, `status`.             |
-| List service     | `src/modules/commerce/services/order.service.ts`                      |   508–542 | Lấy danh sách đơn thuộc Seller, lọc trạng thái, phân trang, làm giàu ảnh và trả response. |
-| Detail service   | `src/modules/commerce/services/order.service.ts`                      |   548–599 | Lấy một đơn thuộc Seller, đọc items/history, làm giàu ảnh và tạo response an toàn.        |
-| Image enrichment | `src/modules/commerce/services/order.service.ts`                      |   777–808 | Lấy ảnh ưu tiên từ `catalog.product_images` theo `productId`.                             |
-| List mapper      | `src/modules/commerce/services/order.service.ts`                      |   810–834 | Chuyển `OrderEntity` thành summary contract cho Seller Portal.                            |
-| Snapshot helper  | `src/modules/commerce/services/order.service.ts`                      |   836–842 | Đọc chuỗi an toàn từ snapshot địa chỉ.                                                    |
+| List service     | `src/modules/commerce/services/order.service.ts`                      |   518–554 | Lấy danh sách đơn thuộc Seller, lọc trạng thái, phân trang, làm giàu ảnh và trả response. |
+| Detail service   | `src/modules/commerce/services/order.service.ts`                      |   560–612 | Lấy một đơn thuộc Seller, đọc items/history, làm giàu ảnh và tạo response an toàn.        |
+| Image enrichment | `src/modules/commerce/services/order.service.ts`                      |   820–851 | Lấy ảnh ưu tiên từ `catalog.product_images` theo `productId`.                             |
+| List mapper      | `src/modules/commerce/services/order.service.ts`                      |   853–878 | Chuyển `OrderEntity` thành summary contract cho Seller Portal.                            |
+| Snapshot helper  | `src/modules/commerce/services/order.service.ts`                      |   880–886 | Đọc chuỗi an toàn từ snapshot địa chỉ.                                                    |
 | Order ownership  | `src/modules/commerce/domain/entities/order.entity.ts`                |     41–42 | `sellerId` là khóa sở hữu đơn hàng.                                                       |
 | Address snapshot | `src/modules/commerce/domain/entities/order.entity.ts`                |     81–82 | Địa chỉ giao hàng được cố định tại thời điểm checkout.                                    |
 | Order items      | `src/modules/commerce/domain/entities/order-item.entity.ts`           |     13–48 | Snapshot tên, biến thể SKU, giá, số lượng và thành tiền.                                  |
 | Status history   | `src/modules/commerce/domain/entities/order-status-history.entity.ts` |     10–30 | Nguồn lịch sử chuyển trạng thái đơn.                                                      |
-| Unit tests       | `src/modules/commerce/services/order.service.spec.ts`                 | 1040–1204 | Kiểm thử list, detail, ownership, mapping và DTO validation.                              |
+| Unit tests       | `src/modules/commerce/services/order.service.spec.ts`                 | 1042–1209 | Kiểm thử list, detail, ownership, mapping và DTO validation.                              |
 
 ## 3. Điểm bắt đầu chung
 
@@ -28,10 +28,10 @@ Sau khi NEX-FAST-01 được nối vào, controller sẽ lấy `sellerId` từ a
 
 ```ts
 orderService.getSellerOrders(sellerId, query);
-orderService.getSellerOrderDetail(sellerId, orderId);
+orderService.getSellerOrderById(sellerId, orderId);
 ```
 
-Service không tin tưởng `sellerId` từ query/body. Giá trị này phải đến từ authentication context. Trong service, ID được chuyển về chữ thường trước khi truy vấn tại `order.service.ts:509` và `order.service.ts:552`.
+Service không tin tưởng `sellerId` từ query/body. Giá trị này phải đến từ authentication context. Trong service, ID được chuyển về chữ thường trước khi truy vấn tại `order.service.ts:519` và `order.service.ts:564`.
 
 ## 4. Luồng A — Lấy danh sách đơn hàng của Seller
 
@@ -54,7 +54,7 @@ PAID | PROCESSING | SHIPPED | DELIVERED | CANCELLED
 
 ### 4.2. Chuẩn hóa phân trang
 
-Tại `order.service.ts:509–512`:
+Tại `order.service.ts:519–522`:
 
 1. Chuyển `sellerId` về lowercase.
 2. Ép `page` nhỏ nhất là `1`.
@@ -65,7 +65,7 @@ DTO là hàng rào đầu tiên; phép ép trong service là hàng rào phòng v
 
 ### 4.3. Truy vấn ownership và items
 
-Tại `order.service.ts:514–519`, service tạo query cho bảng `commerce.orders`, join `order.items`, sau đó áp điều kiện sở hữu:
+Tại `order.service.ts:524–530`, service tạo query cho bảng `commerce.orders`, join `order.items` và `checkoutSession`, sau đó áp điều kiện sở hữu:
 
 ```sql
 WHERE order.seller_id = :sellerId
@@ -73,7 +73,7 @@ WHERE order.seller_id = :sellerId
 
 Đây là điểm bảo mật quan trọng nhất: đơn của Seller khác bị loại ngay trong database query, không được tải lên rồi mới lọc trong bộ nhớ.
 
-Nếu có `status`, điều kiện được bổ sung tại `order.service.ts:521–523`:
+Nếu có `status`, điều kiện được bổ sung tại `order.service.ts:532–534`:
 
 ```sql
 AND order.status = :status
@@ -81,7 +81,7 @@ AND order.status = :status
 
 ### 4.4. Sắp xếp và phân trang
 
-Tại `order.service.ts:525–530`:
+Tại `order.service.ts:536–541`:
 
 1. Sắp xếp `createdAt DESC` để đơn mới nhất đứng trước.
 2. Sắp xếp phụ `id DESC` để thứ tự ổn định khi nhiều đơn có cùng thời gian tạo.
@@ -90,34 +90,35 @@ Tại `order.service.ts:525–530`:
 
 ### 4.5. Làm giàu ảnh sản phẩm
 
-`enrichOrdersWithImages()` tại `order.service.ts:777–808` thực hiện:
+`enrichOrdersWithImages()` tại `order.service.ts:820–851` thực hiện:
 
 1. Thu thập các `productId` duy nhất từ mọi item.
-2. Query `catalog.product_images` tại `order.service.ts:790–796`.
+2. Query `catalog.product_images` tại `order.service.ts:833–839`.
 3. Với mỗi sản phẩm, chọn ảnh primary trước, sau đó theo `sort_order` và `id`.
 4. Gán URL vào thuộc tính runtime `item.imageUrl` và `item.primaryImageUrl`.
 5. Nếu không tìm thấy ảnh, mapper trả `null`.
 
 ### 4.6. Mapping response danh sách
 
-`toSellerOrderSummary()` tại `order.service.ts:810–834` chuyển dữ liệu persistence thành contract riêng:
+`toSellerOrderSummary()` tại `order.service.ts:853–878` chuyển dữ liệu persistence thành contract riêng:
 
-| Response       | Nguồn                                                  |
-| -------------- | ------------------------------------------------------ |
-| `id`           | `order.id`                                             |
-| `orderCode`    | `order.orderNumber`                                    |
-| `status`       | `order.status`                                         |
-| `subtotal`     | `order.subtotal`                                       |
-| `shippingFee`  | `order.shippingFee`                                    |
-| `totalAmount`  | `order.total`                                          |
-| `currency`     | `order.currency`                                       |
-| `buyerName`    | `shippingAddressSnapshot.recipientName`                |
-| `buyerPhone`   | `shippingAddressSnapshot.recipientPhone`               |
-| `itemCount`    | Tổng `quantity` của mọi dòng SKU                       |
-| `itemsSummary` | Snapshot tên, thuộc tính SKU, đơn giá, số lượng và ảnh |
-| `createdAt`    | `order.createdAt`                                      |
+| Response        | Nguồn                                                  |
+| --------------- | ------------------------------------------------------ |
+| `id`            | `order.id`                                             |
+| `orderCode`     | `order.orderNumber`                                    |
+| `status`        | `order.status`                                         |
+| `subtotal`      | `order.subtotal`                                       |
+| `shippingFee`   | `order.shippingFee`                                    |
+| `totalAmount`   | `order.total`                                          |
+| `currency`      | `order.currency`                                       |
+| `paymentMethod` | `order.checkoutSession.paymentMethod`                  |
+| `buyerName`     | `shippingAddressSnapshot.recipientName`                |
+| `buyerPhone`    | `shippingAddressSnapshot.recipientPhone`               |
+| `itemCount`     | Tổng `quantity` của mọi dòng SKU                       |
+| `itemsSummary`  | Snapshot tên, thuộc tính SKU, đơn giá, số lượng và ảnh |
+| `createdAt`     | `order.createdAt`                                      |
 
-`buyerName` và `buyerPhone` thực chất dùng dữ liệu người nhận tại thời điểm checkout. Helper `snapshotString()` tại `order.service.ts:836–842` trả `null` nếu snapshot thiếu trường hoặc giá trị không phải chuỗi.
+`buyerName` và `buyerPhone` thực chất dùng dữ liệu người nhận tại thời điểm checkout. Helper `snapshotString()` tại `order.service.ts:880–886` trả `null` nếu snapshot thiếu trường hoặc giá trị không phải chuỗi.
 
 ### 4.7. Điểm kết thúc
 
@@ -134,6 +135,7 @@ Service trả:
       "shippingFee": "30000.00",
       "totalAmount": "580000.00",
       "currency": "VND",
+      "paymentMethod": "PAYOS",
       "buyerName": "Nguyen Van A",
       "buyerPhone": "0987654321",
       "itemCount": 2,
@@ -149,7 +151,7 @@ Service trả:
 }
 ```
 
-`totalPages` được tính tại `order.service.ts:535–539` và có giá trị tối thiểu `1`, đồng bộ với convention Buyer Orders hiện tại.
+`totalPages` được tính tại `order.service.ts:546–551` và có giá trị tối thiểu `1`, đồng bộ với convention Buyer Orders hiện tại.
 
 ### 4.8. Sơ đồ luồng danh sách
 
@@ -182,11 +184,11 @@ sequenceDiagram
 - `sellerId`: lấy từ access token.
 - `orderId`: UUID lấy từ route parameter và cần được controller kiểm tra bằng `ParseUUIDPipe` khi NEX-FAST-01 được triển khai.
 
-Điểm gọi service là `getSellerOrderDetail()` tại `order.service.ts:548`.
+Điểm gọi service là `getSellerOrderById()` tại `order.service.ts:560`.
 
 ### 5.2. Kiểm tra quyền sở hữu ngay trong truy vấn
 
-Tại `order.service.ts:549–555`, điều kiện tìm đơn gồm đồng thời:
+Tại `order.service.ts:561–567`, điều kiện tìm đơn gồm đồng thời:
 
 ```ts
 where: {
@@ -199,7 +201,7 @@ Query chỉ thành công khi cả ID đơn và chủ sở hữu đều đúng. S
 
 ### 5.3. Luồng lỗi không tồn tại hoặc không thuộc quyền
 
-Nếu repository trả `null`, service ném `NotFoundException` tại `order.service.ts:557–559`.
+Nếu repository trả `null`, service ném `NotFoundException` tại `order.service.ts:569–571`.
 
 Cả hai trường hợp sau đều có cùng kết quả `404`:
 
@@ -212,29 +214,30 @@ Thiết kế này không xác nhận sự tồn tại của tài nguyên cho ng�
 
 Khi ownership hợp lệ:
 
-1. `order.service.ts:561` gọi `enrichOrdersWithImages([order])`.
-2. `order.service.ts:562–565` đọc `order_status_history` theo `orderId`.
+1. `order.service.ts:573` gọi `enrichOrdersWithImages([order])`.
+2. `order.service.ts:574–577` đọc `order_status_history` theo `orderId`.
 3. History được sắp xếp `createdAt ASC`, rồi `id ASC`, nghĩa là từ sự kiện cũ nhất tới mới nhất và ổn định khi trùng timestamp.
 
 ### 5.5. Mapping response chi tiết
 
-Response được tạo rõ ràng tại `order.service.ts:567–598`; service không spread trực tiếp `OrderEntity`.
+Response được tạo rõ ràng tại `order.service.ts:579–611`; service không spread trực tiếp `OrderEntity`.
 
 Thông tin đơn gồm:
 
 - Mã và trạng thái: `id`, `orderCode`, `status`.
 - Tài chính: `subtotal`, `shippingFee`, `discountAmount`, `tax`, `totalAmount`, `currency`.
+- Thanh toán: `paymentMethod` lấy từ checkout session, hoặc `null` nếu đơn không gắn session.
 - Địa chỉ: toàn bộ `shippingAddressSnapshot` đã cố định khi checkout.
 - Thời gian: `createdAt`, `updatedAt`.
 
-Mỗi item tại `order.service.ts:578–589` gồm:
+Mỗi item tại `order.service.ts:591–602` gồm:
 
 - `id`, `productId`, `skuId`.
 - `productNameSnapshot`, `skuAttributesSnapshot`.
 - `unitPrice`, `quantity`, `discountAmount`, `lineTotal`.
 - `imageUrl`, trả `null` nếu không có ảnh.
 
-Mỗi history entry tại `order.service.ts:590–595` chỉ gồm:
+Mỗi history entry tại `order.service.ts:603–608` chỉ gồm:
 
 - `fromStatus`.
 - `toStatus`.
@@ -258,6 +261,7 @@ Service trả một object chi tiết sẵn sàng để controller bọc trong r
   "tax": "0.00",
   "totalAmount": "580000.00",
   "currency": "VND",
+  "paymentMethod": "PAYOS",
   "shippingAddress": {},
   "items": [],
   "history": [],
@@ -276,7 +280,7 @@ sequenceDiagram
     participant H as commerce.order_status_history
     participant I as catalog.product_images
 
-    C->>S: getSellerOrderDetail(sellerId, orderId)
+    C->>S: getSellerOrderById(sellerId, orderId)
     S->>O: findOne(id + sellerId), relations items
     alt Không có hoặc thuộc Seller khác
         O-->>S: null
@@ -298,7 +302,7 @@ Test suite bắt đầu tại `order.service.spec.ts:1040`.
 
 ### 6.1. Danh sách, ownership, filter và mapping
 
-Test tại `order.service.spec.ts:1075–1129` xác nhận:
+Test tại `order.service.spec.ts:1078–1134` xác nhận:
 
 - `sellerId` uppercase được chuẩn hóa thành lowercase.
 - Query luôn có `order.sellerId = :sellerId`.
@@ -312,7 +316,7 @@ Test tại `order.service.spec.ts:1075–1129` xác nhận:
 
 ### 6.2. Chi tiết, snapshot thiếu trường, ảnh null và history an toàn
 
-Test tại `order.service.spec.ts:1131–1180` xác nhận:
+Test tại `order.service.spec.ts:1136–1186` xác nhận:
 
 - Repository nhận đồng thời `orderId` và `sellerId`.
 - Snapshot địa chỉ thiếu trường vẫn được trả mà không gây lỗi.
@@ -322,14 +326,14 @@ Test tại `order.service.spec.ts:1131–1180` xác nhận:
 
 ### 6.3. Chống đọc đơn của Seller khác
 
-Test tại `order.service.spec.ts:1182–1190` giả lập repository trả `null` cho đơn không thuộc quyền và xác nhận:
+Test tại `order.service.spec.ts:1188–1196` giả lập repository trả `null` cho đơn không thuộc quyền và xác nhận:
 
 - Service ném `NotFoundException`.
 - Không query history sau khi ownership thất bại.
 
 ### 6.4. Validation trạng thái
 
-Test tại `order.service.spec.ts:1192–1203` truyền `PENDING_PAYMENT` và xác nhận DTO phát sinh validation error tại thuộc tính `status`.
+Test tại `order.service.spec.ts:1198–1209` truyền `PENDING_PAYMENT` và xác nhận DTO phát sinh validation error tại thuộc tính `status`.
 
 ## 7. Kết quả xác minh
 

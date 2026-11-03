@@ -78,8 +78,7 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       if (sql.includes('pg_advisory_xact_lock')) return [];
       if (sql.includes('clock_timestamp'))
         return [{ observedTime: new Date('2026-10-17T12:00:00Z') }];
-      if (sql.includes('commerce.service_configs'))
-        return [{ value: 7 }];
+      if (sql.includes('commerce.service_configs')) return [{ value: 7 }];
       throw new Error('Unexpected SQL');
     }),
   };
@@ -254,7 +253,10 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       { skuId },
       { quantity: 1 },
       { skuId: 'not-a-uuid', quantity: 1 },
-      ...[-1, 1.5, 2147483648, '1', null, true].map((quantity) => ({ skuId, quantity })),
+      ...[-1, 1.5, 2147483648, '1', null, true].map((quantity) => ({
+        skuId,
+        quantity,
+      })),
       ...[
         'userId',
         'productId',

@@ -11,7 +11,6 @@ export const SELLER_ORDER_STATUSES = [
 ] as const satisfies readonly OrderStatus[];
 
 export type SellerOrderStatus = (typeof SELLER_ORDER_STATUSES)[number];
-
 export class QuerySellerOrdersDto {
   @IsOptional()
   @Type(() => Number)

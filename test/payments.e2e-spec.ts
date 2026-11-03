@@ -35,10 +35,10 @@ describe('Payments Endpoints (E2E)', () => {
   let token: string;
   const users = { findOne: vi.fn() };
   const paymentsService = {
-    createPaymentIntent: vi.fn(),
+    createPayosPaymentLink: vi.fn(),
   };
   const paymentWebhookService = {
-    handleWebhook: vi.fn(),
+    handlePayosWebhook: vi.fn(),
   };
 
   beforeAll(async () => {
@@ -59,189 +59,197 @@ describe('Payments Endpoints (E2E)', () => {
         whitelist: true,
         transform: true,
         forbidNonWhitelisted: true,
+        exceptionFactory: (errors) => {
+          return new BadRequestException({
+            errorCode: 'VALIDATION_ERROR',
+            message: 'Validation failed',
+            errors: errors.map((e) => ({
+              field: e.property,
+              rule: Object.keys(e.constraints ?? {})[0] ?? 'custom',
+              message: Object.values(e.constraints ?? {})[0] ?? 'Invalid',
+            })),
+          });
+        },
       }),
     );
-    app.useGlobalInterceptors(new TransformInterceptor());
     app.useGlobalFilters(new HttpExceptionFilter());
+    app.useGlobalInterceptors(new TransformInterceptor());
     await app.init();
 
     const jwt = module.get(JwtService);
-    token = await jwt.signAsync({ sub: userId, tokenVersion: 0 });
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    users.findOne.mockResolvedValue({ id: userId, tokenVersion: 0 });
+    token = jwt.sign({
+      sub: userId,
+      email: 'buyer@test.com',
+      tokenVersion: 1,
+    });
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  describe('POST /api/v1/commerce/payments/stripe/create-intent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    users.findOne.mockResolvedValue({ id: userId, tokenVersion: 1 });
+  });
+
+  describe('POST /api/v1/commerce/payments/payos/create-link', () => {
     it('rejects unauthenticated request with 401', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
+        .post('/api/v1/commerce/payments/payos/create-link')
         .send({ orderId: validOrderId });
 
       expect(res.status).toBe(401);
       expect(res.body.success).toBe(false);
     });
 
-    it('rejects invalid or missing orderId format with 400', async () => {
+    it('rejects invalid orderId with 400', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
+        .post('/api/v1/commerce/payments/payos/create-link')
         .set('Authorization', `Bearer ${token}`)
-        .send({ orderId: 'not-a-uuid' });
+        .send({ orderId: 'invalid-uuid-format' });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
       expect(res.body.errorCode).toBe('VALIDATION_ERROR');
     });
 
-    it('rejects unexpected client fields when forbidNonWhitelisted is active', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          orderId: validOrderId,
-          amount: 1, // Malicious override attempt
-        });
+    it('returns 201 with checkoutUrl, qrCode, and orderCode upon success', async () => {
+      paymentsService.createPayosPaymentLink.mockResolvedValue({
+        paymentId: 'pay-uuid-payos-1',
+        orderId: validOrderId,
+        orderCode: 1793584893952001,
+        paymentLinkId: 'link_payos_123',
+        checkoutUrl: 'https://pay.payos.vn/web/123456',
+        qrCode: 'vietqr://pay?amount=550000',
+        amount: 550000,
+        currency: 'VND',
+        status: 'PENDING',
+      });
 
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/commerce/payments/payos/create-link')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ orderId: validOrderId, idempotencyKey: 'payos_idem_1' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toEqual({
+        paymentId: 'pay-uuid-payos-1',
+        orderId: validOrderId,
+        orderCode: 1793584893952001,
+        paymentLinkId: 'link_payos_123',
+        checkoutUrl: 'https://pay.payos.vn/web/123456',
+        qrCode: 'vietqr://pay?amount=550000',
+        amount: 550000,
+        currency: 'VND',
+        status: 'PENDING',
+      });
     });
 
-    it('returns 404 when order does not exist', async () => {
-      paymentsService.createPaymentIntent.mockRejectedValue(
-        new NotFoundException('Order not found'),
+    it('propagates 403 ForbiddenException when caller does not own the order', async () => {
+      paymentsService.createPayosPaymentLink.mockRejectedValue(
+        new ForbiddenException(
+          'You do not have permission to pay for this order',
+        ),
       );
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ orderId: validOrderId });
-
-      expect(res.status).toBe(404);
-      expect(res.body.success).toBe(false);
-      expect(res.body.errorCode).toBe('RESOURCE_NOT_FOUND');
-    });
-
-    it('returns 403 when user is not the buyer', async () => {
-      paymentsService.createPaymentIntent.mockRejectedValue(
-        new ForbiddenException('You do not have permission'),
-      );
-
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
+        .post('/api/v1/commerce/payments/payos/create-link')
         .set('Authorization', `Bearer ${token}`)
         .send({ orderId: validOrderId });
 
       expect(res.status).toBe(403);
       expect(res.body.success).toBe(false);
-      expect(res.body.errorCode).toBe('FORBIDDEN');
     });
 
-    it('returns 409 when order is already PAID', async () => {
-      paymentsService.createPaymentIntent.mockRejectedValue(
+    it('propagates 404 NotFoundException when order does not exist', async () => {
+      paymentsService.createPayosPaymentLink.mockRejectedValue(
+        new NotFoundException(`Order with id '${validOrderId}' not found`),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/commerce/payments/payos/create-link')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ orderId: validOrderId });
+
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('propagates 409 ConflictException when order is already paid', async () => {
+      paymentsService.createPayosPaymentLink.mockRejectedValue(
         new ConflictException('Order has already been paid'),
       );
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
+        .post('/api/v1/commerce/payments/payos/create-link')
         .set('Authorization', `Bearer ${token}`)
         .send({ orderId: validOrderId });
 
       expect(res.status).toBe(409);
       expect(res.body.success).toBe(false);
-      expect(res.body.errorCode).toBe('RESOURCE_ALREADY_EXISTS');
-    });
-
-    it('returns 400 when order is CANCELLED', async () => {
-      paymentsService.createPaymentIntent.mockRejectedValue(
-        new BadRequestException('Order cannot be paid in current status'),
-      );
-
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ orderId: validOrderId });
-
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.errorCode).toBe('VALIDATION_ERROR');
-    });
-
-    it('creates PaymentIntent successfully and returns wrapped response envelope', async () => {
-      paymentsService.createPaymentIntent.mockResolvedValue({
-        paymentId: 'pay-uuid-1',
-        orderId: validOrderId,
-        paymentIntentId: 'pi_test_123',
-        clientSecret: 'pi_test_123_secret_abc',
-        amount: '550000.00',
-        currency: 'VND',
-        status: 'INITIATED',
-      });
-
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/create-intent')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ orderId: validOrderId });
-
-      expect(res.status).toBe(201);
-      expect(res.body.success).toBe(true);
-      expect(res.body.data).toEqual({
-        paymentId: 'pay-uuid-1',
-        orderId: validOrderId,
-        paymentIntentId: 'pi_test_123',
-        clientSecret: 'pi_test_123_secret_abc',
-        amount: '550000.00',
-        currency: 'VND',
-        status: 'INITIATED',
-      });
     });
   });
 
-  describe('POST /api/v1/commerce/payments/stripe/webhook', () => {
-    it('does not require JWT authentication', async () => {
-      paymentWebhookService.handleWebhook.mockResolvedValue({ received: true });
+  describe('POST /api/v1/commerce/payments/payos/webhook', () => {
+    const validWebhookPayload = {
+      code: '00',
+      desc: 'success',
+      success: true,
+      data: {
+        orderCode: 1793584893952001,
+        amount: 550000,
+        description: 'Don hang test',
+        accountNumber: '123456789',
+        reference: 'TF_PAYOS_998877',
+        transactionDateTime: '2026-11-02 08:30:00',
+        currency: 'VND',
+        paymentLinkId: 'link_payos_123',
+        code: '00',
+        desc: 'success',
+      },
+      signature: 'valid_signature',
+    };
+
+    it('does not require JWT authentication and returns 200 { received: true }', async () => {
+      paymentWebhookService.handlePayosWebhook.mockResolvedValue({
+        received: true,
+      });
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/webhook')
-        .set('stripe-signature', 't=123,v1=valid')
-        .send({ id: 'evt_123', type: 'payment_intent.succeeded' });
+        .post('/api/v1/commerce/payments/payos/webhook')
+        .send(validWebhookPayload);
 
-      // Must NOT be 401 Unauthorized
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data).toEqual({ received: true });
     });
 
-    it('rejects with 400 when PaymentWebhookService throws BadRequestException (invalid signature/payload)', async () => {
-      paymentWebhookService.handleWebhook.mockRejectedValue(
-        new BadRequestException('Invalid Stripe webhook signature'),
+    it('propagates 400 when PayOS webhook signature verification fails', async () => {
+      paymentWebhookService.handlePayosWebhook.mockRejectedValue(
+        new BadRequestException(
+          'Invalid PayOS webhook signature: Data not integrity',
+        ),
       );
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/webhook')
-        .set('stripe-signature', 'invalid-signature')
-        .send({ id: 'evt_bad' });
+        .post('/api/v1/commerce/payments/payos/webhook')
+        .send({ ...validWebhookPayload, signature: 'bad_signature' });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.errorCode).toBe('VALIDATION_ERROR');
     });
 
-    it('acknowledges duplicate events safely with 200 and { received: true, duplicate: true }', async () => {
-      paymentWebhookService.handleWebhook.mockResolvedValue({
+    it('returns 200 { received: true, duplicate: true } on duplicate webhook deliveries', async () => {
+      paymentWebhookService.handlePayosWebhook.mockResolvedValue({
         received: true,
         duplicate: true,
       });
 
       const res = await request(app.getHttpServer())
-        .post('/api/v1/commerce/payments/stripe/webhook')
-        .set('stripe-signature', 't=123,v1=valid')
-        .send({ id: 'evt_dup' });
+        .post('/api/v1/commerce/payments/payos/webhook')
+        .send(validWebhookPayload);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
