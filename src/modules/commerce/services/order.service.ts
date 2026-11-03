@@ -21,6 +21,9 @@ import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import { PayosClientService } from './payos-client.service.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
+import { QuerySellerOrdersDto } from '../dtos/query-seller-orders.dto.js';
+import { ConfirmSellerOrderDto } from '../dtos/confirm-seller-order.dto.js';
+import { ShipSellerOrderDto } from '../dtos/ship-seller-order.dto.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
@@ -746,5 +749,167 @@ export class OrderService {
         }
       }
     }
+  }
+
+  /**
+   * Lấy danh sách đơn hàng đổ về cho Người bán (Seller Orders)
+   */
+  async getSellerOrders(sellerId: string, query: QuerySellerOrdersDto) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 10));
+    const skip = (page - 1) * limit;
+
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
+      .where('order.sellerId = :sellerId', { sellerId });
+
+    if (query.status) {
+      qb.andWhere('order.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('order.createdAt', 'DESC').skip(skip).take(limit);
+
+    const [orders, totalItems] = await qb.getManyAndCount();
+    await this.enrichOrdersWithImages(orders);
+    for (const order of orders) {
+      if (order.checkoutSession) {
+        order.paymentMethod = order.checkoutSession.paymentMethod;
+      }
+    }
+    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
+
+    return {
+      data: orders,
+      meta: {
+        page,
+        limit,
+        totalItems,
+        totalPages,
+      },
+    };
+  }
+
+  /**
+   * Xem chi tiết một đơn hàng của Người bán (Seller Order Detail)
+   */
+  async getSellerOrderById(sellerId: string, orderId: string) {
+    const order = await this.orderRepo.findOne({
+      where: { id: orderId, sellerId },
+      relations: {
+        items: true,
+        checkoutSession: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
+    }
+
+    await this.enrichOrdersWithImages([order]);
+    if (order.checkoutSession) {
+      order.paymentMethod = order.checkoutSession.paymentMethod;
+    }
+
+    const history = await this.orderHistoryRepo.find({
+      where: { orderId },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+
+    return { ...order, history };
+  }
+
+  /**
+   * Người bán bấm Xác nhận đơn hàng (PAID -> PROCESSING)
+   */
+  async confirmSellerOrder(
+    sellerId: string,
+    orderId: string,
+    dto?: ConfirmSellerOrderDto,
+  ) {
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, sellerId },
+      });
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message:
+            'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+        });
+      }
+      if (order.status !== 'PAID') {
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message: `Chỉ có thể xác nhận đơn hàng đang ở trạng thái PAID (hiện tại: ${order.status})`,
+        });
+      }
+
+      await this.orderStateMachine.transition(manager, {
+        orderId: order.id,
+        toStatus: 'PROCESSING',
+        actorId: sellerId,
+        reason: dto?.note ?? 'Người bán xác nhận đơn hàng',
+      });
+
+      return {
+        orderId: order.id,
+        status: 'PROCESSING' as const,
+        updatedAt: new Date(),
+      };
+    });
+  }
+
+  /**
+   * Người bán bàn giao đơn hàng cho đơn vị vận chuyển (PROCESSING -> SHIPPED)
+   */
+  async shipSellerOrder(
+    sellerId: string,
+    orderId: string,
+    dto?: ShipSellerOrderDto,
+  ) {
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, sellerId },
+      });
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message:
+            'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+        });
+      }
+      if (order.status !== 'PROCESSING') {
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
+        });
+      }
+
+      const reasonDetails =
+        [
+          dto?.carrierName ? `Đơn vị vận chuyển: ${dto.carrierName}` : null,
+          dto?.trackingCode ? `Mã vận đơn: ${dto.trackingCode}` : null,
+          dto?.note ? `Ghi chú: ${dto.note}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | ') || 'Người bán bàn giao đơn hàng cho đơn vị vận chuyển';
+
+      await this.orderStateMachine.transition(manager, {
+        orderId: order.id,
+        toStatus: 'SHIPPED',
+        actorId: sellerId,
+        reason: reasonDetails,
+      });
+
+      return {
+        orderId: order.id,
+        status: 'SHIPPED' as const,
+        trackingCode: dto?.trackingCode ?? null,
+        carrierName: dto?.carrierName ?? null,
+        updatedAt: new Date(),
+      };
+    });
   }
 }
