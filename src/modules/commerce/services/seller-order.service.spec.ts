@@ -75,6 +75,7 @@ describe('OrderService - Seller Orders', () => {
         where: vi.fn().mockReturnThis(),
         andWhere: vi.fn().mockReturnThis(),
         orderBy: vi.fn().mockReturnThis(),
+        addOrderBy: vi.fn().mockReturnThis(),
         skip: vi.fn().mockReturnThis(),
         take: vi.fn().mockReturnThis(),
         getManyAndCount: vi.fn().mockResolvedValue([mockOrders, 2]),
@@ -99,6 +100,7 @@ describe('OrderService - Seller Orders', () => {
       expect(result.meta).toEqual({
         page: 1,
         limit: 10,
+        total: 2,
         totalItems: 2,
         totalPages: 1,
       });
@@ -114,9 +116,17 @@ describe('OrderService - Seller Orders', () => {
         sellerId,
         status: 'PAID' as OrderStatus,
         items: [],
+        checkoutSession: { paymentMethod: 'PAYOS' },
       };
       const mockHistory = [
-        { id: 'h-1', orderId, fromStatus: null, toStatus: 'PAID' },
+        {
+          id: 'h-1',
+          orderId,
+          fromStatus: null,
+          toStatus: 'PAID',
+          reason: 'PAYMENT_SUCCEEDED',
+          createdAt: new Date('2026-11-03T08:30:00Z'),
+        },
       ];
 
       orderRepo.findOne.mockResolvedValue(mockOrder);
@@ -129,7 +139,15 @@ describe('OrderService - Seller Orders', () => {
         relations: { items: true, checkoutSession: true },
       });
       expect(result.id).toBe(orderId);
-      expect(result.history).toEqual(mockHistory);
+      expect(result.paymentMethod).toBe('PAYOS');
+      expect(result.history).toEqual([
+        {
+          fromStatus: null,
+          toStatus: 'PAID',
+          reason: 'PAYMENT_SUCCEEDED',
+          createdAt: new Date('2026-11-03T08:30:00Z'),
+        },
+      ]);
     });
 
     it('throws NotFoundException when order does not exist or belongs to another seller (IDOR protection)', async () => {

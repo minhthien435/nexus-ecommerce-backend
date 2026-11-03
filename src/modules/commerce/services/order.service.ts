@@ -513,6 +513,105 @@ export class OrderService {
   }
 
   /**
+   * Lấy danh sách đơn hàng thuộc đúng tài khoản người bán đang đăng nhập.
+   */
+  async getSellerOrders(sellerId: string, query: QuerySellerOrdersDto) {
+    const normalizedSellerId = sellerId.toLowerCase();
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 10));
+    const skip = (page - 1) * limit;
+
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
+      .where('order.sellerId = :sellerId', {
+        sellerId: normalizedSellerId,
+      });
+
+    if (query.status) {
+      qb.andWhere('order.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('order.createdAt', 'DESC')
+      .addOrderBy('order.id', 'DESC')
+      .skip(skip)
+      .take(limit);
+
+    const [orders, total] = await qb.getManyAndCount();
+    await this.enrichOrdersWithImages(orders);
+
+    return {
+      data: orders.map((order) => this.toSellerOrderSummary(order)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalItems: total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
+  /**
+   * Xem chi tiết đơn hàng của người bán. Ownership nằm ngay trong truy vấn để
+   * không làm lộ sự tồn tại của đơn hàng thuộc shop khác.
+   */
+  async getSellerOrderById(sellerId: string, orderId: string) {
+    const order = await this.orderRepo.findOne({
+      where: {
+        id: orderId,
+        sellerId: sellerId.toLowerCase(),
+      },
+      relations: { items: true, checkoutSession: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
+    }
+
+    await this.enrichOrdersWithImages([order]);
+    const history = await this.orderHistoryRepo.find({
+      where: { orderId: order.id },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+
+    return {
+      id: order.id,
+      orderCode: order.orderNumber,
+      status: order.status,
+      subtotal: order.subtotal,
+      shippingFee: order.shippingFee,
+      discountAmount: order.discountAmount,
+      tax: order.tax,
+      totalAmount: order.total,
+      currency: order.currency,
+      paymentMethod: order.checkoutSession?.paymentMethod ?? null,
+      shippingAddress: order.shippingAddressSnapshot,
+      items: (order.items ?? []).map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        skuId: item.skuId,
+        productNameSnapshot: item.productNameSnapshot,
+        skuAttributesSnapshot: item.skuAttributesSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        discountAmount: item.discountAmount,
+        lineTotal: item.lineTotal,
+        imageUrl: item.imageUrl ?? null,
+      })),
+      history: history.map((entry) => ({
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        reason: entry.reason,
+        createdAt: entry.createdAt,
+      })),
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    };
+  }
+
+  /**
    * Xem chi tiết một đơn hàng theo ID
    */
   async getOrderById(userId: string, orderId: string) {
@@ -751,73 +850,39 @@ export class OrderService {
     }
   }
 
-  /**
-   * Lấy danh sách đơn hàng đổ về cho Người bán (Seller Orders)
-   */
-  async getSellerOrders(sellerId: string, query: QuerySellerOrdersDto) {
-    const page = Math.max(1, query.page || 1);
-    const limit = Math.min(100, Math.max(1, query.limit || 10));
-    const skip = (page - 1) * limit;
-
-    const qb = this.orderRepo
-      .createQueryBuilder('order')
-      .leftJoinAndSelect('order.items', 'items')
-      .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
-      .where('order.sellerId = :sellerId', { sellerId });
-
-    if (query.status) {
-      qb.andWhere('order.status = :status', { status: query.status });
-    }
-
-    qb.orderBy('order.createdAt', 'DESC').skip(skip).take(limit);
-
-    const [orders, totalItems] = await qb.getManyAndCount();
-    await this.enrichOrdersWithImages(orders);
-    for (const order of orders) {
-      if (order.checkoutSession) {
-        order.paymentMethod = order.checkoutSession.paymentMethod;
-      }
-    }
-    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
+  private toSellerOrderSummary(order: OrderEntity) {
+    const shippingAddress = order.shippingAddressSnapshot ?? {};
+    const items = order.items ?? [];
 
     return {
-      data: orders,
-      meta: {
-        page,
-        limit,
-        totalItems,
-        totalPages,
-      },
+      id: order.id,
+      orderCode: order.orderNumber,
+      status: order.status,
+      subtotal: order.subtotal,
+      shippingFee: order.shippingFee,
+      totalAmount: order.total,
+      currency: order.currency,
+      paymentMethod: order.checkoutSession?.paymentMethod ?? null,
+      buyerName: this.snapshotString(shippingAddress, 'recipientName'),
+      buyerPhone: this.snapshotString(shippingAddress, 'recipientPhone'),
+      itemCount: items.reduce((total, item) => total + item.quantity, 0),
+      itemsSummary: items.map((item) => ({
+        productName: item.productNameSnapshot,
+        skuAttributes: item.skuAttributesSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        imageUrl: item.imageUrl ?? null,
+      })),
+      createdAt: order.createdAt,
     };
   }
 
-  /**
-   * Xem chi tiết một đơn hàng của Người bán (Seller Order Detail)
-   */
-  async getSellerOrderById(sellerId: string, orderId: string) {
-    const order = await this.orderRepo.findOne({
-      where: { id: orderId, sellerId },
-      relations: {
-        items: true,
-        checkoutSession: true,
-      },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
-    }
-
-    await this.enrichOrdersWithImages([order]);
-    if (order.checkoutSession) {
-      order.paymentMethod = order.checkoutSession.paymentMethod;
-    }
-
-    const history = await this.orderHistoryRepo.find({
-      where: { orderId },
-      order: { createdAt: 'ASC', id: 'ASC' },
-    });
-
-    return { ...order, history };
+  private snapshotString(
+    snapshot: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = snapshot[key];
+    return typeof value === 'string' ? value : null;
   }
 
   /**

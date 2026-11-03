@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { OrderService } from './order.service.js';
+import { QuerySellerOrdersDto } from '../dtos/query-seller-orders.dto.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const cartId = '22222222-2222-4222-8222-222222222222';
@@ -1033,5 +1036,175 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     });
     expect(s.inventoryReservation.release).not.toHaveBeenCalled();
     expect(s.orderRepo.findOne).toHaveBeenCalledOnce();
+  });
+});
+
+describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
+  const sellerOrder = {
+    id: '66666666-6666-4666-8666-666666666666',
+    orderNumber: 'ORD-123456-TEST',
+    buyerId: userId,
+    sellerId: seller1,
+    status: 'PAID' as const,
+    subtotal: '550000.00',
+    shippingFee: '30000.00',
+    discountAmount: '0.00',
+    tax: '0.00',
+    total: '580000.00',
+    currency: 'VND',
+    shippingAddressSnapshot: {
+      recipientName: 'Nguyen Van A',
+      recipientPhone: '0987654321',
+      addressLine: '123 Nguyen Hue',
+    },
+    createdAt: new Date('2026-11-03T08:30:00Z'),
+    updatedAt: new Date('2026-11-03T08:45:00Z'),
+    checkoutSession: { paymentMethod: 'PAYOS' },
+    items: [
+      {
+        id: '77777777-7777-4777-8777-777777777777',
+        productId: '88888888-8888-4888-8888-888888888888',
+        skuId: '99999999-9999-4999-8999-999999999999',
+        productNameSnapshot: 'Áo Thun Oversize Nexus',
+        skuAttributesSnapshot: { Color: 'Đen', Size: 'L' },
+        unitPrice: '275000.00',
+        quantity: 2,
+        discountAmount: '0.00',
+        lineTotal: '550000.00',
+      },
+    ],
+  };
+
+  it('lists only owned orders with status filtering and contract mapping', async () => {
+    const s = setup();
+    const qb = {
+      leftJoinAndSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      addOrderBy: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      take: vi.fn().mockReturnThis(),
+      getManyAndCount: vi.fn().mockResolvedValue([[sellerOrder], 11]),
+    };
+    s.orderRepo.createQueryBuilder.mockReturnValue(qb as never);
+    (
+      s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
+    ).query = vi
+      .fn()
+      .mockResolvedValue([
+        { productId: sellerOrder.items[0].productId, url: 'image.jpg' },
+      ]);
+
+    const result = await s.service.getSellerOrders(seller1.toUpperCase(), {
+      page: 2,
+      limit: 10,
+      status: 'PAID',
+    });
+
+    expect(qb.where).toHaveBeenCalledWith('order.sellerId = :sellerId', {
+      sellerId: seller1,
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status = :status', {
+      status: 'PAID',
+    });
+    expect(qb.addOrderBy).toHaveBeenCalledWith('order.id', 'DESC');
+    expect(qb.skip).toHaveBeenCalledWith(10);
+    expect(result.meta).toEqual({
+      page: 2,
+      limit: 10,
+      total: 11,
+      totalItems: 11,
+      totalPages: 2,
+    });
+    expect(result.data[0]).toMatchObject({
+      orderCode: sellerOrder.orderNumber,
+      totalAmount: '580000.00',
+      paymentMethod: 'PAYOS',
+      buyerName: 'Nguyen Van A',
+      buyerPhone: '0987654321',
+      itemCount: 2,
+      itemsSummary: [
+        expect.objectContaining({
+          productName: 'Áo Thun Oversize Nexus',
+          imageUrl: 'image.jpg',
+        }),
+      ],
+    });
+  });
+
+  it('returns owned detail with sparse snapshot, null image, and ordered history', async () => {
+    const s = setup();
+    const sparseOrder = {
+      ...sellerOrder,
+      shippingAddressSnapshot: { recipientName: 'Nguyen Van A' },
+      items: sellerOrder.items.map((item) => ({ ...item })),
+    };
+    const history = [
+      {
+        id: 'history-1',
+        orderId: sellerOrder.id,
+        fromStatus: 'PENDING_PAYMENT',
+        toStatus: 'PAID',
+        reason: 'PAYMENT_SUCCEEDED',
+        changedBy: userId,
+        createdAt: new Date('2026-11-03T08:31:00Z'),
+      },
+    ];
+    s.orderRepo.findOne.mockResolvedValue(sparseOrder);
+    s.orderHistoryRepo.find.mockResolvedValue(history);
+    (
+      s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
+    ).query = vi.fn().mockResolvedValue([]);
+
+    const result = await s.service.getSellerOrderById(
+      seller1.toUpperCase(),
+      sellerOrder.id,
+    );
+
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith({
+      where: { id: sellerOrder.id, sellerId: seller1 },
+      relations: { items: true, checkoutSession: true },
+    });
+    expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
+      where: { orderId: sellerOrder.id },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+    expect(result.shippingAddress).toEqual({ recipientName: 'Nguyen Van A' });
+    expect(result.paymentMethod).toBe('PAYOS');
+    expect(result.items[0].imageUrl).toBeNull();
+    expect(result.history).toEqual([
+      {
+        fromStatus: 'PENDING_PAYMENT',
+        toStatus: 'PAID',
+        reason: 'PAYMENT_SUCCEEDED',
+        createdAt: new Date('2026-11-03T08:31:00Z'),
+      },
+    ]);
+    expect(result.history[0]).not.toHaveProperty('orderId');
+    expect(result.history[0]).not.toHaveProperty('changedBy');
+  });
+
+  it('hides missing and foreign-owned orders behind NotFoundException', async () => {
+    const s = setup();
+    s.orderRepo.findOne.mockResolvedValue(null);
+
+    await expect(
+      s.service.getSellerOrderById(seller2, sellerOrder.id),
+    ).rejects.toThrow(NotFoundException);
+    expect(s.orderHistoryRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('rejects statuses outside the seller order contract', async () => {
+    const dto = plainToInstance(QuerySellerOrdersDto, {
+      page: 1,
+      limit: 10,
+      status: 'PENDING_PAYMENT',
+    });
+
+    const errors = await validate(dto);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].property).toBe('status');
   });
 });
