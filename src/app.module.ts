@@ -14,6 +14,7 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { AuctionModule } from './modules/auction/auction.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
+import { MediaModule } from './modules/media/media.module.js';
 import { BullModule } from '@nestjs/bullmq';
 import { createBullMqOptions } from './config/bullmq.config.js';
 
@@ -35,6 +36,7 @@ import { createBullMqOptions } from './config/bullmq.config.js';
     AuthCartModule,
     AuctionModule,
     IntegrationsModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [
