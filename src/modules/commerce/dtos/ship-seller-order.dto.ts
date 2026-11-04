@@ -1,15 +1,22 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ShipSellerOrderDto {
-  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsNotEmpty()
   @IsString()
   @MaxLength(100)
-  trackingCode?: string;
+  trackingCode: string;
 
-  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsNotEmpty()
   @IsString()
   @MaxLength(100)
-  carrierName?: string;
+  carrierName: string;
 
   @IsOptional()
   @IsString()

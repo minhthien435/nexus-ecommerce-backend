@@ -81,6 +81,12 @@ export class OrderEntity {
   @Column('jsonb', { name: 'shipping_address_snapshot' })
   shippingAddressSnapshot: Record<string, unknown>;
 
+  @Column('varchar', { name: 'tracking_code', length: 100, nullable: true })
+  trackingCode: string | null;
+
+  @Column('varchar', { name: 'carrier_name', length: 100, nullable: true })
+  carrierName: string | null;
+
   @Column('timestamptz', { name: 'hold_expires_at', nullable: true })
   holdExpiresAt: Date | null;
 
