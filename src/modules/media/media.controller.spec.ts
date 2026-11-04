@@ -104,6 +104,13 @@ describe('MediaController', () => {
     });
   });
 
+  describe('Route prefix', () => {
+    it('has path set to api/v1/media', () => {
+      const path = Reflect.getMetadata('path', MediaController);
+      expect(path).toBe('api/v1/media');
+    });
+  });
+
   describe('Guards', () => {
     it('has AccessTokenGuard applied', () => {
       const uploadSingleGuards = Reflect.getMetadata(

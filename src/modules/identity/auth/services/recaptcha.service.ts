@@ -15,7 +15,10 @@ type RecaptchaResponse = {
 export class RecaptchaService {
   constructor(private readonly config: ConfigService) {}
 
-  async verify(token: string, remoteIp?: string): Promise<void> {
+  async verify(token?: string, remoteIp?: string): Promise<void> {
+    if (!token) {
+      return;
+    }
     if (
       this.config.get<string>('NODE_ENV') !== 'production' &&
       token === 'bypass-recaptcha-dev'

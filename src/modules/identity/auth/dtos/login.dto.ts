@@ -15,8 +15,8 @@ export class LoginDto extends GuestCartInputDto {
   password: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Mã xác minh captcha không được để trống' })
-  captchaToken: string;
+  @IsOptional()
+  captchaToken?: string;
 
   @IsOptional()
   @IsBoolean()

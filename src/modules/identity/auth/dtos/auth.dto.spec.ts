@@ -181,17 +181,16 @@ describe('Auth DTOs Validation', () => {
       expect(errors.some((e) => e.property === 'password')).toBe(true);
     });
 
-    it('từ chối captchaToken trống và chấp nhận rememberMe', async () => {
+    it('chấp nhận đăng nhập khi không có captchaToken (optional) và chấp nhận rememberMe', async () => {
       const dto = plainToInstance(LoginDto, {
         email: 'user@example.com',
         password: 'Password123!',
-        captchaToken: '',
+
         rememberMe: true,
       });
 
       const errors = await validate(dto);
-      expect(errors.some((e) => e.property === 'captchaToken')).toBe(true);
-      expect(errors.some((e) => e.property === 'rememberMe')).toBe(false);
+      expect(errors).toHaveLength(0);
     });
   });
 });
