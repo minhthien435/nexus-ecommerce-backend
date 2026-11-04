@@ -588,6 +588,8 @@ export class OrderService {
       currency: order.currency,
       paymentMethod: order.checkoutSession?.paymentMethod ?? null,
       shippingAddress: order.shippingAddressSnapshot,
+      trackingCode: order.trackingCode ?? null,
+      carrierName: order.carrierName ?? null,
       items: (order.items ?? []).map((item) => ({
         id: item.id,
         productId: item.productId,
@@ -911,7 +913,7 @@ export class OrderService {
         });
       }
 
-      await this.orderStateMachine.transition(manager, {
+      const confirmed = await this.orderStateMachine.transition(manager, {
         orderId: order.id,
         toStatus: 'PROCESSING',
         actorId: sellerId,
@@ -921,7 +923,7 @@ export class OrderService {
       return {
         orderId: order.id,
         status: 'PROCESSING' as const,
-        updatedAt: new Date(),
+        updatedAt: confirmed.updatedAt,
       };
     });
   }
@@ -934,6 +936,22 @@ export class OrderService {
     orderId: string,
     dto?: ShipSellerOrderDto,
   ) {
+    const trackingCode =
+      typeof dto?.trackingCode === 'string' ? dto.trackingCode.trim() : '';
+    const carrierName =
+      typeof dto?.carrierName === 'string' ? dto.carrierName.trim() : '';
+    if (
+      !trackingCode ||
+      !carrierName ||
+      trackingCode.length > 100 ||
+      carrierName.length > 100
+    ) {
+      throw new BadRequestException({
+        errorCode: 'ORDER_SHIPPING_INVALID',
+        message:
+          'Carrier name and tracking code are required and must be at most 100 characters',
+      });
+    }
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, sellerId },
@@ -952,28 +970,31 @@ export class OrderService {
         });
       }
 
-      const reasonDetails =
-        [
-          dto?.carrierName ? `Đơn vị vận chuyển: ${dto.carrierName}` : null,
-          dto?.trackingCode ? `Mã vận đơn: ${dto.trackingCode}` : null,
-          dto?.note ? `Ghi chú: ${dto.note}` : null,
-        ]
-          .filter(Boolean)
-          .join(' | ') || 'Người bán bàn giao đơn hàng cho đơn vị vận chuyển';
+      const reasonDetails = [
+        `Đơn vị vận chuyển: ${carrierName}`,
+        `Mã vận đơn: ${trackingCode}`,
+        dto?.note ? `Ghi chú: ${dto.note}` : null,
+      ]
+        .filter(Boolean)
+        .join(' | ');
 
-      await this.orderStateMachine.transition(manager, {
+      const shipped = await this.orderStateMachine.transition(manager, {
         orderId: order.id,
         toStatus: 'SHIPPED',
         actorId: sellerId,
         reason: reasonDetails,
       });
 
+      shipped.trackingCode = trackingCode;
+      shipped.carrierName = carrierName;
+      const saved = await manager.getRepository(OrderEntity).save(shipped);
+
       return {
         orderId: order.id,
         status: 'SHIPPED' as const,
-        trackingCode: dto?.trackingCode ?? null,
-        carrierName: dto?.carrierName ?? null,
-        updatedAt: new Date(),
+        trackingCode: saved.trackingCode,
+        carrierName: saved.carrierName,
+        updatedAt: saved.updatedAt,
       };
     });
   }

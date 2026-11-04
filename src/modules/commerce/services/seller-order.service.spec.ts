@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { OrderService } from './order.service.js';
 import type { OrderStatus } from '../domain/entities/order.entity.js';
 
@@ -11,6 +15,10 @@ function setup() {
   const orderRepo = {
     createQueryBuilder: vi.fn(),
     findOne: vi.fn(),
+    save: vi.fn(async (order) => ({
+      ...order,
+      updatedAt: new Date('2026-11-04T10:00:00Z'),
+    })),
   };
 
   const orderHistoryRepo = {
@@ -18,7 +26,11 @@ function setup() {
   };
 
   const orderStateMachine = {
-    transition: vi.fn(),
+    transition: vi.fn(async (_manager, input) => ({
+      id: input.orderId,
+      status: input.toStatus,
+      updatedAt: new Date('2026-11-04T09:00:00Z'),
+    })),
   };
 
   const dataSource = {
@@ -28,6 +40,7 @@ function setup() {
           getRepository: (_entity: unknown) => {
             return {
               findOne: orderRepo.findOne,
+              save: orderRepo.save,
             };
           },
         });
@@ -348,36 +361,77 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
       });
     });
 
-    it('uses default reason when shipSellerOrder is called without dto or empty fields', async () => {
-      const { service, orderRepo, orderStateMachine } = setup();
+    it.each([
+      undefined,
+      {},
+      { trackingCode: '   ', carrierName: 'Carrier' },
+      { trackingCode: 'TRACK', carrierName: '' },
+      { trackingCode: 'x'.repeat(101), carrierName: 'Carrier' },
+      { trackingCode: 'TRACK', carrierName: 'x'.repeat(101) },
+    ])('rejects invalid shipping payload %j before mutation', async (dto) => {
+      const { service, orderStateMachine, orderRepo, dataSource } = setup();
+      await expect(
+        service.shipSellerOrder(sellerAId, orderAId, dto as never),
+      ).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(orderStateMachine.transition).not.toHaveBeenCalled();
+      expect(orderRepo.save).not.toHaveBeenCalled();
+    });
 
-      const processingOrder = {
+    it('rejects the transaction when shipment persistence fails', async () => {
+      const { service, orderRepo } = setup();
+      orderRepo.findOne.mockResolvedValue({
         id: orderAId,
-        sellerId: sellerAId,
-        status: 'PROCESSING' as OrderStatus,
-      };
-
-      orderRepo.findOne.mockResolvedValue(processingOrder);
-
-      const result = await service.shipSellerOrder(sellerAId, orderAId);
-
-      expect(orderStateMachine.transition).toHaveBeenCalledWith(
-        expect.anything(),
-        {
-          orderId: orderAId,
-          toStatus: 'SHIPPED',
-          actorId: sellerAId,
-          reason: 'Người bán bàn giao đơn hàng cho đơn vị vận chuyển',
-        },
-      );
-
-      expect(result).toEqual({
-        orderId: orderAId,
-        status: 'SHIPPED',
-        trackingCode: null,
-        carrierName: null,
-        updatedAt: expect.any(Date),
+        status: 'PROCESSING',
       });
+      orderRepo.save.mockRejectedValue(new Error('Database failure'));
+      await expect(
+        service.shipSellerOrder(sellerAId, orderAId, {
+          trackingCode: 'TRACK',
+          carrierName: 'Carrier',
+        }),
+      ).rejects.toThrow('Database failure');
+    });
+
+    it('persists trimmed tracking and returns it on Seller and Buyer detail reload', async () => {
+      const { service, orderRepo } = setup();
+      orderRepo.findOne.mockResolvedValue({
+        id: orderAId,
+        status: 'PROCESSING',
+      });
+      const result = await service.shipSellerOrder(sellerAId, orderAId, {
+        trackingCode: ' TRACK ',
+        carrierName: ' Carrier ',
+      });
+      expect(orderRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: orderAId,
+          status: 'SHIPPED',
+          trackingCode: 'TRACK',
+          carrierName: 'Carrier',
+        }),
+      );
+      expect(result.updatedAt).toEqual(new Date('2026-11-04T10:00:00Z'));
+      const stored = { ...orderRepo.save.mock.calls[0][0], items: [] };
+      orderRepo.findOne.mockResolvedValue(stored);
+      const qb = {
+        innerJoin: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        getRawMany: vi.fn().mockResolvedValue([]),
+      };
+      orderRepo.createQueryBuilder.mockReturnValue(qb);
+      for (const detail of [
+        await service.getSellerOrderById(sellerAId, orderAId),
+        await service.getOrderById('buyer', orderAId),
+      ]) {
+        expect(detail).toMatchObject({
+          status: 'SHIPPED',
+          trackingCode: 'TRACK',
+          carrierName: 'Carrier',
+        });
+      }
     });
 
     it('rejects shipping with ConflictException ORDER_STATUS_INVALID if order is still in PAID or PENDING_PAYMENT status', async () => {
@@ -399,6 +453,7 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
 
         const promise = service.shipSellerOrder(sellerAId, orderAId, {
           trackingCode: 'VTP-123',
+          carrierName: 'Viettel Post',
         });
 
         await expect(promise).rejects.toThrow(ConflictException);

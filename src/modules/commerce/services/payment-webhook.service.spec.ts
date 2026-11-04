@@ -63,6 +63,8 @@ describe('PaymentWebhookService', () => {
       tax: '0.00',
       total: '550000.00',
       currency: 'VND',
+      trackingCode: null,
+      carrierName: null,
       shippingAddressSnapshot: { city: 'HCM' },
       idempotencyKey: null,
       holdExpiresAt: new Date(),
