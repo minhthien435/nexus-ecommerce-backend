@@ -13,6 +13,7 @@ describe('SellerShopController', () => {
       registerShop: vi.fn().mockResolvedValue({ id: 'shop' }),
       getMyShop: vi.fn().mockResolvedValue({ id: 'shop' }),
       updateMyShop: vi.fn().mockResolvedValue({ id: 'shop' }),
+      closeMyShop: vi.fn().mockResolvedValue({ id: 'shop', status: 'CLOSED' }),
     };
     const controller = new SellerShopController(shops as never);
     const registration = {
@@ -25,12 +26,14 @@ describe('SellerShopController', () => {
     await controller.register(userId, registration);
     await controller.getMine(userId);
     await controller.updateMine(userId, { headline: 'Hello' });
+    await controller.closeMine(userId);
 
     expect(shops.registerShop).toHaveBeenCalledWith(userId, registration);
     expect(shops.getMyShop).toHaveBeenCalledWith(userId);
     expect(shops.updateMyShop).toHaveBeenCalledWith(userId, {
       headline: 'Hello',
     });
+    expect(shops.closeMyShop).toHaveBeenCalledWith(userId);
   });
 
   it('requires authentication for registration and live SELLER RBAC for read/update', () => {
@@ -46,15 +49,23 @@ describe('SellerShopController', () => {
       GUARDS_METADATA,
       SellerShopController.prototype.updateMine,
     );
+    const closeGuards = Reflect.getMetadata(
+      GUARDS_METADATA,
+      SellerShopController.prototype.closeMine,
+    );
 
     expect(registerGuards).toEqual([AccessTokenGuard]);
     expect(readGuards).toEqual([AccessTokenGuard, RolesGuard]);
     expect(updateGuards).toEqual([AccessTokenGuard, RolesGuard]);
+    expect(closeGuards).toEqual([AccessTokenGuard, RolesGuard]);
     expect(
       Reflect.getMetadata(ROLES_KEY, SellerShopController.prototype.getMine),
     ).toEqual(['SELLER']);
     expect(
       Reflect.getMetadata(ROLES_KEY, SellerShopController.prototype.updateMine),
+    ).toEqual(['SELLER']);
+    expect(
+      Reflect.getMetadata(ROLES_KEY, SellerShopController.prototype.closeMine),
     ).toEqual(['SELLER']);
   });
 });

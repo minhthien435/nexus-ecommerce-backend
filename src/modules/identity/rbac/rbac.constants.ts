@@ -127,6 +127,24 @@ export const PRIVILEGE_SEEDS: readonly PrivilegeSeed[] = [
     roles: ['ADMIN'],
   },
   {
+    code: 'SHOP.LIST',
+    module: 'IDENTITY',
+    description: 'View shop list',
+    roles: ['ADMIN'],
+  },
+  {
+    code: 'SHOP.VIEW',
+    module: 'IDENTITY',
+    description: 'View shop details',
+    roles: ['ADMIN'],
+  },
+  {
+    code: 'SHOP.UPDATE',
+    module: 'IDENTITY',
+    description: 'Update shop status',
+    roles: ['ADMIN'],
+  },
+  {
     code: 'ROLE.CREATE',
     module: 'IDENTITY',
     description: 'Create role',
