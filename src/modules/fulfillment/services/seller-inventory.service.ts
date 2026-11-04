@@ -102,12 +102,12 @@ export class SellerInventoryService {
     const ownershipSql = isAdmin ? '' : 'AND product.seller_id = $2::uuid';
     const params = isAdmin ? [warehouseId] : [warehouseId, actorId];
     const rows = (await this.dataSource.query(
-      `SELECT COUNT(*)::int AS "totalSkus",
+      `SELECT COUNT(*) AS "totalSkus",
               COALESCE(SUM(inventory.total_qty), 0) AS "onHand",
               COALESCE(SUM(inventory.reserved_qty), 0) AS "reserved",
               COUNT(*) FILTER (
                 WHERE COALESCE(inventory.available_qty, 0) <= 5
-              )::int AS "lowStock"
+              ) AS "lowStock"
        FROM catalog.product_skus AS sku
        JOIN catalog.products AS product ON product.id = sku.product_id
        LEFT JOIN fulfillment.inventory_items AS inventory
