@@ -63,11 +63,41 @@ export type ProductSearchPage = {
   facets: { categories: Array<ProductCategory & { count: number }> };
 };
 
+export type ProductShop = {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  bannerUrl: string | null;
+  headline: string | null;
+  reputationScore: number;
+  ratingAvg: number;
+  reviewCount: number;
+};
+
+export type ProductSeller = {
+  id: string;
+  shopId: string;
+  shopName: string;
+  shopSlug: string;
+  logoUrl: string | null;
+  reputationScore: number;
+};
+
 export type ProductDetail = {
   id: string;
   sellerId: string;
   shopId: string | null;
   shopSlug: string | null;
+  shopName: string | null;
+  shopLogoUrl: string | null;
+  shopBannerUrl?: string | null;
+  shopHeadline?: string | null;
+  shopReputationScore: number | null;
+  shopRatingAvg?: number | null;
+  shopReviewCount?: number | null;
+  shop: ProductShop | null;
+  seller?: ProductSeller | null;
   categoryId: string;
   name: string;
   slug: string;
@@ -145,6 +175,13 @@ export class ProductSearchService {
         seller_id: string;
         shop_id: string | null;
         shop_slug: string | null;
+        shop_name: string | null;
+        shop_logo_url: string | null;
+        shop_banner_url: string | null;
+        shop_headline: string | null;
+        shop_reputation_score: number | null;
+        shop_rating_avg: string | number | null;
+        shop_review_count: number | null;
         category_id: string;
         name: string;
         slug: string;
@@ -159,7 +196,16 @@ export class ProductSearchService {
         cat_slug: string | null;
       }>
     >(
-      `SELECT p.id, p.seller_id, shop.id AS shop_id, shop.slug AS shop_slug,
+      `SELECT p.id, p.seller_id,
+              shop.id AS shop_id,
+              shop.slug AS shop_slug,
+              shop.name AS shop_name,
+              shop.logo_url AS shop_logo_url,
+              shop.banner_url AS shop_banner_url,
+              shop.headline AS shop_headline,
+              shop.reputation_score AS shop_reputation_score,
+              shop.rating_avg AS shop_rating_avg,
+              shop.review_count AS shop_review_count,
               p.category_id, p.name, p.slug,
               p.description, p.brand, p.is_auction_eligible, p.attributes,
               p.created_at, p.updated_at,
@@ -168,7 +214,8 @@ export class ProductSearchService {
          LEFT JOIN catalog.categories c
            ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
          LEFT JOIN identity.shops shop
-           ON shop.id = p.shop_id AND shop.status = 'ACTIVE' AND shop.deleted_at IS NULL
+           ON (shop.id = p.shop_id OR (p.shop_id IS NULL AND shop.seller_id = p.seller_id))
+          AND shop.status = 'ACTIVE' AND shop.deleted_at IS NULL
         WHERE p.slug = $1
           AND p.status = 'ACTIVE'
           AND p.deleted_at IS NULL
@@ -219,11 +266,55 @@ export class ProductSearchService {
       ),
     ]);
 
+    const shop: ProductShop | null = product.shop_id
+      ? {
+          id: product.shop_id,
+          name: product.shop_name ?? '',
+          slug: product.shop_slug ?? '',
+          logoUrl: product.shop_logo_url ?? null,
+          bannerUrl: product.shop_banner_url ?? null,
+          headline: product.shop_headline ?? null,
+          reputationScore: Number(product.shop_reputation_score ?? 50),
+          ratingAvg: Number(product.shop_rating_avg ?? 0),
+          reviewCount: Number(product.shop_review_count ?? 0),
+        }
+      : null;
+
     const detail: ProductDetail = {
       id: product.id,
       sellerId: product.seller_id,
       shopId: product.shop_id,
       shopSlug: product.shop_slug,
+      shopName: product.shop_name ?? null,
+      shopLogoUrl: product.shop_logo_url ?? null,
+      shopBannerUrl: product.shop_banner_url ?? null,
+      shopHeadline: product.shop_headline ?? null,
+      shopReputationScore:
+        product.shop_reputation_score !== null &&
+        product.shop_reputation_score !== undefined
+          ? Number(product.shop_reputation_score)
+          : null,
+      shopRatingAvg:
+        product.shop_rating_avg !== null &&
+        product.shop_rating_avg !== undefined
+          ? Number(product.shop_rating_avg)
+          : null,
+      shopReviewCount:
+        product.shop_review_count !== null &&
+        product.shop_review_count !== undefined
+          ? Number(product.shop_review_count)
+          : null,
+      shop,
+      seller: product.shop_id
+        ? {
+            id: product.seller_id,
+            shopId: product.shop_id,
+            shopName: product.shop_name ?? '',
+            shopSlug: product.shop_slug ?? '',
+            logoUrl: product.shop_logo_url ?? null,
+            reputationScore: Number(product.shop_reputation_score ?? 50),
+          }
+        : null,
       categoryId: product.category_id,
       name: product.name,
       slug: product.slug,
