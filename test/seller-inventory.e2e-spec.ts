@@ -15,7 +15,11 @@ const skuId = '22222222-2222-4222-8222-222222222222';
 describe('Seller inventory API guards and actor context (e2e)', () => {
   let app: INestApplication;
   let token: string;
-  const inventory = { list: vi.fn(), restock: vi.fn() };
+  const inventory = {
+    list: vi.fn(),
+    summary: vi.fn(),
+    restock: vi.fn(),
+  };
   const rbac = { hasAnyRole: vi.fn(), hasAllPermissions: vi.fn() };
 
   beforeEach(async () => {
@@ -29,6 +33,12 @@ describe('Seller inventory API guards and actor context (e2e)', () => {
       limit: 20,
     });
     inventory.restock.mockResolvedValue({ skuId, totalQuantity: 5 });
+    inventory.summary.mockResolvedValue({
+      totalSkus: 4,
+      onHand: 20,
+      reserved: 3,
+      lowStock: 2,
+    });
     const module = await Test.createTestingModule({
       imports: [JwtModule.register({ secret: 'seller-inventory-test-secret' })],
       controllers: [SellerInventoryController],
@@ -102,6 +112,29 @@ describe('Seller inventory API guards and actor context (e2e)', () => {
     ]);
     expect(rbac.hasAllPermissions).toHaveBeenCalledWith(actorId, [
       'PRODUCT.UPDATE',
+    ]);
+  });
+
+  it('protects the summary with list permission and forwards actor context', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/fulfillment/seller/inventory/summary')
+      .expect(401);
+
+    rbac.hasAllPermissions.mockResolvedValueOnce(false);
+    await request(app.getHttpServer())
+      .get('/api/v1/fulfillment/seller/inventory/summary')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/api/v1/fulfillment/seller/inventory/summary')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect({ totalSkus: 4, onHand: 20, reserved: 3, lowStock: 2 });
+
+    expect(inventory.summary).toHaveBeenCalledWith(actorId);
+    expect(rbac.hasAllPermissions).toHaveBeenCalledWith(actorId, [
+      'PRODUCT.LIST',
     ]);
   });
 

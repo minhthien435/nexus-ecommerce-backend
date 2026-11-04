@@ -68,6 +68,45 @@ describe('SellerInventoryService', () => {
     ]);
   });
 
+  it('summarizes all seller-owned SKUs and counts missing inventory as low stock', async () => {
+    const s = setup();
+    s.dataSource.query.mockResolvedValueOnce([
+      { totalSkus: 3, onHand: 18, reserved: 4, lowStock: 2 },
+    ]);
+
+    await expect(s.service.summary(actorId)).resolves.toEqual({
+      totalSkus: 3,
+      onHand: 18,
+      reserved: 4,
+      lowStock: 2,
+    });
+    const [sql, params] = s.dataSource.query.mock.calls[0];
+    expect(sql).toContain('product.seller_id = $2::uuid');
+    expect(sql).toContain('COALESCE(inventory.available_qty, 0) <= 5');
+    expect(sql).not.toContain('SUM(inventory.total_qty), 0)::int');
+    expect(sql).not.toContain('SUM(inventory.reserved_qty), 0)::int');
+    expect(sql).not.toContain('LIMIT');
+    expect(params).toEqual([warehouseId, actorId]);
+  });
+
+  it('summarizes every seller for an admin without an ownership filter', async () => {
+    const s = setup();
+    s.identity.getUserRoles.mockResolvedValue(['ADMIN']);
+    s.dataSource.query.mockResolvedValueOnce([
+      { totalSkus: '0', onHand: '0', reserved: '0', lowStock: '0' },
+    ]);
+
+    await expect(s.service.summary(actorId)).resolves.toEqual({
+      totalSkus: 0,
+      onHand: 0,
+      reserved: 0,
+      lowStock: 0,
+    });
+    const [sql, params] = s.dataSource.query.mock.calls[0];
+    expect(sql).not.toContain('product.seller_id');
+    expect(params).toEqual([warehouseId]);
+  });
+
   it('atomically restocks an owned SKU and records the resulting quantities', async () => {
     const s = setup();
     const createdAt = new Date('2026-10-27T00:00:00Z');

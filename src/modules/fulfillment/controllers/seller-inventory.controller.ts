@@ -26,6 +26,12 @@ export class SellerInventoryController {
     return this.inventory.list(actorId, query);
   }
 
+  @Permissions('PRODUCT.LIST')
+  @Get('summary')
+  summary(@CurrentUserId() actorId: string) {
+    return this.inventory.summary(actorId);
+  }
+
   @Permissions('PRODUCT.UPDATE')
   @Post('adjust')
   restock(
