@@ -198,6 +198,13 @@ describe('ProductSearchService', () => {
           seller_id: 'seller-1',
           shop_id: 'shop-1',
           shop_slug: 'nexus-store',
+          shop_name: 'Nexus Store',
+          shop_logo_url: 'https://cdn.example.com/logo.png',
+          shop_banner_url: null,
+          shop_headline: null,
+          shop_reputation_score: 95,
+          shop_rating_avg: '4.80',
+          shop_review_count: 120,
           category_id: 'category-1',
           name: 'Phone',
           slug: 'phone',
@@ -239,6 +246,21 @@ describe('ProductSearchService', () => {
     expect(detail).toMatchObject({
       shopId: 'shop-1',
       shopSlug: 'nexus-store',
+      shopName: 'Nexus Store',
+      shopLogoUrl: 'https://cdn.example.com/logo.png',
+      shopReputationScore: 95,
+      shop: {
+        id: 'shop-1',
+        name: 'Nexus Store',
+        slug: 'nexus-store',
+        logoUrl: 'https://cdn.example.com/logo.png',
+        reputationScore: 95,
+      },
+      seller: {
+        id: 'seller-1',
+        shopName: 'Nexus Store',
+        shopSlug: 'nexus-store',
+      },
     });
     expect(detail.category).toEqual({
       id: 'category-1',
@@ -283,7 +305,14 @@ describe('ProductSearchService', () => {
 
     const detail = await service.getBySlug('legacy-product');
 
-    expect(detail).toMatchObject({ shopId: null, shopSlug: null });
+    expect(detail).toMatchObject({
+      shopId: null,
+      shopSlug: null,
+      shopName: null,
+      shopLogoUrl: null,
+      shopReputationScore: null,
+      shop: null,
+    });
     expect(query.mock.calls[0][0]).toContain("shop.status = 'ACTIVE'");
     expect(query.mock.calls[0][0]).toContain('shop.deleted_at IS NULL');
   });
