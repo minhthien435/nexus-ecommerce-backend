@@ -96,6 +96,40 @@ export class SellerInventoryService {
     };
   }
 
+  async summary(actorId: string) {
+    const isAdmin = await this.isAdmin(actorId);
+    const warehouseId = await this.defaultWarehouseId(this.dataSource.manager);
+    const ownershipSql = isAdmin ? '' : 'AND product.seller_id = $2::uuid';
+    const params = isAdmin ? [warehouseId] : [warehouseId, actorId];
+    const rows = (await this.dataSource.query(
+      `SELECT COUNT(*)::int AS "totalSkus",
+              COALESCE(SUM(inventory.total_qty), 0) AS "onHand",
+              COALESCE(SUM(inventory.reserved_qty), 0) AS "reserved",
+              COUNT(*) FILTER (
+                WHERE COALESCE(inventory.available_qty, 0) <= 5
+              )::int AS "lowStock"
+       FROM catalog.product_skus AS sku
+       JOIN catalog.products AS product ON product.id = sku.product_id
+       LEFT JOIN fulfillment.inventory_items AS inventory
+         ON inventory.sku_id = sku.id AND inventory.warehouse_id = $1::uuid
+       WHERE product.deleted_at IS NULL
+         ${ownershipSql}`,
+      params,
+    )) as Array<{
+      totalSkus: number;
+      onHand: number;
+      reserved: number;
+      lowStock: number;
+    }>;
+    const row = rows[0];
+    return {
+      totalSkus: Number(row?.totalSkus ?? 0),
+      onHand: Number(row?.onHand ?? 0),
+      reserved: Number(row?.reserved ?? 0),
+      lowStock: Number(row?.lowStock ?? 0),
+    };
+  }
+
   async restock(actorId: string, dto: RestockSellerInventoryDto) {
     const isAdmin = await this.isAdmin(actorId);
     const skuId = dto.skuId.toLowerCase();
