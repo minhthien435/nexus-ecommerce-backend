@@ -50,7 +50,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    await this.recaptchaService.verify(dto.captchaToken, req.ip);
+    // reCAPTCHA verification removed as per deprecation step 1
     const metadata = {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],

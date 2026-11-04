@@ -1,4 +1,4 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthController } from './auth.controller.js';
 
@@ -113,34 +113,37 @@ describe('AuthController', () => {
     headers: { 'user-agent': 'test-agent' },
   } as never;
 
-  it('verifies captcha before checking password credentials', async () => {
-    const auth = { login: vi.fn() };
-    const captcha = {
-      verify: vi.fn().mockRejectedValue(new BadRequestException()),
+  it('does not require captcha verification and allows login with credentials', async () => {
+    const auth = {
+      login: vi.fn().mockResolvedValue({
+        user: { id: 'user-1', email: 'user@example.com' },
+        accessToken: 'access',
+        rawRefreshToken: 'refresh',
+      }),
     };
+    const tokens = { setRefreshTokenCookie: vi.fn() };
+    const captcha = { verify: vi.fn() };
     const controller = new AuthController(
       auth as never,
-      {} as never,
+      tokens as never,
       captcha as never,
       {} as never,
       {} as never,
       {} as never,
     );
-    await expect(
-      controller.login(
-        {
-          email: 'user@example.com',
-          password: 'Password1!',
-          captchaToken: 'invalid',
-        },
-        request,
-        response,
-      ),
-    ).rejects.toThrow(BadRequestException);
-    expect(auth.login).not.toHaveBeenCalled();
+    const dto = {
+      email: 'user@example.com',
+      password: 'Password1!',
+    };
+    await controller.login(dto, request, response);
+    expect(captcha.verify).not.toHaveBeenCalled();
+    expect(auth.login).toHaveBeenCalledWith(dto, {
+      ipAddress: '127.0.0.1',
+      userAgent: 'test-agent',
+    });
   });
 
-  it('verifies captcha, authenticates, returns the login result, and sets the refresh cookie', async () => {
+  it('authenticates, returns the login result, and sets the refresh cookie without captcha verify', async () => {
     const auth = {
       login: vi.fn().mockResolvedValue({
         user: { id: 'user-1', email: 'user@example.com' },
@@ -170,14 +173,11 @@ describe('AuthController', () => {
       expiresIn: 28_800,
       user: { id: 'user-1', email: 'user@example.com' },
     });
-    expect(captcha.verify).toHaveBeenCalledWith('valid-captcha', '127.0.0.1');
+    expect(captcha.verify).not.toHaveBeenCalled();
     expect(auth.login).toHaveBeenCalledWith(dto, {
       ipAddress: '127.0.0.1',
       userAgent: 'test-agent',
     });
-    expect(captcha.verify.mock.invocationCallOrder[0]).toBeLessThan(
-      auth.login.mock.invocationCallOrder[0],
-    );
     expect(tokens.setRefreshTokenCookie).toHaveBeenCalledWith(
       response,
       'refresh',

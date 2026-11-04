@@ -13,7 +13,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { AccessTokenGuard } from '../identity/auth/guards/access-token.guard.js';
 import { MediaService } from './media.service.js';
 
-@Controller('media')
+@Controller('api/v1/media')
 export class MediaController {
   constructor(private readonly mediaService: MediaService) {}
 
