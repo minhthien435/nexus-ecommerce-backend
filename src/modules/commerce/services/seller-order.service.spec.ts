@@ -12,8 +12,15 @@ const sellerBId = '22222222-2222-4222-8222-222222222222';
 const orderAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 function setup() {
+  const expiryCandidatesQb = {
+    innerJoin: vi.fn().mockReturnThis(),
+    select: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    andWhere: vi.fn().mockReturnThis(),
+    getRawMany: vi.fn().mockResolvedValue([]),
+  };
   const orderRepo = {
-    createQueryBuilder: vi.fn(),
+    createQueryBuilder: vi.fn().mockReturnValue(expiryCandidatesQb),
     findOne: vi.fn(),
     save: vi.fn(async (order) => ({
       ...order,
@@ -67,6 +74,7 @@ function setup() {
   return {
     service,
     orderRepo,
+    expiryCandidatesQb,
     orderHistoryRepo,
     orderStateMachine,
     dataSource,
@@ -76,7 +84,7 @@ function setup() {
 describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () => {
   describe('Scenario 1 — Seller A retrieves their own orders', () => {
     it('strictly filters orders by Seller A normalized seller ID without exposing Seller B orders', async () => {
-      const { service, orderRepo } = setup();
+      const { service, orderRepo, expiryCandidatesQb } = setup();
 
       const sellerAOrders = [
         {
@@ -107,7 +115,9 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         getManyAndCount: vi.fn().mockResolvedValue([sellerAOrders, 1]),
       };
 
-      orderRepo.createQueryBuilder.mockReturnValue(qb);
+      orderRepo.createQueryBuilder
+        .mockReturnValueOnce(expiryCandidatesQb)
+        .mockReturnValueOnce(qb);
 
       const result = await service.getSellerOrders(sellerAId, {
         page: 1,
@@ -147,7 +157,7 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
     });
 
     it('handles pagination calculation accurately when multiple pages exist', async () => {
-      const { service, orderRepo } = setup();
+      const { service, orderRepo, expiryCandidatesQb } = setup();
 
       const qb = {
         leftJoinAndSelect: vi.fn().mockReturnThis(),
@@ -160,7 +170,9 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         getManyAndCount: vi.fn().mockResolvedValue([[], 45]),
       };
 
-      orderRepo.createQueryBuilder.mockReturnValue(qb);
+      orderRepo.createQueryBuilder
+        .mockReturnValueOnce(expiryCandidatesQb)
+        .mockReturnValueOnce(qb);
 
       const result = await service.getSellerOrders(sellerAId, {
         page: 3,

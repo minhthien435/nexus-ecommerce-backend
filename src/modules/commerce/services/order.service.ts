@@ -474,7 +474,7 @@ export class OrderService {
    */
   async getBuyerOrders(userId: string, query: QueryOrdersDto) {
     const buyerId = userId.toLowerCase();
-    await this.reconcileExpiredPayosOrders(buyerId);
+    await this.reconcileExpiredPayosOrders({ buyerId });
 
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(100, Math.max(1, query.limit || 10));
@@ -517,6 +517,9 @@ export class OrderService {
    */
   async getSellerOrders(sellerId: string, query: QuerySellerOrdersDto) {
     const normalizedSellerId = sellerId.toLowerCase();
+    await this.reconcileExpiredPayosOrders({
+      sellerId: normalizedSellerId,
+    });
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(100, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
@@ -558,10 +561,15 @@ export class OrderService {
    * không làm lộ sự tồn tại của đơn hàng thuộc shop khác.
    */
   async getSellerOrderById(sellerId: string, orderId: string) {
+    const normalizedSellerId = sellerId.toLowerCase();
+    await this.reconcileExpiredPayosOrders(
+      { sellerId: normalizedSellerId },
+      orderId,
+    );
     const order = await this.orderRepo.findOne({
       where: {
         id: orderId,
-        sellerId: sellerId.toLowerCase(),
+        sellerId: normalizedSellerId,
       },
       relations: { items: true, checkoutSession: true },
     });
@@ -618,7 +626,7 @@ export class OrderService {
    */
   async getOrderById(userId: string, orderId: string) {
     const buyerId = userId.toLowerCase();
-    await this.reconcileExpiredPayosOrders(buyerId, orderId);
+    await this.reconcileExpiredPayosOrders({ buyerId }, orderId);
 
     const order = await this.orderRepo.findOne({
       where: { id: orderId, buyerId },
@@ -646,14 +654,25 @@ export class OrderService {
   }
 
   private async reconcileExpiredPayosOrders(
-    buyerId: string,
+    owner: { buyerId: string } | { sellerId: string },
     orderId?: string,
   ): Promise<void> {
     const candidatesQuery = this.orderRepo
       .createQueryBuilder('order')
       .innerJoin('order.checkoutSession', 'checkoutSession')
-      .select('order.id', 'orderId')
-      .where('order.buyerId = :buyerId', { buyerId })
+      .select('order.id', 'orderId');
+
+    if ('buyerId' in owner) {
+      candidatesQuery.where('order.buyerId = :buyerId', {
+        buyerId: owner.buyerId,
+      });
+    } else {
+      candidatesQuery.where('order.sellerId = :sellerId', {
+        sellerId: owner.sellerId,
+      });
+    }
+
+    candidatesQuery
       .andWhere('order.status = :pendingStatus', {
         pendingStatus: 'PENDING_PAYMENT',
       })

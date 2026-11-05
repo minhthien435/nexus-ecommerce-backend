@@ -1077,6 +1077,7 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
 
   it('lists only owned orders with status filtering and contract mapping', async () => {
     const s = setup();
+    const candidatesQb = candidateQueryBuilder();
     const qb = {
       leftJoinAndSelect: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
@@ -1087,7 +1088,9 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
       take: vi.fn().mockReturnThis(),
       getManyAndCount: vi.fn().mockResolvedValue([[sellerOrder], 11]),
     };
-    s.orderRepo.createQueryBuilder.mockReturnValue(qb as never);
+    s.orderRepo.createQueryBuilder
+      .mockReturnValueOnce(candidatesQb as never)
+      .mockReturnValueOnce(qb as never);
     (
       s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
     ).query = vi
@@ -1105,6 +1108,10 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     expect(qb.where).toHaveBeenCalledWith('order.sellerId = :sellerId', {
       sellerId: seller1,
     });
+    expect(candidatesQb.where).toHaveBeenCalledWith(
+      'order.sellerId = :sellerId',
+      { sellerId: seller1 },
+    );
     expect(qb.andWhere).toHaveBeenCalledWith('order.status = :status', {
       status: 'PAID',
     });
@@ -1135,6 +1142,8 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
 
   it('returns owned detail with sparse snapshot, null image, and ordered history', async () => {
     const s = setup();
+    const candidatesQb = candidateQueryBuilder();
+    s.orderRepo.createQueryBuilder.mockReturnValue(candidatesQb as never);
     const sparseOrder = {
       ...sellerOrder,
       shippingAddressSnapshot: { recipientName: 'Nguyen Van A' },
@@ -1166,6 +1175,13 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
       where: { id: sellerOrder.id, sellerId: seller1 },
       relations: { items: true, checkoutSession: true },
     });
+    expect(candidatesQb.where).toHaveBeenCalledWith(
+      'order.sellerId = :sellerId',
+      { sellerId: seller1 },
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
+      orderId: sellerOrder.id,
+    });
     expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
       where: { orderId: sellerOrder.id },
       order: { createdAt: 'ASC', id: 'ASC' },
@@ -1187,12 +1203,65 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
 
   it('hides missing and foreign-owned orders behind NotFoundException', async () => {
     const s = setup();
+    const candidatesQb = candidateQueryBuilder();
+    s.orderRepo.createQueryBuilder.mockReturnValue(candidatesQb as never);
     s.orderRepo.findOne.mockResolvedValue(null);
 
     await expect(
       s.service.getSellerOrderById(seller2, sellerOrder.id),
     ).rejects.toThrow(NotFoundException);
     expect(s.orderHistoryRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an overdue PayOS order before applying the seller list status filter', async () => {
+    const s = setup();
+    const candidatesQb = candidateQueryBuilder([sellerOrder.id]);
+    const listQb = {
+      leftJoinAndSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      addOrderBy: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      take: vi.fn().mockReturnThis(),
+      getManyAndCount: vi
+        .fn()
+        .mockResolvedValue([[{ ...sellerOrder, status: 'CANCELLED' }], 1]),
+    };
+    s.orderRepo.createQueryBuilder
+      .mockReturnValueOnce(candidatesQb as never)
+      .mockReturnValueOnce(listQb as never);
+    s.orderStateMachine.expire.mockResolvedValue({
+      outcome: 'EXPIRED',
+      inventoryReceipts: [],
+    });
+    (
+      s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
+    ).query = vi.fn().mockResolvedValue([]);
+
+    const result = await s.service.getSellerOrders(seller1.toUpperCase(), {
+      page: 1,
+      limit: 10,
+      status: 'CANCELLED',
+    });
+
+    expect(candidatesQb.where).toHaveBeenCalledWith(
+      'order.sellerId = :sellerId',
+      { sellerId: seller1 },
+    );
+    expect(s.orderStateMachine.expire).toHaveBeenCalledWith(
+      sellerOrder.id,
+      s.manager,
+    );
+    expect(s.inventoryReservation.release).toHaveBeenCalledWith([], s.manager);
+    expect(s.orderStateMachine.finalizeExpiry).toHaveBeenCalledWith(
+      sellerOrder.id,
+      s.manager,
+    );
+    expect(listQb.andWhere).toHaveBeenCalledWith('order.status = :status', {
+      status: 'CANCELLED',
+    });
+    expect(result.data[0].status).toBe('CANCELLED');
   });
 
   it('rejects statuses outside the seller order contract', async () => {
