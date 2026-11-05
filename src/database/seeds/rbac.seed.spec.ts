@@ -22,6 +22,13 @@ describe('RBAC seed', () => {
       expect.stringContaining('INSERT INTO identity.privileges'),
       expect.arrayContaining(['USER.ROLE.ASSIGN']),
     );
+    expect(
+      PRIVILEGE_SEEDS.filter(({ code }) => code.startsWith('SHOP.')),
+    ).toEqual([
+      expect.objectContaining({ code: 'SHOP.LIST', roles: ['ADMIN'] }),
+      expect.objectContaining({ code: 'SHOP.VIEW', roles: ['ADMIN'] }),
+      expect.objectContaining({ code: 'SHOP.UPDATE', roles: ['ADMIN'] }),
+    ]);
   });
 
   it('reuses an existing admin and assigns ADMIN idempotently', async () => {

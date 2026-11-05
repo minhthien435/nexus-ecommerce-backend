@@ -38,6 +38,8 @@ import { EmailModule } from '../../common/email/email.module.js';
 import { ShopEntity } from './domain/shop.entity.js';
 import { SellerShopController } from './controllers/seller-shop.controller.js';
 import { SellerShopService } from './services/seller-shop.service.js';
+import { AdminShopController } from './admin/admin-shop.controller.js';
+import { AdminShopService } from './admin/admin-shop.service.js';
 
 @Module({
   imports: [
@@ -71,6 +73,7 @@ import { SellerShopService } from './services/seller-shop.service.js';
     IdentityAdminUserController,
     AdminDashboardController,
     SellerShopController,
+    AdminShopController,
   ],
   providers: [
     AuthService,
@@ -86,6 +89,7 @@ import { SellerShopService } from './services/seller-shop.service.js';
     AdminUserService,
     PasswordResetService,
     SellerShopService,
+    AdminShopService,
     {
       provide: IdentityPublicApi,
       useClass: IdentityPublicApiService,

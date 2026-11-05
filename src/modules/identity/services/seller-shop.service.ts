@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common';
 import { DataSource, EntityManager, IsNull } from 'typeorm';
 import { ProductEntity } from '../../catalog/domain/entities/product.entity.js';
+import { AuditLogEntity } from '../domain/audit-log.entity.js';
+import { IdentityOutboxEntity } from '../domain/identity-outbox.entity.js';
 import { ShopEntity } from '../domain/shop.entity.js';
 import { UserEntity } from '../domain/user.entity.js';
 import {
@@ -177,6 +179,48 @@ export class SellerShopService {
       }
     }
     return this.toView(await shops.save(shop));
+  }
+
+  async closeMyShop(userId: string): Promise<SellerShopView> {
+    return this.dataSource.transaction(async (manager) => {
+      const shops = manager.getRepository(ShopEntity);
+      const shop = await shops
+        .createQueryBuilder('shop')
+        .setLock('pessimistic_write')
+        .where('shop.seller_id = :userId', { userId })
+        .andWhere('shop.deleted_at IS NULL')
+        .getOne();
+      if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
+      if (shop.status === 'CLOSED') return this.toView(shop);
+
+      const previousStatus = shop.status;
+      shop.status = 'CLOSED';
+      const saved = await shops.save(shop);
+      const changes = {
+        previousStatus,
+        status: 'CLOSED',
+        reason: 'Seller requested shop closure',
+      };
+      await manager.getRepository(AuditLogEntity).save(
+        manager.getRepository(AuditLogEntity).create({
+          actorId: userId,
+          actorType: 'SELLER',
+          action: 'SHOP_CLOSED',
+          entityType: 'SHOP',
+          entityId: shop.id,
+          changes,
+        }),
+      );
+      await manager.getRepository(IdentityOutboxEntity).save(
+        manager.getRepository(IdentityOutboxEntity).create({
+          eventType: 'SHOP_CLOSED',
+          aggregateType: 'SHOP',
+          aggregateId: shop.id,
+          payload: { actorId: userId, shopId: shop.id, ...changes },
+        }),
+      );
+      return this.toView(saved);
+    });
   }
 
   private async shopNameExists(manager: EntityManager, name: string) {

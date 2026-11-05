@@ -119,6 +119,63 @@ function setup(options?: {
 }
 
 describe('SellerShopService', () => {
+  it('closes any owned shop once and records audit and outbox atomically', async () => {
+    const shop = { ...setup().savedShop, status: 'SUSPENDED' };
+    const qb = queryBuilder(shop);
+    const shopRepo = {
+      createQueryBuilder: vi.fn().mockReturnValue(qb),
+      save: vi.fn(async (value) => value),
+    };
+    const auditRepo = { create: vi.fn((value) => value), save: vi.fn() };
+    const outboxRepo = { create: vi.fn((value) => value), save: vi.fn() };
+    const manager = {
+      getRepository: vi.fn((entity: { name: string }) => {
+        if (entity.name === 'ShopEntity') return shopRepo;
+        if (entity.name === 'AuditLogEntity') return auditRepo;
+        if (entity.name === 'IdentityOutboxEntity') return outboxRepo;
+      }),
+    };
+    const dataSource = { transaction: vi.fn(async (work) => work(manager)) };
+
+    const result = await new SellerShopService(dataSource as never).closeMyShop(
+      userId,
+    );
+
+    expect(qb.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(result.status).toBe('CLOSED');
+    expect(auditRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: userId, action: 'SHOP_CLOSED' }),
+    );
+    expect(outboxRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'SHOP_CLOSED' }),
+    );
+  });
+
+  it('makes repeated closure idempotent and rejects a seller without a shop', async () => {
+    for (const [shop, expectedError] of [
+      [{ ...setup().savedShop, status: 'CLOSED' }, false],
+      [null, true],
+    ] as const) {
+      const qb = queryBuilder(shop);
+      const repo = {
+        createQueryBuilder: vi.fn().mockReturnValue(qb),
+        save: vi.fn(),
+      };
+      const manager = { getRepository: vi.fn().mockReturnValue(repo) };
+      const service = new SellerShopService({
+        transaction: vi.fn(async (work) => work(manager)),
+      } as never);
+      if (expectedError)
+        await expect(service.closeMyShop(userId)).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
+      else
+        await expect(service.closeMyShop(userId)).resolves.toMatchObject({
+          status: 'CLOSED',
+        });
+      expect(repo.save).not.toHaveBeenCalled();
+    }
+  });
   it('atomically registers a safe shop, assigns SELLER, and links products', async () => {
     const test = setup();
 

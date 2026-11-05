@@ -38,4 +38,11 @@ export class SellerShopController {
   ) {
     return this.shops.updateMyShop(userId, dto);
   }
+
+  @Roles('SELLER')
+  @UseGuards(AccessTokenGuard, RolesGuard)
+  @Post('shop/me/close')
+  closeMine(@CurrentUserId() userId: string) {
+    return this.shops.closeMyShop(userId);
+  }
 }
