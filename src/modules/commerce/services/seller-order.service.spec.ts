@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { OrderService } from './order.service.js';
 import type { OrderStatus } from '../domain/entities/order.entity.js';
@@ -11,7 +12,7 @@ const sellerAId = '11111111-1111-4111-8111-111111111111';
 const sellerBId = '22222222-2222-4222-8222-222222222222';
 const orderAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function setup() {
+function setup(options?: { ghnClientService?: unknown }) {
   const expiryCandidatesQb = {
     innerJoin: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
@@ -69,6 +70,8 @@ function setup() {
     orderStateMachine as never,
     {} as never,
     {} as never,
+    undefined,
+    options?.ghnClientService as never,
   );
 
   return {
@@ -480,6 +483,198 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
       }
 
       expect(orderStateMachine.transition).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Scenario 4 — GHN Express Auto-shipping & Webhook Lifecycle', () => {
+    describe('shipSellerOrderWithGhn', () => {
+      it('throws ServiceUnavailableException when ghnClientService is not configured', async () => {
+        const { service } = setup();
+        await expect(
+          service.shipSellerOrderWithGhn(sellerAId, orderAId),
+        ).rejects.toThrow(ServiceUnavailableException);
+      });
+
+      it('throws NotFoundException when order does not exist or belongs to another seller', async () => {
+        const ghnClient = { createShippingOrder: vi.fn() };
+        const { service, orderRepo } = setup({ ghnClientService: ghnClient });
+        orderRepo.findOne.mockResolvedValue(null);
+
+        await expect(
+          service.shipSellerOrderWithGhn(sellerAId, orderAId),
+        ).rejects.toThrow(NotFoundException);
+        expect(ghnClient.createShippingOrder).not.toHaveBeenCalled();
+      });
+
+      it('throws ConflictException when order status is not PROCESSING', async () => {
+        const ghnClient = { createShippingOrder: vi.fn() };
+        const { service, orderRepo } = setup({ ghnClientService: ghnClient });
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          sellerId: sellerAId,
+          status: 'PAID',
+        });
+
+        await expect(
+          service.shipSellerOrderWithGhn(sellerAId, orderAId),
+        ).rejects.toThrow(ConflictException);
+        expect(ghnClient.createShippingOrder).not.toHaveBeenCalled();
+      });
+
+      it('successfully creates GHN shipping order and transitions status to SHIPPED', async () => {
+        const ghnClient = {
+          createShippingOrder: vi.fn().mockResolvedValue({
+            order_code: 'GHN-AUTO-999',
+            total_fee: 32000,
+            expected_delivery_time: '2026-11-09T18:00:00Z',
+            print_url: 'https://print.ghn.vn/order/GHN-AUTO-999',
+          }),
+        };
+        const { service, orderRepo, orderStateMachine } = setup({
+          ghnClientService: ghnClient,
+        });
+
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          sellerId: sellerAId,
+          status: 'PROCESSING',
+          shippingAddressSnapshot: {
+            recipientName: 'Nguyen Van A',
+            phone: '0987654321',
+            street: '123 Nguyen Hue',
+            wardCode: '20101',
+            districtId: 1442,
+          },
+          items: [
+            {
+              productNameSnapshot: 'Ao khoac Gio',
+              quantity: 2,
+              unitPrice: '150000.00',
+            },
+          ],
+        });
+
+        const result = await service.shipSellerOrderWithGhn(
+          sellerAId,
+          orderAId,
+        );
+
+        expect(ghnClient.createShippingOrder).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to_name: 'Nguyen Van A',
+            to_phone: '0987654321',
+            to_address: '123 Nguyen Hue',
+            to_ward_code: '20101',
+            to_district_id: 1442,
+            weight: 400,
+            client_order_code: orderAId,
+          }),
+        );
+
+        expect(orderStateMachine.transition).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            orderId: orderAId,
+            toStatus: 'SHIPPED',
+            actorId: sellerAId,
+          }),
+        );
+
+        expect(orderRepo.save).toHaveBeenCalledWith(
+          expect.objectContaining({
+            trackingCode: 'GHN-AUTO-999',
+            carrierName: 'GHN',
+          }),
+        );
+
+        expect(result).toEqual({
+          orderId: orderAId,
+          status: 'SHIPPED',
+          trackingCode: 'GHN-AUTO-999',
+          carrierName: 'GHN',
+          totalFee: 32000,
+          expectedDeliveryTime: '2026-11-09T18:00:00Z',
+          printUrl: 'https://print.ghn.vn/order/GHN-AUTO-999',
+          updatedAt: expect.any(Date),
+        });
+      });
+    });
+
+    describe('markOrderAsDeliveredViaCarrier', () => {
+      it('throws NotFoundException when order with tracking code is not found', async () => {
+        const { service, orderRepo } = setup();
+        orderRepo.findOne.mockResolvedValue(null);
+
+        await expect(
+          service.markOrderAsDeliveredViaCarrier('NON-EXISTENT'),
+        ).rejects.toThrow(NotFoundException);
+      });
+
+      it('is idempotent: returns alreadyDelivered: true if order is already DELIVERED', async () => {
+        const { service, orderRepo, orderStateMachine } = setup();
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          status: 'DELIVERED',
+          trackingCode: 'GHN-DELIVERED-001',
+          updatedAt: new Date('2026-11-05T12:00:00Z'),
+        });
+
+        const result =
+          await service.markOrderAsDeliveredViaCarrier('GHN-DELIVERED-001');
+
+        expect(result).toEqual({
+          orderId: orderAId,
+          status: 'DELIVERED',
+          trackingCode: 'GHN-DELIVERED-001',
+          alreadyDelivered: true,
+          updatedAt: new Date('2026-11-05T12:00:00Z'),
+        });
+        expect(orderStateMachine.transition).not.toHaveBeenCalled();
+      });
+
+      it('throws ConflictException if order is not in SHIPPED status', async () => {
+        const { service, orderRepo, orderStateMachine } = setup();
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          status: 'PROCESSING',
+          trackingCode: 'GHN-PROCESSING-001',
+        });
+
+        await expect(
+          service.markOrderAsDeliveredViaCarrier('GHN-PROCESSING-001'),
+        ).rejects.toThrow(ConflictException);
+        expect(orderStateMachine.transition).not.toHaveBeenCalled();
+      });
+
+      it('transitions order from SHIPPED to DELIVERED successfully', async () => {
+        const { service, orderRepo, orderStateMachine } = setup();
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          status: 'SHIPPED',
+          trackingCode: 'GHN-SHIPPED-001',
+          updatedAt: new Date('2026-11-05T10:00:00Z'),
+        });
+
+        const result =
+          await service.markOrderAsDeliveredViaCarrier('GHN-SHIPPED-001');
+
+        expect(orderStateMachine.transition).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            orderId: orderAId,
+            toStatus: 'DELIVERED',
+            actorId: null,
+          }),
+        );
+        expect(orderRepo.save).toHaveBeenCalled();
+        expect(result).toEqual({
+          orderId: orderAId,
+          status: 'DELIVERED',
+          trackingCode: 'GHN-SHIPPED-001',
+          alreadyDelivered: false,
+          updatedAt: expect.any(Date),
+        });
+      });
     });
   });
 });

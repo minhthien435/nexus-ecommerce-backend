@@ -9,6 +9,7 @@ import { CartController } from './controllers/cart.controller.js';
 import { OrderController } from './controllers/order.controller.js';
 import { SellerOrderController } from './controllers/seller-order.controller.js';
 import { PaymentsController } from './controllers/payments.controller.js';
+import { ShippingWebhookController } from './controllers/shipping-webhook.controller.js';
 import { CartEntity } from './domain/entities/cart.entity.js';
 import { CartItemEntity } from './domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from './domain/entities/checkout-session.entity.js';
@@ -58,6 +59,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderController,
     SellerOrderController,
     PaymentsController,
+    ShippingWebhookController,
   ],
   providers: [
     CartService,

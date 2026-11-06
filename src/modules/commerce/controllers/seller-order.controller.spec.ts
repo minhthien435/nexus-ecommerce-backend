@@ -18,6 +18,7 @@ describe('SellerOrderController', () => {
       getSellerOrderById: vi.fn(),
       confirmSellerOrder: vi.fn(),
       shipSellerOrder: vi.fn(),
+      shipSellerOrderWithGhn: vi.fn(),
     } as unknown as OrderService;
 
     controller = new SellerOrderController(orderService);
@@ -145,6 +146,39 @@ describe('SellerOrderController', () => {
         statusCode: 200,
         message:
           'Bàn giao vận chuyển thành công, đơn hàng đang trên đường giao',
+        data: serviceResult,
+      });
+    });
+  });
+
+  describe('shipOrderWithGhn', () => {
+    it('returns 200 envelope with auto-generated GHN tracking code and print URL', async () => {
+      const serviceResult = {
+        orderId,
+        status: 'SHIPPED' as const,
+        trackingCode: 'GHN839210',
+        carrierName: 'GHN' as const,
+        totalFee: 32000,
+        expectedDeliveryTime: '2026-11-09T10:00:00Z',
+        printUrl:
+          'https://dev-online-gateway.ghn.vn/print/a5?order_code=GHN839210',
+        updatedAt: new Date('2026-11-06T10:00:00Z'),
+      };
+
+      vi.mocked(orderService.shipSellerOrderWithGhn).mockResolvedValue(
+        serviceResult as never,
+      );
+
+      const response = await controller.shipOrderWithGhn(sellerId, orderId);
+
+      expect(orderService.shipSellerOrderWithGhn).toHaveBeenCalledWith(
+        sellerId,
+        orderId,
+      );
+      expect(response).toEqual({
+        success: true,
+        statusCode: 200,
+        message: 'Tạo vận đơn GHN thành công, đơn hàng đang trên đường giao',
         data: serviceResult,
       });
     });
