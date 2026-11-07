@@ -33,6 +33,8 @@ import { OrderExpiryOutboxApi } from './order-expiry-outbox.api.js';
 import { OrderExpiryOutboxService } from './services/order-expiry-outbox.service.js';
 import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
+import { SupportOrderController } from './controllers/support-order.controller.js';
+import { SupportOrderService } from './services/support-order.service.js';
 
 @Module({
   imports: [
@@ -58,6 +60,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     OrderController,
     SellerOrderController,
     PaymentsController,
+    SupportOrderController,
   ],
   providers: [
     CartService,
@@ -69,6 +72,7 @@ import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
     PayosClientService,
     PaymentsService,
     PaymentWebhookService,
+    SupportOrderService,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,

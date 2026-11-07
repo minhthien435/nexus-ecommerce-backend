@@ -40,6 +40,8 @@ import { SellerShopController } from './controllers/seller-shop.controller.js';
 import { SellerShopService } from './services/seller-shop.service.js';
 import { AdminShopController } from './admin/admin-shop.controller.js';
 import { AdminShopService } from './admin/admin-shop.service.js';
+import { IdentitySupportLookupApi } from './identity-support-lookup.api.js';
+import { IdentitySupportLookupService } from './identity-support-lookup.service.js';
 
 @Module({
   imports: [
@@ -94,6 +96,10 @@ import { AdminShopService } from './admin/admin-shop.service.js';
       provide: IdentityPublicApi,
       useClass: IdentityPublicApiService,
     },
+    {
+      provide: IdentitySupportLookupApi,
+      useClass: IdentitySupportLookupService,
+    },
   ],
   exports: [
     AccessTokenGuard,
@@ -105,6 +111,7 @@ import { AdminShopService } from './admin/admin-shop.service.js';
     RolesGuard,
     PermissionsGuard,
     IdentityPublicApi,
+    IdentitySupportLookupApi,
     PasswordResetService,
     RecaptchaService,
     GoogleIdTokenService,
