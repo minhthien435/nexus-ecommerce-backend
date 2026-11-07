@@ -6,8 +6,8 @@ const transitions: Readonly<
   Partial<Record<OrderStatus, readonly OrderStatus[]>>
 > = {
   PENDING_PAYMENT: ['PAID', 'CANCELLED'],
-  PAID: ['PROCESSING'],
-  PROCESSING: ['SHIPPED'],
+  PAID: ['PROCESSING', 'CANCELLED'],
+  PROCESSING: ['SHIPPED', 'CANCELLED'],
   SHIPPED: ['DELIVERED'],
   CANCELLED: ['REFUNDED'],
 };

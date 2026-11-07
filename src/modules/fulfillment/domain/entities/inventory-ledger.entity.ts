@@ -8,6 +8,7 @@ import {
 
 export enum InventoryLedgerType {
   RESTOCK = 'RESTOCK',
+  ORDER_CANCELLATION_RELEASE = 'ORDER_CANCELLATION_RELEASE',
 }
 
 @Entity({ schema: 'fulfillment', name: 'seller_inventory_adjustments' })

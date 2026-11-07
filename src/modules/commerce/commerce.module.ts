@@ -37,6 +37,9 @@ import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
 import { OrderRefundService } from './services/order-refund.service.js';
 import { OrderRefundRequestApi } from './order-refund-request.api.js';
+import { SupportOrderCancelController } from './controllers/support-order-cancel.controller.js';
+import { OrderCancellationEntity } from './domain/entities/order-cancellation.entity.js';
+import { OrderCancelService } from './services/order-cancel.service.js';
 
 @Module({
   imports: [
@@ -51,6 +54,7 @@ import { OrderRefundRequestApi } from './order-refund-request.api.js';
       PaymentEntity,
       PaymentCallbackEntity,
       OrderRefundEntity,
+      OrderCancellationEntity,
       UserAddressEntity,
     ]),
     IdentityModule,
@@ -64,6 +68,7 @@ import { OrderRefundRequestApi } from './order-refund-request.api.js';
     SellerOrderController,
     PaymentsController,
     SupportRefundController,
+    SupportOrderCancelController,
   ],
   providers: [
     CartService,
@@ -76,6 +81,7 @@ import { OrderRefundRequestApi } from './order-refund-request.api.js';
     PaymentsService,
     PaymentWebhookService,
     OrderRefundService,
+    OrderCancelService,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,

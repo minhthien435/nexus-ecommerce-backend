@@ -9,6 +9,12 @@ export type InventoryReservationReceipt = InventoryReservationItem & {
   warehouseId: string;
 };
 
+export type InventoryReleaseContext = {
+  actorId: string;
+  operation: 'ORDER_CANCELLATION';
+  operationId: string;
+};
+
 export abstract class InventoryReservationApi {
   abstract reserve(
     items: InventoryReservationItem[],
@@ -18,5 +24,6 @@ export abstract class InventoryReservationApi {
   abstract release(
     receipts: InventoryReservationReceipt[],
     manager: EntityManager,
+    context?: InventoryReleaseContext,
   ): Promise<void>;
 }
