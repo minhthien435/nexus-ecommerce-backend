@@ -6,6 +6,7 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -97,6 +98,24 @@ export class SellerOrderController {
       success: true as const,
       statusCode: HttpStatus.OK,
       message: 'Bàn giao vận chuyển thành công, đơn hàng đang trên đường giao',
+      data: result,
+    };
+  }
+
+  @Post(':id/ghn-ship')
+  @Permissions('ORDER.VIEW')
+  async shipOrderWithGhn(
+    @CurrentUserId() sellerId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    const result = await this.orderService.shipSellerOrderWithGhn(
+      sellerId,
+      orderId,
+    );
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Tạo vận đơn GHN thành công, đơn hàng đang trên đường giao',
       data: result,
     };
   }

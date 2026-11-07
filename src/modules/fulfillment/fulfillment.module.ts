@@ -10,6 +10,7 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { InventoryLedgerEntity } from './domain/entities/inventory-ledger.entity.js';
 import { SellerInventoryController } from './controllers/seller-inventory.controller.js';
 import { SellerInventoryService } from './services/seller-inventory.service.js';
+import { GhnClientService } from './services/ghn-client.service.js';
 
 @Module({
   imports: [
@@ -25,7 +26,13 @@ import { SellerInventoryService } from './services/seller-inventory.service.js';
     { provide: InventoryReadApi, useClass: InventoryReadService },
     { provide: InventoryReservationApi, useClass: InventoryReservationService },
     SellerInventoryService,
+    GhnClientService,
   ],
-  exports: [InventoryReadApi, InventoryReservationApi, SellerInventoryService],
+  exports: [
+    InventoryReadApi,
+    InventoryReservationApi,
+    SellerInventoryService,
+    GhnClientService,
+  ],
 })
 export class FulfillmentModule {}

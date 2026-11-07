@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -28,6 +29,8 @@ import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
+import { GhnClientService } from '../../fulfillment/services/ghn-client.service.js';
+import type { GhnCreateOrderPayload } from '../../fulfillment/dtos/ghn-shipping.dto.js';
 
 @Injectable()
 export class OrderService {
@@ -55,6 +58,8 @@ export class OrderService {
     private readonly expiryOutbox: OrderExpiryOutboxApi,
     @Optional()
     private readonly payosClientService?: PayosClientService,
+    @Optional()
+    private readonly ghnClientService?: GhnClientService,
   ) {}
 
   /**
@@ -1011,8 +1016,161 @@ export class OrderService {
       return {
         orderId: order.id,
         status: 'SHIPPED' as const,
-        trackingCode: saved.trackingCode,
+        trackingCode: saved.trackingCode ?? order.trackingCode,
         carrierName: saved.carrierName,
+        updatedAt: saved.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * Người bán bàn giao đơn hàng tự động cho Giao Hàng Nhanh (GHN Sandbox)
+   */
+  async shipSellerOrderWithGhn(sellerId: string, orderId: string) {
+    if (!this.ghnClientService) {
+      throw new ServiceUnavailableException(
+        'Dịch vụ Giao Hàng Nhanh chưa được khởi tạo',
+      );
+    }
+
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: orderId, sellerId: sellerId.toLowerCase() },
+        relations: { items: true },
+      });
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message:
+            'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+        });
+      }
+      if (order.status !== 'PROCESSING') {
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
+        });
+      }
+
+      // Chuẩn bị thông tin người nhận từ snapshot địa chỉ
+      const snapshot = (order.shippingAddressSnapshot || {}) as Record<
+        string,
+        unknown
+      >;
+      const toName = String(
+        snapshot.recipientName ||
+          snapshot.fullName ||
+          snapshot.name ||
+          'Khách hàng Nexus',
+      );
+      const toPhone = String(snapshot.phone || '0901234567');
+      const toAddress = String(
+        snapshot.street || snapshot.address || 'Địa chỉ giao hàng',
+      );
+      const toWardCode = String(snapshot.wardCode || snapshot.ward || '20101');
+      const toDistrictId = Number(
+        snapshot.districtId || snapshot.district || 1442,
+      );
+
+      // Tính tổng khối lượng đơn hàng (mặc định mỗi item 200g, tối thiểu 200g)
+      const totalWeight =
+        order.items && order.items.length > 0
+          ? order.items.reduce((sum, item) => sum + item.quantity * 200, 0)
+          : 500;
+
+      const ghnPayload: GhnCreateOrderPayload = {
+        to_name: toName,
+        to_phone: toPhone,
+        to_address: toAddress,
+        to_ward_code: toWardCode,
+        to_district_id: toDistrictId,
+        weight: Math.max(100, totalWeight),
+        client_order_code: order.id,
+        required_note: 'CHOXEMHANGKHONGTHU',
+        items: order.items?.map((item) => ({
+          name: item.productNameSnapshot || 'Sản phẩm Nexus',
+          quantity: item.quantity,
+          price: Number(item.unitPrice) || 0,
+          weight: 200,
+        })),
+      };
+
+      const ghnResult =
+        await this.ghnClientService!.createShippingOrder(ghnPayload);
+
+      const reasonDetails = `Đơn vị vận chuyển: GHN | Mã vận đơn: ${ghnResult.order_code}`;
+      const shipped = await this.orderStateMachine.transition(manager, {
+        orderId: order.id,
+        toStatus: 'SHIPPED',
+        actorId: sellerId,
+        reason: reasonDetails,
+      });
+
+      shipped.trackingCode = ghnResult.order_code;
+      shipped.carrierName = 'GHN';
+      const saved = await manager.getRepository(OrderEntity).save(shipped);
+
+      return {
+        orderId: order.id,
+        status: 'SHIPPED' as const,
+        trackingCode: saved.trackingCode ?? order.trackingCode,
+        carrierName: saved.carrierName,
+        totalFee: ghnResult.total_fee,
+        expectedDeliveryTime: ghnResult.expected_delivery_time,
+        printUrl: ghnResult.print_url,
+        updatedAt: saved.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * Cập nhật trạng thái giao hàng thành công từ Webhook bưu cục (SHIPPED -> DELIVERED)
+   */
+  async markOrderAsDeliveredViaCarrier(trackingCode: string) {
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { trackingCode },
+      });
+
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message: `Không tìm thấy đơn hàng với mã vận đơn ${trackingCode}`,
+        });
+      }
+
+      // Idempotency: nếu đơn hàng đã ở trạng thái DELIVERED
+      if (order.status === 'DELIVERED') {
+        return {
+          orderId: order.id,
+          status: 'DELIVERED' as const,
+          trackingCode: order.trackingCode,
+          alreadyDelivered: true,
+          updatedAt: order.updatedAt,
+        };
+      }
+
+      if (order.status !== 'SHIPPED') {
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message: `Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: ${order.status})`,
+        });
+      }
+
+      const delivered = await this.orderStateMachine.transition(manager, {
+        orderId: order.id,
+        toStatus: 'DELIVERED',
+        actorId: null,
+        reason: 'Webhook bưu tá GHN cập nhật giao hàng thành công',
+      });
+
+      const saved = await manager.getRepository(OrderEntity).save(delivered);
+
+      return {
+        orderId: saved.id,
+        status: 'DELIVERED' as const,
+        trackingCode: saved.trackingCode ?? order.trackingCode,
+        alreadyDelivered: false,
         updatedAt: saved.updatedAt,
       };
     });

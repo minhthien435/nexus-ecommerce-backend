@@ -9,6 +9,7 @@ import { CartController } from './controllers/cart.controller.js';
 import { OrderController } from './controllers/order.controller.js';
 import { SellerOrderController } from './controllers/seller-order.controller.js';
 import { PaymentsController } from './controllers/payments.controller.js';
+import { ShippingWebhookController } from './controllers/shipping-webhook.controller.js';
 import { SupportRefundController } from './controllers/support-refund.controller.js';
 import { CartEntity } from './domain/entities/cart.entity.js';
 import { CartItemEntity } from './domain/entities/cart-item.entity.js';
@@ -70,6 +71,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     SellerOrderController,
     PaymentsController,
     SupportOrderController,
+    ShippingWebhookController,
     SupportRefundController,
     SupportOrderCancelController,
   ],
