@@ -1,0 +1,283 @@
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { AuditLogEntity } from '../../identity/domain/audit-log.entity.js';
+import { OrderRefundRequestApi } from '../order-refund-request.api.js';
+import { OrderEntity } from '../domain/entities/order.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import {
+  OrderRefundEntity,
+  type OrderRefundStatus,
+} from '../domain/entities/order-refund.entity.js';
+import type { QueryOrderRefundsDto } from '../dtos/order-refund.dto.js';
+import { OrderStateMachineService } from './order-state-machine.service.js';
+
+@Injectable()
+export class OrderRefundService extends OrderRefundRequestApi {
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectRepository(OrderRefundEntity)
+    private readonly refundRepository: Repository<OrderRefundEntity>,
+    private readonly orderStateMachine: OrderStateMachineService,
+  ) {
+    super();
+  }
+
+  async requestFullRefund(
+    orderId: string,
+    actorId: string,
+    reason: string,
+    manager: EntityManager,
+  ): Promise<{ refundId: string; status: 'REQUESTED' }> {
+    this.requireTransaction(manager);
+    const existing = await manager.getRepository(OrderRefundEntity).findOne({
+      where: { orderId },
+    });
+    if (existing) {
+      if (existing.status !== 'REQUESTED') {
+        throw this.conflict(
+          'REFUND_ALREADY_ADVANCED',
+          'Refund is no longer requested',
+        );
+      }
+      return { refundId: existing.id, status: 'REQUESTED' };
+    }
+
+    const order = await manager
+      .getRepository(OrderEntity)
+      .createQueryBuilder('order')
+      .setLock('pessimistic_write')
+      .where('order.id = :orderId', { orderId })
+      .getOne();
+    if (!order)
+      throw new NotFoundException({
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'Order was not found',
+      });
+    if (order.status !== 'CANCELLED') {
+      throw this.conflict(
+        'REFUND_ORDER_NOT_CANCELLED',
+        'Only a cancelled order can be refunded',
+      );
+    }
+
+    // A concurrent request can pass the first lookup before waiting on the
+    // order lock. Re-check while holding that lock so the unique constraints
+    // remain a last line of defence rather than the normal idempotency path.
+    const existingAfterLock = await manager
+      .getRepository(OrderRefundEntity)
+      .findOne({ where: { orderId } });
+    if (existingAfterLock) {
+      if (existingAfterLock.status !== 'REQUESTED') {
+        throw this.conflict(
+          'REFUND_ALREADY_ADVANCED',
+          'Refund is no longer requested',
+        );
+      }
+      return { refundId: existingAfterLock.id, status: 'REQUESTED' };
+    }
+
+    const payment = await manager
+      .getRepository(PaymentEntity)
+      .createQueryBuilder('payment')
+      .setLock('pessimistic_write')
+      .where('payment.order_id = :orderId', { orderId })
+      .andWhere('payment.status = :status', { status: 'SUCCEEDED' })
+      .orderBy('payment.updated_at', 'DESC')
+      .getOne();
+    if (!payment) {
+      throw this.conflict(
+        'REFUND_PAYMENT_NOT_FOUND',
+        'No successful payment exists for this order',
+      );
+    }
+
+    const repository = manager.getRepository(OrderRefundEntity);
+    const refund = repository.create({
+      orderId,
+      paymentId: payment.id,
+      refundCode: `REF-${order.orderNumber}`.slice(0, 64),
+      amount: payment.amount,
+      currency: payment.currency,
+      reason,
+      status: 'REQUESTED',
+      paymentCarrier: payment.provider,
+      originalTransactionRef: payment.providerPaymentId,
+      bankReferenceCode: null,
+      idempotencyKey: `order-refund:${orderId}`,
+      requestedBy: actorId,
+      processedBy: null,
+      processedAt: null,
+      notes: null,
+    });
+    const saved = await repository.save(refund);
+    await this.audit(manager, actorId, 'ORDER_REFUND_REQUESTED', saved, {
+      orderId,
+      paymentId: payment.id,
+      amount: payment.amount,
+      currency: payment.currency,
+      reason,
+    });
+    return { refundId: saved.id, status: 'REQUESTED' };
+  }
+
+  async list(query: QueryOrderRefundsDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const where = query.status ? { status: query.status } : {};
+    const [items, totalItems] = await this.refundRepository.findAndCount({
+      where,
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      items,
+      meta: {
+        currentPage: page,
+        itemsPerPage: limit,
+        totalItems,
+        totalPages: Math.ceil(totalItems / limit),
+      },
+    };
+  }
+
+  process(refundId: string, actorId: string) {
+    return this.dataSource.transaction((manager) =>
+      this.updateStatus(manager, refundId, actorId, 'PROCESSING'),
+    );
+  }
+
+  reject(refundId: string, actorId: string, reason: string) {
+    return this.dataSource.transaction((manager) =>
+      this.updateStatus(manager, refundId, actorId, 'REJECTED', reason),
+    );
+  }
+
+  confirmTransferred(
+    refundId: string,
+    actorId: string,
+    bankReferenceCode: string,
+    notes?: string,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const refund = await this.lockRefund(manager, refundId);
+      if (!['REQUESTED', 'PROCESSING'].includes(refund.status)) {
+        throw this.conflict(
+          'REFUND_TRANSITION_NOT_ALLOWED',
+          `Refund cannot be completed from ${refund.status}`,
+        );
+      }
+      const duplicate = await manager.getRepository(OrderRefundEntity).findOne({
+        where: { bankReferenceCode },
+      });
+      if (duplicate && duplicate.id !== refund.id) {
+        throw this.conflict(
+          'REFUND_BANK_REFERENCE_EXISTS',
+          'Bank reference code is already in use',
+        );
+      }
+      await this.orderStateMachine.transition(manager, {
+        orderId: refund.orderId,
+        toStatus: 'REFUNDED',
+        actorId,
+        reason: `REFUND_COMPLETED:${refund.id}`,
+      });
+      refund.status = 'COMPLETED';
+      refund.bankReferenceCode = bankReferenceCode;
+      refund.notes = notes ?? null;
+      refund.processedBy = actorId;
+      refund.processedAt = new Date();
+      const saved = await manager.getRepository(OrderRefundEntity).save(refund);
+      await this.audit(manager, actorId, 'ORDER_REFUND_COMPLETED', saved, {
+        bankReferenceCode,
+        notes: notes ?? null,
+      });
+      return saved;
+    });
+  }
+
+  private async updateStatus(
+    manager: EntityManager,
+    refundId: string,
+    actorId: string,
+    status: Extract<OrderRefundStatus, 'PROCESSING' | 'REJECTED'>,
+    notes?: string,
+  ) {
+    const refund = await this.lockRefund(manager, refundId);
+    const allowed =
+      status === 'PROCESSING'
+        ? refund.status === 'REQUESTED'
+        : ['REQUESTED', 'PROCESSING'].includes(refund.status);
+    if (!allowed) {
+      throw this.conflict(
+        'REFUND_TRANSITION_NOT_ALLOWED',
+        `Refund cannot transition from ${refund.status} to ${status}`,
+      );
+    }
+    refund.status = status;
+    refund.processedBy = actorId;
+    refund.processedAt = new Date();
+    refund.notes = notes ?? refund.notes;
+    const saved = await manager.getRepository(OrderRefundEntity).save(refund);
+    await this.audit(manager, actorId, `ORDER_REFUND_${status}`, saved, {
+      notes: notes ?? null,
+    });
+    return saved;
+  }
+
+  private async lockRefund(manager: EntityManager, refundId: string) {
+    const refund = await manager
+      .getRepository(OrderRefundEntity)
+      .createQueryBuilder('refund')
+      .setLock('pessimistic_write')
+      .where('refund.id = :refundId', { refundId })
+      .getOne();
+    if (!refund)
+      throw new NotFoundException({
+        errorCode: 'REFUND_NOT_FOUND',
+        message: 'Refund was not found',
+      });
+    return refund;
+  }
+
+  private audit(
+    manager: EntityManager,
+    actorId: string,
+    action: string,
+    refund: OrderRefundEntity,
+    changes: Record<string, unknown>,
+  ) {
+    const repository = manager.getRepository(AuditLogEntity);
+    return repository.save(
+      repository.create({
+        actorId,
+        actorType: 'USER',
+        action,
+        entityType: 'ORDER_REFUND',
+        entityId: refund.id,
+        changes,
+        clientIp: null,
+        traceId: null,
+      }),
+    );
+  }
+
+  private requireTransaction(manager: EntityManager) {
+    if (!manager.queryRunner?.isTransactionActive) {
+      throw new InternalServerErrorException({
+        errorCode: 'REFUND_TRANSACTION_REQUIRED',
+        message: 'Refund requests require an active caller-owned transaction',
+      });
+    }
+  }
+
+  private conflict(errorCode: string, message: string) {
+    return new ConflictException({ errorCode, message });
+  }
+}
