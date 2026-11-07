@@ -40,6 +40,9 @@ function setup(options?: { ghnClientService?: unknown }) {
       updatedAt: new Date('2026-11-04T09:00:00Z'),
     })),
   };
+  const catalogApi = {
+    getCartSkus: vi.fn().mockResolvedValue([{ id: 'sku-1', weightGrams: 200 }]),
+  };
 
   const dataSource = {
     transaction: vi.fn(
@@ -66,7 +69,7 @@ function setup(options?: { ghnClientService?: unknown }) {
     {} as never,
     orderHistoryRepo as never,
     {} as never,
-    {} as never,
+    catalogApi as never,
     orderStateMachine as never,
     {} as never,
     {} as never,
@@ -540,14 +543,15 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
           status: 'PROCESSING',
           shippingAddressSnapshot: {
             recipientName: 'Nguyen Van A',
-            phone: '0987654321',
-            street: '123 Nguyen Hue',
+            recipientPhone: '0987654321',
+            addressLine: '123 Nguyen Hue',
             wardCode: '20101',
-            districtId: 1442,
+            districtCode: '1442',
           },
           items: [
             {
               productNameSnapshot: 'Ao khoac Gio',
+              skuId: 'sku-1',
               quantity: 2,
               unitPrice: '150000.00',
             },

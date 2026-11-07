@@ -31,6 +31,8 @@ import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { GhnClientService } from '../../fulfillment/services/ghn-client.service.js';
 import type { GhnCreateOrderPayload } from '../../fulfillment/dtos/ghn-shipping.dto.js';
+import { ShippingQuoteService } from '../../fulfillment/services/shipping-quote.service.js';
+import type { CartSku } from '../../catalog/catalog-cart.api.js';
 
 @Injectable()
 export class OrderService {
@@ -60,6 +62,8 @@ export class OrderService {
     private readonly payosClientService?: PayosClientService,
     @Optional()
     private readonly ghnClientService?: GhnClientService,
+    @Optional()
+    private readonly shippingQuotes?: ShippingQuoteService,
   ) {}
 
   /**
@@ -182,12 +186,59 @@ export class OrderService {
       itemsBySeller.get(sellerId)!.push(item);
     }
 
+    if (!this.shippingQuotes)
+      throw new ServiceUnavailableException('Shipping quotes are unavailable');
+    if (
+      typeof shippingSnapshot.districtCode !== 'string' ||
+      !/^\d+$/.test(shippingSnapshot.districtCode) ||
+      typeof shippingSnapshot.wardCode !== 'string' ||
+      !/^\d{1,20}$/.test(shippingSnapshot.wardCode)
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_SHIPPING_INPUT',
+        message: 'A GHN district code and ward code are required for checkout',
+      });
+    }
+    const quotedFingerprint = this.shippingFingerprint(cartItems, skuMap);
+    const shippingFees = new Map<string, bigint>();
+    for (const [sellerId, sellerItems] of itemsBySeller) {
+      let weightGrams = 0;
+      for (const item of sellerItems) {
+        const weight = skuMap.get(item.skuId)?.weightGrams;
+        if (
+          !Number.isSafeInteger(weight) ||
+          weight! <= 0 ||
+          !Number.isSafeInteger(item.quantity) ||
+          item.quantity <= 0
+        ) {
+          throw new BadRequestException({
+            errorCode: 'SHIPPING_WEIGHT_MISSING',
+            message:
+              'Every selected SKU must have a positive persisted weight and quantity',
+          });
+        }
+        weightGrams += weight! * item.quantity;
+      }
+      const quote = await this.shippingQuotes.quote({
+        districtId: Number(shippingSnapshot.districtCode),
+        wardCode: shippingSnapshot.wardCode as string,
+        weightGrams,
+      });
+      shippingFees.set(sellerId, moneyToCents(String(quote.fee)));
+    }
+
     // 6. Tính toán thời gian hết hạn giữ kho (15 phút)
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
 
     // 7. Thực thi Transaction tạo CheckoutSession, Orders và OrderItems
     const result = await this.dataSource.transaction(async (manager) => {
+      const lockedCart = await manager.getRepository(CartEntity).findOne({
+        where: { id: cart.id, userId: userId.toLowerCase(), status: 'ACTIVE' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!lockedCart)
+        throw new ConflictException('Cart is no longer active; retry checkout');
       const itemQuery = manager
         .getRepository(CartItemEntity)
         .createQueryBuilder('item')
@@ -236,6 +287,13 @@ export class OrderService {
         manager,
       );
       skuMap = new Map(lockedSkus.map((sku) => [sku.id, sku]));
+      if (this.shippingFingerprint(cartItems, skuMap) !== quotedFingerprint) {
+        throw new ConflictException({
+          errorCode: 'SHIPPING_QUOTE_STALE',
+          message:
+            'Selected cart contents changed while quoting shipping; retry checkout',
+        });
+      }
       itemsBySeller = new Map();
       for (const item of cartItems) {
         const sku = skuMap.get(item.skuId);
@@ -314,7 +372,7 @@ export class OrderService {
           });
         }
 
-        const shippingFeeCents = 0n; // Default 0đ
+        const shippingFeeCents = shippingFees.get(sellerId)!;
         const orderTotalCents = sellerSubtotalCents + shippingFeeCents;
 
         sessionSubtotalCents += sellerSubtotalCents;
@@ -911,6 +969,23 @@ export class OrderService {
     return typeof value === 'string' ? value : null;
   }
 
+  private shippingFingerprint(
+    items: CartItemEntity[],
+    skus: Map<string, CartSku>,
+  ): string {
+    return JSON.stringify(
+      items
+        .map((item) => [
+          item.id,
+          item.skuId,
+          item.quantity,
+          skus.get(item.skuId)?.sellerId,
+          skus.get(item.skuId)?.weightGrams,
+        ])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    );
+  }
+
   /**
    * Người bán bấm Xác nhận đơn hàng (PAID -> PROCESSING)
    */
@@ -1063,20 +1138,41 @@ export class OrderService {
           snapshot.name ||
           'Khách hàng Nexus',
       );
-      const toPhone = String(snapshot.phone || '0901234567');
-      const toAddress = String(
-        snapshot.street || snapshot.address || 'Địa chỉ giao hàng',
+      const toPhone = String(snapshot.recipientPhone || '');
+      const toAddress = String(snapshot.addressLine || '');
+      const toWardCode = String(snapshot.wardCode || '');
+      const toDistrictId = Number(snapshot.districtCode);
+      if (
+        typeof snapshot.recipientName !== 'string' ||
+        !snapshot.recipientName.trim() ||
+        !toPhone.trim() ||
+        !toAddress.trim() ||
+        !/^\d+$/.test(toWardCode) ||
+        !Number.isSafeInteger(toDistrictId) ||
+        toDistrictId <= 0 ||
+        !order.items?.length
+      ) {
+        throw new BadRequestException(
+          'Địa chỉ giao hàng hoặc sản phẩm không hợp lệ',
+        );
+      }
+      const skus = await this.catalogApi.getCartSkus(
+        order.items.map((item) => item.skuId),
+        manager,
       );
-      const toWardCode = String(snapshot.wardCode || snapshot.ward || '20101');
-      const toDistrictId = Number(
-        snapshot.districtId || snapshot.district || 1442,
-      );
-
-      // Tính tổng khối lượng đơn hàng (mặc định mỗi item 200g, tối thiểu 200g)
-      const totalWeight =
-        order.items && order.items.length > 0
-          ? order.items.reduce((sum, item) => sum + item.quantity * 200, 0)
-          : 500;
+      const weights = new Map(skus.map((sku) => [sku.id, sku.weightGrams]));
+      let totalWeight = 0;
+      for (const item of order.items) {
+        const weight = weights.get(item.skuId);
+        if (
+          !Number.isSafeInteger(weight) ||
+          weight! <= 0 ||
+          !Number.isSafeInteger(item.quantity) ||
+          item.quantity <= 0
+        )
+          throw new BadRequestException('Thiếu cân nặng sản phẩm hợp lệ');
+        totalWeight += weight! * item.quantity;
+      }
 
       const ghnPayload: GhnCreateOrderPayload = {
         to_name: toName,
@@ -1084,14 +1180,15 @@ export class OrderService {
         to_address: toAddress,
         to_ward_code: toWardCode,
         to_district_id: toDistrictId,
-        weight: Math.max(100, totalWeight),
+        weight: totalWeight,
+        service_type_id: totalWeight < 20000 ? 2 : 5,
         client_order_code: order.id,
         required_note: 'CHOXEMHANGKHONGTHU',
         items: order.items?.map((item) => ({
           name: item.productNameSnapshot || 'Sản phẩm Nexus',
           quantity: item.quantity,
           price: Number(item.unitPrice) || 0,
-          weight: 200,
+          weight: weights.get(item.skuId)!,
         })),
       };
 

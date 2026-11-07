@@ -31,6 +31,7 @@ export class CatalogCartService extends CatalogCartApi {
       .addSelect('sku.sku_code', 'skuCode')
       .addSelect('sku.variant_attributes', 'variantAttributes')
       .addSelect('sku.price::text', 'price')
+      .addSelect('sku.weight_grams', 'weightGrams')
       .addSelect('sku.currency', 'currency')
       .addSelect('sku.is_active', 'isActive')
       .addSelect('product.name', 'productName')
