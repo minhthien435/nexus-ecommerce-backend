@@ -136,6 +136,37 @@ describe('InventoryReservationService', () => {
     expect(s.warehouses.find).toHaveBeenCalledOnce();
   });
 
+  it('writes an immutable cancellation ledger entry in the same transaction', async () => {
+    const s = setup([
+      {
+        inventory_item_id: '55555555-5555-4555-8555-555555555555',
+        warehouse_id: firstWarehouse,
+        sku_id: firstSku,
+        quantity: 2,
+        total_qty: 10,
+        reserved_qty: 1,
+        unavailable_qty: 0,
+        available_qty: 9,
+      } as never,
+    ]);
+    await s.service.release(
+      [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+      s.manager as never,
+      {
+        actorId: '66666666-6666-4666-8666-666666666666',
+        operation: 'ORDER_CANCELLATION',
+        operationId: 'cancel-key-1',
+      },
+    );
+    expect(s.manager.query).toHaveBeenCalledTimes(2);
+    expect(s.manager.query.mock.calls[1][0]).toContain(
+      "'ORDER_CANCELLATION_RELEASE'",
+    );
+    expect(s.manager.query.mock.calls[1][1][3]).toBe(
+      '66666666-6666-4666-8666-666666666666',
+    );
+  });
+
   it('rejects a missing release row', async () => {
     const s = setup([]);
     await expect(

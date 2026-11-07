@@ -4,6 +4,7 @@ import { OrderStatusHistoryEntity } from '../domain/entities/order-status-histor
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
+import type { EntityManager } from 'typeorm';
 
 const orderId = '11111111-1111-4111-8111-111111111111';
 const buyerId = '22222222-2222-4222-8222-222222222222';
@@ -77,6 +78,27 @@ function setup(current: OrderEntity | null = order()) {
 }
 
 describe('OrderStateMachineService', () => {
+  it('allows a cancelled order to become refunded and records history', async () => {
+    const { service, orderRepository, historyRepository, manager } = setup(
+      order('CANCELLED'),
+    );
+    await service.transition(manager as unknown as EntityManager, {
+      orderId: 'order-1',
+      toStatus: 'REFUNDED',
+      actorId: 'staff-1',
+      reason: 'refund completed',
+    });
+    expect(orderRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'REFUNDED' }),
+    );
+    expect(historyRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromStatus: 'CANCELLED',
+        toStatus: 'REFUNDED',
+        changedBy: 'staff-1',
+      }),
+    );
+  });
   it('rejects partial receipts before cancelling or writing history', async () => {
     const s = setup();
     s.itemRepository.find.mockResolvedValue([
