@@ -4,10 +4,12 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type { EntityManager } from 'typeorm';
 import { WarehouseEntity } from '../domain/entities/warehouse.entity.js';
 import { InventoryReservationApi } from '../inventory-reservation.api.js';
 import type {
+  InventoryReleaseContext,
   InventoryReservationItem,
   InventoryReservationReceipt,
 } from '../inventory-reservation.api.js';
@@ -61,6 +63,7 @@ SELECT sku_id FROM updated ORDER BY sku_id`,
   async release(
     receipts: InventoryReservationReceipt[],
     manager: EntityManager,
+    context?: InventoryReleaseContext,
   ): Promise<void> {
     const normalized = this.normalizeReceipts(receipts);
     if (normalized.length === 0) return;
@@ -74,21 +77,59 @@ updated AS (
   WHERE inventory.warehouse_id = requested.warehouse_id
     AND inventory.sku_id = requested.sku_id
     AND inventory.reserved_qty >= requested.quantity
-  RETURNING inventory.warehouse_id, inventory.sku_id
+  RETURNING inventory.id AS inventory_item_id, inventory.warehouse_id,
+            inventory.sku_id, requested.quantity,
+            inventory.total_qty, inventory.reserved_qty,
+            inventory.unavailable_qty, inventory.available_qty
 )
-SELECT warehouse_id, sku_id FROM updated`,
+SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
       parameters,
     )) as unknown;
     const rows = (
       Array.isArray(rawResult) && Array.isArray(rawResult[0])
         ? rawResult[0]
         : (rawResult ?? [])
-    ) as { warehouse_id: string; sku_id: string }[];
+    ) as Array<{
+      inventory_item_id: string;
+      warehouse_id: string;
+      sku_id: string;
+      quantity: number;
+      total_qty: number;
+      reserved_qty: number;
+      unavailable_qty: number;
+      available_qty: number;
+    }>;
     if (rows.length !== normalized.length) {
       throw new ServiceUnavailableException({
         errorCode: 'INVALID_INVENTORY_DATA',
         message: 'Reserved inventory row is missing',
       });
+    }
+    if (context) {
+      for (const row of rows) {
+        const key = `cancel:${createHash('sha256').update(`${context.operationId}:${row.warehouse_id}:${row.sku_id}`).digest('hex')}`;
+        await manager.query(
+          `INSERT INTO fulfillment.seller_inventory_adjustments
+             (inventory_item_id, sku_id, warehouse_id, actor_id, type,
+              quantity_delta, quantity_before, quantity_after, reserved_after,
+              unavailable_after, available_after, idempotency_key, request_fingerprint)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid,
+                   'ORDER_CANCELLATION_RELEASE', $5::int, $6::int, $6::int,
+                   $7::int, $8::int, $9::int, $10, $10)`,
+          [
+            row.inventory_item_id,
+            row.sku_id,
+            row.warehouse_id,
+            context.actorId,
+            Number(row.quantity),
+            Number(row.total_qty),
+            Number(row.reserved_qty),
+            Number(row.unavailable_qty),
+            Number(row.available_qty),
+            key,
+          ],
+        );
+      }
     }
   }
 
