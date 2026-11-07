@@ -4,6 +4,8 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { OrderService } from './order.service.js';
 import { QuerySellerOrdersDto } from '../dtos/query-seller-orders.dto.js';
+import { PaymentsService } from './payments.service.js';
+import { ConfigService } from '@nestjs/config';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const cartId = '22222222-2222-4222-8222-222222222222';
@@ -144,6 +146,7 @@ function setup() {
     delete: vi.fn().mockResolvedValue({ affected: 1 }),
     update: vi.fn().mockResolvedValue({ affected: 1 }),
     getRepository: vi.fn((entity) => {
+      if (entity.name === 'CartEntity') return cartRepo;
       if (entity.name === 'CartItemEntity')
         return {
           ...cartItemRepo,
@@ -180,6 +183,7 @@ function setup() {
     ),
   };
 
+  const shippingQuotes = { quote: vi.fn().mockResolvedValue({ fee: 30000 }) };
   const service = new OrderService(
     dataSource as never,
     cartRepo as never,
@@ -193,9 +197,13 @@ function setup() {
     orderStateMachine as never,
     inventoryReservation as never,
     expiryOutbox as never,
+    undefined,
+    undefined,
+    shippingQuotes as never,
   );
 
   return {
+    shippingQuotes,
     cartRepo,
     cartItemRepo,
     checkoutSessionRepo,
@@ -263,6 +271,9 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
   it('successfully creates checkout session and splits orders per seller', async () => {
     const s = setup();
 
+    s.shippingQuotes.quote
+      .mockResolvedValueOnce({ fee: 30000 })
+      .mockResolvedValueOnce({ fee: 40000 });
     // 2 items from seller 1, 1 item from seller 2
     s.cartItemRepo.find.mockResolvedValue([
       { id: 'item-1', cartId, skuId: 'sku-1', quantity: 2 },
@@ -277,6 +288,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         sellerId: seller1,
         skuCode: 'SKU-1',
         variantAttributes: { color: 'Blue' },
+        weightGrams: 250,
         price: '100000.00',
         currency: 'VND',
         isActive: true,
@@ -291,6 +303,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         sellerId: seller1,
         skuCode: 'SKU-2',
         variantAttributes: { color: 'Red' },
+        weightGrams: 250,
         price: '150000.00',
         currency: 'VND',
         isActive: true,
@@ -305,6 +318,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         sellerId: seller2,
         skuCode: 'SKU-3',
         variantAttributes: { size: 'XL' },
+        weightGrams: 250,
         price: '200000.00',
         currency: 'VND',
         isActive: true,
@@ -322,19 +336,74 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     // Check checkout session totals:
     // Seller 1: 2 * 100,000 + 1 * 150,000 = 350,000
     // Seller 2: 3 * 200,000 = 600,000
-    // Total: 950,000.00
-    expect(result.totalAmount).toBe('950000.00');
+    // Total: 950,000 merchandise + 70,000 shipping.
+    expect(result.totalAmount).toBe('1020000.00');
     expect(result.orders).toHaveLength(2);
+    expect(s.shippingQuotes.quote).toHaveBeenCalledTimes(2);
+    expect(s.shippingQuotes.quote).toHaveBeenNthCalledWith(1, {
+      districtId: 760,
+      wardCode: '26734',
+      weightGrams: 750,
+    });
+    expect(s.shippingQuotes.quote).toHaveBeenNthCalledWith(2, {
+      districtId: 760,
+      wardCode: '26734',
+      weightGrams: 750,
+    });
+    // Existing PayOS API creates one link per seller order. Their sum must match checkout.
+    const payos = {
+      createPaymentLink: vi.fn().mockResolvedValue({
+        paymentLinkId: 'test',
+        checkoutUrl: 'https://example.test',
+        qrCode: 'test',
+      }),
+    };
+    const payments = {
+      findOne: vi.fn().mockResolvedValue(null),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn((value) => value),
+      save: vi.fn(async (value) => value),
+    };
+    const paymentOrders = { findOne: vi.fn() };
+    const paymentService = new PaymentsService(
+      paymentOrders as never,
+      payments as never,
+      payos as never,
+      new ConfigService({
+        PAYOS_RETURN_URL: 'https://example.test/return',
+        PAYOS_CANCEL_URL: 'https://example.test/cancel',
+      }),
+    );
+    for (const order of result.orders) {
+      paymentOrders.findOne.mockResolvedValue({
+        ...order,
+        buyerId: userId,
+        currency: 'VND',
+        checkoutSessionId: result.checkoutSessionId,
+      });
+      await paymentService.createPayosPaymentLink(userId, {
+        orderId: order.id,
+      });
+    }
+    expect(
+      payos.createPaymentLink.mock.calls.map(([input]) => input.amount),
+    ).toEqual([380000, 640000]);
+    expect(
+      payos.createPaymentLink.mock.calls.reduce(
+        (sum, [input]) => sum + input.amount,
+        0,
+      ),
+    ).toBe(Number(result.totalAmount));
 
     const orderSeller1 = result.orders.find((o) => o.sellerId === seller1);
     const orderSeller2 = result.orders.find((o) => o.sellerId === seller2);
 
     expect(orderSeller1).toBeDefined();
-    expect(orderSeller1!.total).toBe('350000.00');
+    expect(orderSeller1!.total).toBe('380000.00');
     expect(orderSeller1!.status).toBe('PENDING_PAYMENT');
 
     expect(orderSeller2).toBeDefined();
-    expect(orderSeller2!.total).toBe('600000.00');
+    expect(orderSeller2!.total).toBe('640000.00');
     expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
 
     // PayOS rows remain in the cart and are mapped to their exact seller order.
@@ -372,6 +441,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         id: 'sku-1',
         productId: 'prod-1',
         sellerId: seller1,
+        weightGrams: 250,
         price: '100000.00',
         isActive: true,
         productName: 'Product 1',
@@ -408,6 +478,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         id: 'sku-1',
         productId: 'prod-1',
         sellerId: seller1,
+        weightGrams: 250,
         price: '100000.00',
         isActive: true,
         productName: 'Product 1',
@@ -433,6 +504,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         id: 'sku-1',
         productId: 'prod-1',
         sellerId: seller1,
+        weightGrams: 250,
         price: '100000.00',
         isActive: true,
         productName: 'Product 1',
@@ -471,6 +543,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         id: 'sku-1',
         productId: 'prod-1',
         sellerId: seller1,
+        weightGrams: 250,
         price: '100000.00',
         isActive: true,
         productName: 'Product 1',
@@ -522,6 +595,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         id: 'sku-1',
         productId: 'prod-1',
         sellerId: seller1,
+        weightGrams: 250,
         price: '100000.00',
         isActive: true,
         productName: 'Product 1',
@@ -1276,4 +1350,118 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0].property).toBe('status');
   });
+});
+
+describe('Checkout shipping failure and stale quote protection', () => {
+  function shippingSetup() {
+    const s = setup();
+    const item = { id: 'item-1', cartId, skuId: 'sku-1', quantity: 2 };
+    const sku = {
+      id: 'sku-1',
+      productId: 'product-1',
+      sellerId: seller1,
+      weightGrams: 250,
+      price: '100000.00',
+      isActive: true,
+      productStatus: 'ACTIVE',
+      productDeletedAt: null,
+    };
+    s.cartItemRepo.find.mockResolvedValue([item]);
+    s.catalogApi.getCartSkus.mockResolvedValue([sku]);
+    return { ...s, item, sku };
+  }
+  it('fails before transaction when GHN cannot quote', async () => {
+    const s = shippingSetup();
+    s.shippingQuotes.quote.mockRejectedValue(new Error('GHN unavailable'));
+    await expect(s.service.checkout(userId, {})).rejects.toThrow(
+      'GHN unavailable',
+    );
+    expect(s.dataSource.transaction).not.toHaveBeenCalled();
+    expect(s.inventoryReservation.reserve).not.toHaveBeenCalled();
+  });
+  it('rejects missing persisted weight before requesting a quote', async () => {
+    const s = shippingSetup();
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      { ...s.sku, weightGrams: null },
+    ]);
+    await expect(s.service.checkout(userId, {})).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(s.shippingQuotes.quote).not.toHaveBeenCalled();
+    expect(s.manager.save).not.toHaveBeenCalled();
+  });
+  it('rejects missing destination codes before quoting or creating payable data', async () => {
+    const s = shippingSetup();
+    await expect(
+      s.service.checkout(userId, {
+        shippingAddress: {
+          recipientName: 'Buyer',
+          recipientPhone: '0901234567',
+          addressLine: 'Street',
+        },
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(s.shippingQuotes.quote).not.toHaveBeenCalled();
+    expect(s.dataSource.transaction).not.toHaveBeenCalled();
+  });
+  it('does not create any order when the second seller quote fails', async () => {
+    const s = shippingSetup();
+    s.cartItemRepo.find.mockResolvedValue([
+      s.item,
+      { ...s.item, id: 'item-2', skuId: 'sku-2' },
+    ]);
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      s.sku,
+      { ...s.sku, id: 'sku-2', sellerId: seller2 },
+    ]);
+    s.shippingQuotes.quote
+      .mockResolvedValueOnce({ fee: 30000 })
+      .mockRejectedValueOnce(new Error('second quote failed'));
+    await expect(s.service.checkout(userId, {})).rejects.toThrow(
+      'second quote failed',
+    );
+    expect(s.dataSource.transaction).not.toHaveBeenCalled();
+    expect(s.manager.save).not.toHaveBeenCalled();
+  });
+  it.each(['quantity', 'sku', 'seller', 'weight', 'addition'])(
+    'rejects concurrent %s change before reserving inventory',
+    async (change) => {
+      const s = shippingSetup();
+      if (change === 'quantity' || change === 'sku' || change === 'addition') {
+        const items =
+          change === 'addition'
+            ? [s.item, { ...s.item, id: 'item-2' }]
+            : [
+                {
+                  ...s.item,
+                  ...(change === 'quantity'
+                    ? { quantity: 3 }
+                    : { skuId: 'sku-2' }),
+                },
+              ];
+        s.cartItemRepo.find
+          .mockResolvedValueOnce([s.item])
+          .mockResolvedValueOnce(items);
+      } else {
+        s.catalogApi.getCartSkus
+          .mockResolvedValueOnce([s.sku])
+          .mockResolvedValueOnce([
+            {
+              ...s.sku,
+              ...(change === 'seller'
+                ? { sellerId: seller2 }
+                : { weightGrams: 500 }),
+            },
+          ]);
+      }
+      await expect(s.service.checkout(userId, {})).rejects.toMatchObject({
+        status: 409,
+        response: expect.objectContaining({
+          errorCode: 'SHIPPING_QUOTE_STALE',
+        }),
+      });
+      expect(s.inventoryReservation.reserve).not.toHaveBeenCalled();
+      expect(s.manager.save).not.toHaveBeenCalled();
+    },
+  );
 });

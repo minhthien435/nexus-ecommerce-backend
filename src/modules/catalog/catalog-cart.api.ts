@@ -7,6 +7,7 @@ export type CartSku = {
   skuCode: string;
   variantAttributes: Record<string, unknown> | null;
   price: string;
+  weightGrams?: number | null;
   currency: string;
   isActive: boolean;
   productName: string;

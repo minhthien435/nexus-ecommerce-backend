@@ -11,6 +11,10 @@ import { InventoryLedgerEntity } from './domain/entities/inventory-ledger.entity
 import { SellerInventoryController } from './controllers/seller-inventory.controller.js';
 import { SellerInventoryService } from './services/seller-inventory.service.js';
 import { GhnClientService } from './services/ghn-client.service.js';
+import { ShippingController } from './controllers/shipping.controller.js';
+import { ShippingLocationsService } from './services/shipping-locations.service.js';
+import { ShippingLocationCacheService } from './services/shipping-location-cache.service.js';
+import { ShippingQuoteService } from './services/shipping-quote.service.js';
 
 @Module({
   imports: [
@@ -21,14 +25,18 @@ import { GhnClientService } from './services/ghn-client.service.js';
     ]),
     IdentityModule,
   ],
-  controllers: [SellerInventoryController],
+  controllers: [SellerInventoryController, ShippingController],
   providers: [
     { provide: InventoryReadApi, useClass: InventoryReadService },
     { provide: InventoryReservationApi, useClass: InventoryReservationService },
     SellerInventoryService,
     GhnClientService,
+    ShippingLocationsService,
+    ShippingLocationCacheService,
+    ShippingQuoteService,
   ],
   exports: [
+    ShippingQuoteService,
     InventoryReadApi,
     InventoryReservationApi,
     SellerInventoryService,

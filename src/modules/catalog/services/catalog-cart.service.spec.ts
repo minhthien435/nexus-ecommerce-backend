@@ -44,6 +44,10 @@ describe('CatalogCartService', () => {
     );
     expect(s.query.addSelect).toHaveBeenCalledWith('sku.price::text', 'price');
     expect(s.query.addSelect).toHaveBeenCalledWith(
+      'sku.weight_grams',
+      'weightGrams',
+    );
+    expect(s.query.addSelect).toHaveBeenCalledWith(
       'product.seller_id',
       'sellerId',
     );

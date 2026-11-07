@@ -36,6 +36,87 @@ export class GhnClientService {
           this.config.get<string>('NODE_ENV') !== 'production';
   }
 
+  /** Read-only GHN calls never use the shipment demo fallback. */
+  async request<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+    if (
+      !this.apiToken ||
+      !this.shopId ||
+      !/^\d+$/.test(this.shopId) ||
+      !Number.isSafeInteger(Number(this.shopId)) ||
+      Number(this.shopId) <= 0
+    ) {
+      throw new ServiceUnavailableException({
+        errorCode: 'GHN_CONFIG_MISSING',
+        message: 'GHN token and shop ID are required',
+      });
+    }
+    const base = this.apiUrl.replace(/\/+$/, '').replace(/\/v2$/, '');
+    try {
+      const response = await fetch(`${base}/${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Token: this.apiToken,
+          ShopId: this.shopId,
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(5000),
+      });
+      const result = (await response.json()) as { code?: number; data?: T };
+      if (!response.ok || result?.code !== 200 || result.data == null)
+        throw new Error('Invalid GHN response');
+      return result.data;
+    } catch {
+      throw new ServiceUnavailableException({
+        errorCode: 'GHN_REQUEST_FAILED',
+        message: 'GHN is unavailable or rejected the request; please retry',
+      });
+    }
+  }
+
+  async getShopOrigin(): Promise<{
+    districtId: number;
+    wardCode: string;
+    shopId: number;
+  }> {
+    // GHN returns a cursor, not a page number. Bound traversal even on malformed cursors.
+    let offset = 0;
+    for (let page = 0; page < 20; page++) {
+      const data = await this.request<{
+        shops: Array<{ _id: number; district_id: number; ward_code: string }>;
+        last_offset: number;
+      }>(`v2/shop/all?offset=${offset}&limit=100`);
+      if (!Array.isArray(data.shops)) break;
+      const shop = data.shops.find(
+        (entry) => entry?._id === Number(this.shopId),
+      );
+      if (
+        shop &&
+        Number.isSafeInteger(shop.district_id) &&
+        shop.district_id > 0 &&
+        typeof shop.ward_code === 'string' &&
+        /^\d{1,20}$/.test(shop.ward_code)
+      ) {
+        return {
+          districtId: shop.district_id,
+          wardCode: shop.ward_code,
+          shopId: shop._id,
+        };
+      }
+      if (
+        !data.shops.length ||
+        !Number.isSafeInteger(data.last_offset) ||
+        data.last_offset <= offset
+      )
+        break;
+      offset = data.last_offset;
+    }
+    throw new ServiceUnavailableException({
+      errorCode: 'GHN_ORIGIN_UNAVAILABLE',
+      message: 'Configured GHN shop has no valid registered origin',
+    });
+  }
+
   /**
    * Tạo đơn giao hàng mới qua GHN Express Sandbox API
    */
