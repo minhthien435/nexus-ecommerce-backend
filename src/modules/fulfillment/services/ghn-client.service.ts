@@ -25,7 +25,9 @@ export class GhnClientService {
       'https://dev-online-gateway.ghn.vn/shiip/public-api';
     this.apiToken = this.config.get<string>('GHN_API_TOKEN');
     this.shopId = this.config.get<string>('GHN_SHOP_ID');
-    this.webhookSecret = this.config.get<string>('GHN_WEBHOOK_SECRET_KEY');
+    this.webhookSecret =
+      this.config.get<string>('GHN_WEBHOOK_TOKEN') ||
+      this.config.get<string>('GHN_WEBHOOK_SECRET_KEY');
 
     // Default mock fallback to true in development/test or if no token provided
     const mockEnv = this.config.get<string>('GHN_MOCK_FALLBACK');
@@ -144,12 +146,13 @@ export class GhnClientService {
       }
 
       const orderCode = data.data.order_code;
+      const printUrl = await this.getPrintOrderUrl(orderCode);
       return {
         order_code: orderCode,
         total_fee: data.data.total_fee ?? 30000,
         expected_delivery_time: data.data.expected_delivery_time,
         trans_type: data.data.trans_type || 'standard',
-        print_url: this.generatePrintUrl(orderCode),
+        print_url: printUrl,
       };
     } catch (err: unknown) {
       if (
@@ -178,10 +181,62 @@ export class GhnClientService {
   }
 
   /**
-   * Tạo URL in phiếu gửi hàng A5/A4 chứa barcode vận đơn GHN
+   * Gọi GHN API để sinh token in phiếu gửi hàng A5/tem nhãn
    */
-  generatePrintUrl(orderCode: string): string {
-    return `${this.apiUrl}/a5/gen-token?order_codes=${orderCode}`;
+  async getPrintToken(orderCode: string): Promise<string | null> {
+    if (!this.apiToken) {
+      return null;
+    }
+    try {
+      const base = this.apiUrl.replace(/\/$/, '');
+      const endpoint = base.endsWith('/v2')
+        ? `${base}/a5/gen-token`
+        : `${base}/v2/a5/gen-token`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Token: this.apiToken,
+        },
+        body: JSON.stringify({ order_codes: [orderCode] }),
+      });
+
+      const data = (await response.json()) as {
+        code?: number;
+        data?: { token?: string };
+      };
+
+      if (response.ok && data.code === 200 && data.data?.token) {
+        return data.data.token;
+      }
+      return null;
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Không thể lấy print token từ GHN cho vận đơn ${orderCode}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Tạo URL in phiếu gửi hàng A5 mở trực tiếp trên trình duyệt
+   */
+  async getPrintOrderUrl(orderCode: string): Promise<string> {
+    const printToken = await this.getPrintToken(orderCode);
+    return this.generatePrintUrl(orderCode, printToken ?? undefined);
+  }
+
+  /**
+   * Tạo URL in phiếu gửi hàng A5 mở trực tiếp trên trình duyệt
+   */
+  generatePrintUrl(orderCode: string, printToken?: string): string {
+    const domain = this.apiUrl.includes('dev-online-gateway.ghn.vn')
+      ? 'https://dev-online-gateway.ghn.vn'
+      : 'https://online-gateway.ghn.vn';
+
+    const token = printToken || orderCode;
+    return `${domain}/a5/public-api/printA5?token=${token}`;
   }
 
   /**
@@ -227,7 +282,7 @@ export class GhnClientService {
       total_fee: 32000,
       expected_delivery_time: expectedTime,
       trans_type: 'truck',
-      print_url: `https://dev-online-gateway.ghn.vn/print/a5?order_codes=${mockOrderCode}`,
+      print_url: this.generatePrintUrl(mockOrderCode, `mock_${mockOrderCode}`),
     };
   }
 }
