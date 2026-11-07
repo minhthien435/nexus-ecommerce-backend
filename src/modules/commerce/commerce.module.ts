@@ -9,6 +9,7 @@ import { CartController } from './controllers/cart.controller.js';
 import { OrderController } from './controllers/order.controller.js';
 import { SellerOrderController } from './controllers/seller-order.controller.js';
 import { PaymentsController } from './controllers/payments.controller.js';
+import { SupportRefundController } from './controllers/support-refund.controller.js';
 import { CartEntity } from './domain/entities/cart.entity.js';
 import { CartItemEntity } from './domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from './domain/entities/checkout-session.entity.js';
@@ -18,6 +19,7 @@ import { OrderStatusHistoryEntity } from './domain/entities/order-status-history
 import { OrderExpiryOutboxEntity } from './domain/entities/order-expiry-outbox.entity.js';
 import { PaymentEntity } from './domain/entities/payment.entity.js';
 import { PaymentCallbackEntity } from './domain/entities/payment-callback.entity.js';
+import { OrderRefundEntity } from './domain/entities/order-refund.entity.js';
 import { CartService } from './services/cart.service.js';
 import { CartWriteService } from './services/cart-write.service.js';
 import { OrderService } from './services/order.service.js';
@@ -35,6 +37,11 @@ import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
 import { SupportOrderController } from './controllers/support-order.controller.js';
 import { SupportOrderService } from './services/support-order.service.js';
+import { OrderRefundService } from './services/order-refund.service.js';
+import { OrderRefundRequestApi } from './order-refund-request.api.js';
+import { SupportOrderCancelController } from './controllers/support-order-cancel.controller.js';
+import { OrderCancellationEntity } from './domain/entities/order-cancellation.entity.js';
+import { OrderCancelService } from './services/order-cancel.service.js';
 
 @Module({
   imports: [
@@ -48,6 +55,8 @@ import { SupportOrderService } from './services/support-order.service.js';
       OrderExpiryOutboxEntity,
       PaymentEntity,
       PaymentCallbackEntity,
+      OrderRefundEntity,
+      OrderCancellationEntity,
       UserAddressEntity,
     ]),
     IdentityModule,
@@ -61,6 +70,8 @@ import { SupportOrderService } from './services/support-order.service.js';
     SellerOrderController,
     PaymentsController,
     SupportOrderController,
+    SupportRefundController,
+    SupportOrderCancelController,
   ],
   providers: [
     CartService,
@@ -73,6 +84,8 @@ import { SupportOrderService } from './services/support-order.service.js';
     PaymentsService,
     PaymentWebhookService,
     SupportOrderService,
+    OrderRefundService,
+    OrderCancelService,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,
@@ -83,6 +96,7 @@ import { SupportOrderService } from './services/support-order.service.js';
       provide: OrderExpiryTransitionApi,
       useExisting: OrderStateMachineService,
     },
+    { provide: OrderRefundRequestApi, useExisting: OrderRefundService },
   ],
   exports: [
     CartMergeApi,
@@ -92,6 +106,7 @@ import { SupportOrderService } from './services/support-order.service.js';
     PaymentsService,
     PaymentWebhookService,
     PayosClientService,
+    OrderRefundRequestApi,
   ],
 })
 export class CommerceModule {}
