@@ -24,6 +24,27 @@ beforeEach(() => {
   redis.status = 'ready';
 });
 describe('Shipping locations cache', () => {
+  it('hides the known GHN sandbox test province from fresh and cached results', async () => {
+    const ghn = {
+      request: vi.fn().mockResolvedValue([
+        { ProvinceID: 202, ProvinceName: 'HCM' },
+        { ProvinceID: 999, ProvinceName: 'Test - Alert - Tỉnh - 001' },
+      ]),
+    };
+    const service = new ShippingLocationsService(
+      ghn as never,
+      new ShippingLocationCacheService(new ConfigService()),
+    );
+    redis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(
+      JSON.stringify([
+        { code: '202', name: 'HCM' },
+        { code: '999', name: 'Test - Alert - Tỉnh - 001' },
+      ]),
+    );
+    const expected = [{ code: '202', name: 'HCM' }];
+    expect(await service.provinces()).toEqual(expected);
+    expect(await service.provinces()).toEqual(expected);
+  });
   it('normalizes GHN locations and reuses Redis results for 24 hours', async () => {
     const ghn = {
       request: vi

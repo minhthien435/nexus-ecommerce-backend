@@ -38,7 +38,7 @@ export class ShippingLocationsService {
       throw new BadRequestException('A positive GHN parent ID is required');
     const key = `shipping:locations:v1:${kind}:${parentId ?? 'all'}`;
     const cached = await this.cache.get<ShippingLocation[]>(key);
-    if (cached) return cached;
+    if (cached) return this.filterSandboxProvince(kind, cached);
     const query =
       kind === 'province'
         ? ''
@@ -64,11 +64,22 @@ export class ShippingLocationsService {
       throw new ServiceUnavailableException(
         'GHN returned invalid location data',
       );
-    const result = data.map((row) => ({
-      code: String(row[fields[0]]),
-      name: row[fields[1]] as string,
-    }));
+    const result = this.filterSandboxProvince(
+      kind,
+      data.map((row) => ({
+        code: String(row[fields[0]]),
+        name: row[fields[1]] as string,
+      })),
+    );
     await this.cache.set(key, result);
     return result;
+  }
+
+  private filterSandboxProvince(kind: string, locations: ShippingLocation[]) {
+    if (kind !== 'province') return locations;
+    return locations.filter(
+      ({ name }) =>
+        name.trim().toLocaleLowerCase('vi') !== 'test - alert - tỉnh - 001',
+    );
   }
 }
