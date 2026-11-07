@@ -9,6 +9,7 @@ const transitions: Readonly<
   PAID: ['PROCESSING'],
   PROCESSING: ['SHIPPED'],
   SHIPPED: ['DELIVERED'],
+  CANCELLED: ['REFUNDED'],
 };
 
 export function canTransitionOrder(
