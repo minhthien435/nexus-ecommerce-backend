@@ -4,6 +4,8 @@ import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
 import { OrderExpiryOutboxService } from './services/order-expiry-outbox.service.js';
 import { OrderStateMachineService } from './services/order-state-machine.service.js';
+import { SupportOrderController } from './controllers/support-order.controller.js';
+import { SupportOrderService } from './services/support-order.service.js';
 import { OrderRefundRequestApi } from './order-refund-request.api.js';
 import { OrderRefundService } from './services/order-refund.service.js';
 
@@ -14,6 +16,7 @@ describe('CommerceModule expiry wiring', () => {
     >;
     expect(providers).toContain(OrderExpiryProcessor);
     expect(providers).toContain(OrderExpiryOutboxService);
+    expect(providers).toContain(SupportOrderService);
     expect(providers).toContainEqual({
       provide: OrderExpiryOutboxApi,
       useExisting: OrderExpiryOutboxService,
@@ -22,6 +25,14 @@ describe('CommerceModule expiry wiring', () => {
       provide: OrderExpiryTransitionApi,
       useExisting: OrderStateMachineService,
     });
+  });
+
+  it('registers the support order read surface', () => {
+    const controllers = Reflect.getMetadata(
+      'controllers',
+      CommerceModule,
+    ) as Function[];
+    expect(controllers).toContain(SupportOrderController);
   });
 
   it('binds the refund request port to the production refund service', () => {

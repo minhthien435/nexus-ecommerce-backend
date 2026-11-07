@@ -36,6 +36,8 @@ import { OrderExpiryOutboxApi } from './order-expiry-outbox.api.js';
 import { OrderExpiryOutboxService } from './services/order-expiry-outbox.service.js';
 import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
+import { SupportOrderController } from './controllers/support-order.controller.js';
+import { SupportOrderService } from './services/support-order.service.js';
 import { OrderRefundService } from './services/order-refund.service.js';
 import { OrderRefundRequestApi } from './order-refund-request.api.js';
 import { SupportOrderCancelController } from './controllers/support-order-cancel.controller.js';
@@ -68,6 +70,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     OrderController,
     SellerOrderController,
     PaymentsController,
+    SupportOrderController,
     ShippingWebhookController,
     SupportRefundController,
     SupportOrderCancelController,
@@ -82,6 +85,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     PayosClientService,
     PaymentsService,
     PaymentWebhookService,
+    SupportOrderService,
     OrderRefundService,
     OrderCancelService,
     { provide: CartMergeApi, useExisting: CartWriteService },
