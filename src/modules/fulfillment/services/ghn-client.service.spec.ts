@@ -46,10 +46,10 @@ describe('GhnClientService', () => {
       expect(result.print_url).toContain(result.order_code);
     });
 
-    it('tạo đúng đường dẫn print URL chứa order code', () => {
+    it('tạo đúng đường dẫn print URL chứa order code hoặc token', () => {
       const url = service.generatePrintUrl('GHN123456');
       expect(url).toContain('GHN123456');
-      expect(url).toContain('/a5/gen-token');
+      expect(url).toContain('/a5/public-api/printA5');
     });
 
     it('chấp nhận webhook khi chưa cấu hình secret key trong dev', () => {
