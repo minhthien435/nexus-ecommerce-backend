@@ -5,6 +5,28 @@ import { GhnClientService } from './ghn-client.service.js';
 afterEach(() => vi.unstubAllGlobals());
 const config = { GHN_API_TOKEN: 'test-token', GHN_SHOP_ID: '123' };
 describe('GHN read-only client', () => {
+  it('uses an explicit origin when configured', async () => {
+    const service = new GhnClientService(
+      new ConfigService({
+        ...config,
+        GHN_FROM_DISTRICT_ID: '1452',
+        GHN_FROM_WARD_CODE: '21007',
+      }),
+    );
+    await expect(service.getShopOrigin()).resolves.toEqual({
+      districtId: 1452,
+      wardCode: '21007',
+      shopId: 123,
+    });
+  });
+  it('rejects a partially configured origin', async () => {
+    const service = new GhnClientService(
+      new ConfigService({ ...config, GHN_FROM_DISTRICT_ID: '1452' }),
+    );
+    await expect(service.getShopOrigin()).rejects.toMatchObject({
+      status: 503,
+    });
+  });
   it.each([
     'https://example.test/shiip/public-api',
     'https://example.test/shiip/public-api/v2/',

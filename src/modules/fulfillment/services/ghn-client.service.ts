@@ -81,6 +81,30 @@ export class GhnClientService {
     wardCode: string;
     shopId: number;
   }> {
+    const district = this.config.get<string>('GHN_FROM_DISTRICT_ID');
+    const ward = this.config.get<string>('GHN_FROM_WARD_CODE');
+    if (district || ward) {
+      if (
+        !district ||
+        !/^[1-9]\d*$/.test(district) ||
+        !Number.isSafeInteger(Number(district)) ||
+        !ward ||
+        !/^\d{1,20}$/.test(ward) ||
+        !this.shopId ||
+        !/^[1-9]\d*$/.test(this.shopId) ||
+        !Number.isSafeInteger(Number(this.shopId))
+      ) {
+        throw new ServiceUnavailableException({
+          errorCode: 'GHN_ORIGIN_UNAVAILABLE',
+          message: 'Invalid configured GHN origin',
+        });
+      }
+      return {
+        districtId: Number(district),
+        wardCode: ward,
+        shopId: Number(this.shopId),
+      };
+    }
     // GHN returns a cursor, not a page number. Bound traversal even on malformed cursors.
     let offset = 0;
     for (let page = 0; page < 20; page++) {
@@ -141,21 +165,21 @@ export class GhnClientService {
     }
 
     // 2. Chuẩn bị request gửi sang GHN Sandbox
+    const origin = await this.getShopOrigin();
     const ghnBody = {
       payment_type_id: payload.payment_type_id ?? 1, // 1: Người bán/Người gửi trả cước
       required_note: payload.required_note ?? 'CHOXEMHANGKHONGTHU',
-      from_name: payload.from_name ?? 'Shop Nexus',
-      from_phone: payload.from_phone ?? '0924345717',
-      from_address:
-        payload.from_address ?? '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1',
-      from_ward_code: payload.from_ward_code ?? '20101',
-      from_district_id: payload.from_district_id ?? 1442,
+      ...(payload.from_name ? { from_name: payload.from_name } : {}),
+      ...(payload.from_phone ? { from_phone: payload.from_phone } : {}),
+      ...(payload.from_address ? { from_address: payload.from_address } : {}),
+      from_ward_code: origin.wardCode,
+      from_district_id: origin.districtId,
       to_name: payload.to_name,
       to_phone: payload.to_phone,
       to_address: payload.to_address,
       to_ward_code: payload.to_ward_code,
       to_district_id: Number(payload.to_district_id),
-      weight: Math.max(100, Math.round(payload.weight)),
+      weight: Math.round(payload.weight),
       length: payload.length ?? 15,
       width: payload.width ?? 15,
       height: payload.height ?? 10,

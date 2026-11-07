@@ -13,6 +13,8 @@ Codes come from GHN, not national administrative-code datasets. This deliberatel
 
 ## Configuration and origin
 
+For a Sandbox shop with empty legacy address fields, set both `GHN_FROM_DISTRICT_ID` and `GHN_FROM_WARD_CODE` to the verified GHN district and ward of the pickup warehouse. These explicit values are used for both fee quotes and shipment creation; partial configuration is rejected. Do not use example codes unless they match the actual warehouse.
+
 Set `GHN_API_TOKEN`, `GHN_SHOP_ID` and optionally `GHN_API_URL` using private environment configuration. The default URL is `https://dev-online-gateway.ghn.vn/shiip/public-api`; a trailing `/v2` is supported. Redis uses the existing `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB` and `REDIS_CONNECT_TIMEOUT_MS` settings. No new dependency or database migration is required.
 
 For this demo all sellers use the configured Sandbox shop's registered origin. The client finds that exact shop through GHN's paginated shop API and reads its district and ward. It never invents origin codes. Each request times out after five seconds, and shop traversal is capped at 20 pages. Available services are checked for each route; standard service type 2 is used below 20kg, heavy type 5 from 20kg. Fees are requested with the exact total gram weight and zero declared insurance value. Delivery estimates are optional. Invalid fees, missing credentials, unavailable routes and fee request failures return 503; shipment mock fallback does not apply to quotes.

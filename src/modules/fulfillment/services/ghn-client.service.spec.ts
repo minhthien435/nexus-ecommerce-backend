@@ -72,6 +72,11 @@ describe('GhnClientService', () => {
       } as unknown as ConfigService;
 
       service = new GhnClientService(configService);
+      vi.spyOn(service, 'getShopOrigin').mockResolvedValue({
+        districtId: 1442,
+        wardCode: '20101',
+        shopId: 195000,
+      });
     });
 
     it('gọi đúng API GHN và trả về order_code khi GHN phản hồi thành công', async () => {

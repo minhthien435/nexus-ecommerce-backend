@@ -1138,20 +1138,41 @@ export class OrderService {
           snapshot.name ||
           'Khách hàng Nexus',
       );
-      const toPhone = String(snapshot.phone || '0901234567');
-      const toAddress = String(
-        snapshot.street || snapshot.address || 'Địa chỉ giao hàng',
+      const toPhone = String(snapshot.recipientPhone || '');
+      const toAddress = String(snapshot.addressLine || '');
+      const toWardCode = String(snapshot.wardCode || '');
+      const toDistrictId = Number(snapshot.districtCode);
+      if (
+        typeof snapshot.recipientName !== 'string' ||
+        !snapshot.recipientName.trim() ||
+        !toPhone.trim() ||
+        !toAddress.trim() ||
+        !/^\d+$/.test(toWardCode) ||
+        !Number.isSafeInteger(toDistrictId) ||
+        toDistrictId <= 0 ||
+        !order.items?.length
+      ) {
+        throw new BadRequestException(
+          'Địa chỉ giao hàng hoặc sản phẩm không hợp lệ',
+        );
+      }
+      const skus = await this.catalogApi.getCartSkus(
+        order.items.map((item) => item.skuId),
+        manager,
       );
-      const toWardCode = String(snapshot.wardCode || snapshot.ward || '20101');
-      const toDistrictId = Number(
-        snapshot.districtId || snapshot.district || 1442,
-      );
-
-      // Tính tổng khối lượng đơn hàng (mặc định mỗi item 200g, tối thiểu 200g)
-      const totalWeight =
-        order.items && order.items.length > 0
-          ? order.items.reduce((sum, item) => sum + item.quantity * 200, 0)
-          : 500;
+      const weights = new Map(skus.map((sku) => [sku.id, sku.weightGrams]));
+      let totalWeight = 0;
+      for (const item of order.items) {
+        const weight = weights.get(item.skuId);
+        if (
+          !Number.isSafeInteger(weight) ||
+          weight! <= 0 ||
+          !Number.isSafeInteger(item.quantity) ||
+          item.quantity <= 0
+        )
+          throw new BadRequestException('Thiếu cân nặng sản phẩm hợp lệ');
+        totalWeight += weight! * item.quantity;
+      }
 
       const ghnPayload: GhnCreateOrderPayload = {
         to_name: toName,
@@ -1159,14 +1180,15 @@ export class OrderService {
         to_address: toAddress,
         to_ward_code: toWardCode,
         to_district_id: toDistrictId,
-        weight: Math.max(100, totalWeight),
+        weight: totalWeight,
+        service_type_id: totalWeight < 20000 ? 2 : 5,
         client_order_code: order.id,
         required_note: 'CHOXEMHANGKHONGTHU',
         items: order.items?.map((item) => ({
           name: item.productNameSnapshot || 'Sản phẩm Nexus',
           quantity: item.quantity,
           price: Number(item.unitPrice) || 0,
-          weight: 200,
+          weight: weights.get(item.skuId)!,
         })),
       };
 
