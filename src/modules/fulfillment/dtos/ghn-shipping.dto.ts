@@ -14,6 +14,11 @@ export interface GhnCreateOrderPayload {
   to_address: string;
   to_ward_code: string;
   to_district_id: number;
+  from_name?: string;
+  from_phone?: string;
+  from_address?: string;
+  from_ward_code?: string;
+  from_district_id?: number;
   weight: number;
   length?: number;
   width?: number;

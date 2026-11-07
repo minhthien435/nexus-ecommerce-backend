@@ -60,7 +60,13 @@ export class GhnClientService {
     // 2. Chuẩn bị request gửi sang GHN Sandbox
     const ghnBody = {
       payment_type_id: payload.payment_type_id ?? 1, // 1: Người bán/Người gửi trả cước
-      required_note: payload.required_note ?? 'KHONGCHOXEMHANG',
+      required_note: payload.required_note ?? 'CHOXEMHANGKHONGTHU',
+      from_name: payload.from_name ?? 'Shop Nexus',
+      from_phone: payload.from_phone ?? '0924345717',
+      from_address:
+        payload.from_address ?? '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1',
+      from_ward_code: payload.from_ward_code ?? '20101',
+      from_district_id: payload.from_district_id ?? 1442,
       to_name: payload.to_name,
       to_phone: payload.to_phone,
       to_address: payload.to_address,
@@ -92,7 +98,12 @@ export class GhnClientService {
     };
 
     try {
-      const response = await fetch(`${this.apiUrl}/v2/shipping-order/create`, {
+      const base = this.apiUrl.replace(/\/$/, '');
+      const endpoint = base.endsWith('/v2')
+        ? `${base}/shipping-order/create`
+        : `${base}/v2/shipping-order/create`;
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
