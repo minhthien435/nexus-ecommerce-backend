@@ -31,6 +31,7 @@ function setup(
   } = {},
 ) {
   const saved: unknown[] = [];
+  const buyerId = '11111111-1111-4111-8111-111111111111';
   let orderLookupCount = 0;
   const refundRepo = {
     findOne: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
@@ -59,15 +60,24 @@ function setup(
           : null,
       ),
     ),
-    findAndCount: vi.fn(async () => [[{ id: 'refund-1' }], 1]),
+    findAndCount: vi.fn(async () => [
+      [{ id: 'refund-1', orderId: 'order-1' }],
+      1,
+    ]),
   };
   const auditRepo = {
     create: vi.fn((value) => value),
     save: vi.fn(async (value) => value),
   };
   const orderRepo = {
+    find: vi.fn(async () => [{ id: 'order-1', orderNumber: 'ORD-1', buyerId }]),
     createQueryBuilder: vi.fn(() =>
-      qb({ id: 'order-1', orderNumber: 'ORD-1', status: 'CANCELLED' }),
+      qb({
+        id: 'order-1',
+        orderNumber: 'ORD-1',
+        buyerId,
+        status: 'CANCELLED',
+      }),
     ),
   };
   const paymentRepo = {
@@ -96,12 +106,28 @@ function setup(
     transaction: vi.fn(async (callback) => callback(manager)),
   };
   const stateMachine = { transition: vi.fn(async () => ({})) };
+  const identity = {
+    getUsersByIds: vi.fn(async () => [
+      { id: buyerId, fullName: 'Nguyen Van A' },
+    ]),
+  };
   const service = new OrderRefundService(
     dataSource as never,
     refundRepo as never,
+    orderRepo as never,
+    identity as never,
     stateMachine as unknown as OrderStateMachineService,
   );
-  return { service, manager, refundRepo, auditRepo, stateMachine, saved };
+  return {
+    service,
+    manager,
+    refundRepo,
+    orderRepo,
+    identity,
+    auditRepo,
+    stateMachine,
+    saved,
+  };
 }
 
 describe('OrderRefundService', () => {
@@ -156,12 +182,19 @@ describe('OrderRefundService', () => {
   });
 
   it('lists filtered refunds with stable pagination metadata', async () => {
-    const { service, refundRepo } = setup();
+    const { service, refundRepo, orderRepo, identity } = setup();
     await expect(
       service.list({ status: 'REQUESTED', page: 2, limit: 10 }),
     ).resolves.toEqual({
-      items: [{ id: 'refund-1' }],
-      meta: { currentPage: 2, itemsPerPage: 10, totalItems: 1, totalPages: 1 },
+      items: [
+        {
+          id: 'refund-1',
+          orderId: 'order-1',
+          orderNumber: 'ORD-1',
+          buyerName: 'Nguyen Van A',
+        },
+      ],
+      meta: { page: 2, limit: 10, totalItems: 1, totalPages: 1 },
     });
     expect(refundRepo.findAndCount).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -170,6 +203,22 @@ describe('OrderRefundService', () => {
         take: 10,
       }),
     );
+    expect(orderRepo.find).toHaveBeenCalledOnce();
+    expect(identity.getUsersByIds).toHaveBeenCalledWith([
+      '11111111-1111-4111-8111-111111111111',
+    ]);
+  });
+
+  it('returns one total page for an empty refund list', async () => {
+    const { service, refundRepo, orderRepo, identity } = setup();
+    refundRepo.findAndCount.mockResolvedValueOnce([[], 0]);
+
+    await expect(service.list({ page: 1, limit: 20 })).resolves.toEqual({
+      items: [],
+      meta: { page: 1, limit: 20, totalItems: 0, totalPages: 1 },
+    });
+    expect(orderRepo.find).not.toHaveBeenCalled();
+    expect(identity.getUsersByIds).toHaveBeenCalledWith([]);
   });
 
   it('moves a requested refund to processing', async () => {
