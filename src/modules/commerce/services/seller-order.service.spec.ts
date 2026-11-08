@@ -181,7 +181,10 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
 
       expect(qb.skip).toHaveBeenCalledWith(20);
       expect(qb.take).toHaveBeenCalledWith(10);
-      expect(qb.andWhere).not.toHaveBeenCalled();
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'order.status != :unpaidStatus',
+        { unpaidStatus: 'PENDING_PAYMENT' },
+      );
       expect(result.meta).toEqual({
         page: 3,
         limit: 10,

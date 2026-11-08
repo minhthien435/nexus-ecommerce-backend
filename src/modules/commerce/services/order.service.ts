@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -107,6 +108,7 @@ export class OrderService {
           `Sản phẩm "${sku?.productName || item.productNameSnapshot || 'Không xác định'}" hiện không còn mở bán`,
         );
       }
+      this.assertNotOwnProduct(userId, sku);
     }
 
     // 4. Xác định địa chỉ giao hàng
@@ -244,6 +246,7 @@ export class OrderService {
             `Sản phẩm "${sku?.productName || item.productNameSnapshot || 'Không xác định'}" hiện không còn mở bán`,
           );
         }
+        this.assertNotOwnProduct(userId, sku);
         const sellerItems = itemsBySeller.get(sku.sellerId) ?? [];
         sellerItems.push(item);
         itemsBySeller.set(sku.sellerId, sellerItems);
@@ -530,6 +533,9 @@ export class OrderService {
       .leftJoinAndSelect('order.checkoutSession', 'checkoutSession')
       .where('order.sellerId = :sellerId', {
         sellerId: normalizedSellerId,
+      })
+      .andWhere('order.status != :unpaidStatus', {
+        unpaidStatus: 'PENDING_PAYMENT',
       });
 
     if (query.status) {
@@ -619,6 +625,15 @@ export class OrderService {
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
+  }
+
+  private assertNotOwnProduct(userId: string, sku: { sellerId: string }): void {
+    if (sku.sellerId.toLowerCase() === userId.toLowerCase()) {
+      throw new ForbiddenException({
+        errorCode: 'CANNOT_BUY_OWN_PRODUCT',
+        message: 'Sellers cannot buy their own products',
+      });
+    }
   }
 
   /**
