@@ -18,6 +18,8 @@ const shop = {
   warehouseAddress: 'HCM',
   identityNumber: 'SECRET',
   status: 'ACTIVE',
+  statusReason: null,
+  statusChangedAt: null,
   ratingAvg: '5.00',
   reviewCount: 0,
   followerCount: 0,
@@ -36,6 +38,7 @@ const shop = {
 
 function qb(record = shop) {
   return {
+    innerJoinAndSelect: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     andWhere: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
@@ -53,6 +56,7 @@ describe('AdminShopService', () => {
     const builder = qb();
     const service = new AdminShopService(
       { createQueryBuilder: vi.fn().mockReturnValue(builder) } as never,
+      {} as never,
       {} as never,
     );
     const result = await service.list({
@@ -76,7 +80,11 @@ describe('AdminShopService', () => {
     const repo = {
       findOne: vi.fn().mockResolvedValueOnce(shop).mockResolvedValueOnce(null),
     };
-    const service = new AdminShopService(repo as never, {} as never);
+    const service = new AdminShopService(
+      repo as never,
+      {} as never,
+      {} as never,
+    );
     const detail = await service.getById(shopId);
     expect(detail.seller).toEqual(shop.seller);
     expect(detail).not.toHaveProperty('identityNumber');
@@ -103,11 +111,22 @@ describe('AdminShopService', () => {
       ),
     };
     const readRepo = {
-      findOne: vi.fn().mockResolvedValue({ ...shop, status: 'SUSPENDED' }),
+      findOne: vi.fn().mockImplementation(async () => ({
+        ...shop,
+        status: 'SUSPENDED',
+        statusReason: 'policy',
+        statusChangedAt: builder.getOne.mock.results[0]?.value?.statusChangedAt,
+      })),
+    };
+    const emailService = {
+      sendShopStatusChanged: vi
+        .fn()
+        .mockRejectedValue(new Error('SMTP unavailable')),
     };
     const service = new AdminShopService(
       readRepo as never,
       { transaction: vi.fn(async (work) => work(manager)) } as never,
+      emailService as never,
     );
     const result = await service.updateStatus(
       actorId,
@@ -116,6 +135,10 @@ describe('AdminShopService', () => {
       'policy',
     );
     expect(builder.setLock).toHaveBeenCalledWith('pessimistic_write');
+    expect(builder.innerJoinAndSelect).toHaveBeenCalledWith(
+      'shop.seller',
+      'seller',
+    );
     expect(auditRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
         actorId,
@@ -128,6 +151,20 @@ describe('AdminShopService', () => {
     );
     expect(outboxRepo.save).toHaveBeenCalled();
     expect(result.status).toBe('SUSPENDED');
+    expect(shopRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusReason: 'policy',
+        statusChangedAt: expect.any(Date),
+      }),
+    );
+    expect(emailService.sendShopStatusChanged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: 'seller@example.com',
+        status: 'SUSPENDED',
+        reason: 'policy',
+        statusChangedAt: expect.any(Date),
+      }),
+    );
   });
 
   it('returns stable 404 and 409 errors without side effects', async () => {
@@ -141,6 +178,7 @@ describe('AdminShopService', () => {
       const service = new AdminShopService(
         {} as never,
         { transaction: vi.fn(async (work) => work(manager)) } as never,
+        { sendShopStatusChanged: vi.fn() } as never,
       );
       await expect(
         service.updateStatus(actorId, shopId, 'ACTIVE', 'same'),

@@ -41,7 +41,6 @@ export class PublicShopService {
     )) as Array<{ productCount: number; liveAuctionCount: number }>;
     return {
       id: shop.id,
-      sellerId: shop.sellerId,
       name: shop.name,
       slug: shop.slug,
       headline: shop.headline,

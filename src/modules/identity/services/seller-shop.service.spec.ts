@@ -54,6 +54,8 @@ function setup(options?: {
     warehouseAddress: dto.warehouseAddress,
     identityNumber: dto.identityNumber,
     status: 'ACTIVE',
+    statusReason: null,
+    statusChangedAt: null,
     ratingAvg: '5.00',
     reviewCount: 0,
     followerCount: 0,
@@ -300,5 +302,25 @@ describe('SellerShopService', () => {
     await expect(
       test.service.updateMyShop(userId, { headline: 'New' }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns status metadata for a suspended seller shop', async () => {
+    const test = setup();
+    const changedAt = new Date('2026-11-08T03:00:00.000Z');
+    test.shopRepo.findOne.mockResolvedValue({
+      ...test.savedShop,
+      status: 'SUSPENDED',
+      statusReason: 'Policy review',
+      statusChangedAt: changedAt,
+    });
+
+    await expect(test.service.getMyShop(userId)).resolves.toMatchObject({
+      status: 'SUSPENDED',
+      statusReason: 'Policy review',
+      statusChangedAt: changedAt,
+    });
+    expect(test.shopRepo.findOne).toHaveBeenCalledWith({
+      where: { sellerId: userId, deletedAt: expect.anything() },
+    });
   });
 });
