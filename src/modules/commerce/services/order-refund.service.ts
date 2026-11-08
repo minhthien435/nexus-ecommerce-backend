@@ -63,10 +63,10 @@ export class OrderRefundService extends OrderRefundRequestApi {
         errorCode: 'ORDER_NOT_FOUND',
         message: 'Order was not found',
       });
-    if (order.status !== 'CANCELLED') {
+    if (order.status !== 'CANCELLED' && order.status !== 'REFUND_REQUESTED') {
       throw this.conflict(
         'REFUND_ORDER_NOT_CANCELLED',
-        'Only a cancelled order can be refunded',
+        'Only a cancelled or refund-requested order can be refunded',
       );
     }
 

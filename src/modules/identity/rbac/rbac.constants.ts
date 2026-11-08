@@ -301,6 +301,12 @@ export const PRIVILEGE_SEEDS: readonly PrivilegeSeed[] = [
     roles: adminStaff,
   },
   {
+    code: 'DISPUTE.MANAGE',
+    module: 'COMMERCE',
+    description: 'Manage and resolve customer order disputes',
+    roles: adminStaff,
+  },
+  {
     code: 'AUCTION.CREATE',
     module: 'AUCTION',
     description: 'Create auction',

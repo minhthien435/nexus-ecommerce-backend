@@ -28,6 +28,7 @@ function setup(
     existingAfterLock?: Partial<OrderRefundEntity> | null;
     locked?: Partial<OrderRefundEntity>;
     duplicate?: Partial<OrderRefundEntity> | null;
+    orderStatus?: string;
   } = {},
 ) {
   const saved: unknown[] = [];
@@ -76,7 +77,7 @@ function setup(
         id: 'order-1',
         orderNumber: 'ORD-1',
         buyerId,
-        status: 'CANCELLED',
+        status: options.orderStatus ?? 'CANCELLED',
       }),
     ),
   };
@@ -148,6 +149,22 @@ describe('OrderRefundService', () => {
         idempotencyKey: 'order-refund:order-1',
       }),
     );
+    expect(auditRepo.save).toHaveBeenCalledOnce();
+  });
+
+  it('creates a full refund for an order in REFUND_REQUESTED state (Dispute)', async () => {
+    const { service, manager, refundRepo, auditRepo } = setup({
+      orderStatus: 'REFUND_REQUESTED',
+    });
+    await expect(
+      service.requestFullRefund(
+        'order-1',
+        'staff-1',
+        'dispute approved',
+        manager as never,
+      ),
+    ).resolves.toEqual({ refundId: 'refund-1', status: 'REQUESTED' });
+    expect(refundRepo.save).toHaveBeenCalled();
     expect(auditRepo.save).toHaveBeenCalledOnce();
   });
 
