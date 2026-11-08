@@ -523,6 +523,41 @@ describe('CartWriteService guest merge (mock transaction orchestration)', () => 
   });
 });
 
+describe('CartWriteService own-product protection', () => {
+  it('rejects adding or merging a product owned by the buyer', async () => {
+    const s = setup();
+    const ownSku = {
+      ...(await s.catalog.getCartSkus())[0],
+      sellerId: userId.toLowerCase(),
+    };
+    s.catalog.getCartSkus.mockResolvedValue([ownSku]);
+
+    await expect(s.add()).rejects.toMatchObject({
+      status: 403,
+      response: { errorCode: 'CANNOT_BUY_OWN_PRODUCT' },
+    });
+    s.inventory.getDefaultWarehouseStock.mockResolvedValue([]);
+    await expect(s.merge()).rejects.toMatchObject({
+      status: 403,
+      response: { errorCode: 'CANNOT_BUY_OWN_PRODUCT' },
+    });
+  });
+
+  it('rejects updating an existing line after it becomes owned by the buyer', async () => {
+    const s = setup();
+    await s.add();
+    const sku = (await s.catalog.getCartSkus())[0];
+    s.catalog.getCartSkus.mockResolvedValue([
+      { ...sku, sellerId: userId.toLowerCase() },
+    ]);
+
+    await expect(s.patch(2)).rejects.toMatchObject({
+      status: 403,
+      response: { errorCode: 'CANNOT_BUY_OWN_PRODUCT' },
+    });
+  });
+});
+
 describe('CartWriteService reserved rows', () => {
   async function reservedCart() {
     const s = setup();

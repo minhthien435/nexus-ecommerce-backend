@@ -5,8 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditLogEntity } from '../../identity/domain/audit-log.entity.js';
+import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import { OrderRefundRequestApi } from '../order-refund-request.api.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
@@ -23,6 +24,9 @@ export class OrderRefundService extends OrderRefundRequestApi {
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(OrderRefundEntity)
     private readonly refundRepository: Repository<OrderRefundEntity>,
+    @InjectRepository(OrderEntity)
+    private readonly orderRepository: Repository<OrderEntity>,
+    private readonly identity: IdentitySupportLookupApi,
     private readonly orderStateMachine: OrderStateMachineService,
   ) {
     super();
@@ -136,13 +140,33 @@ export class OrderRefundService extends OrderRefundRequestApi {
       skip: (page - 1) * limit,
       take: limit,
     });
+    const orders =
+      items.length === 0
+        ? []
+        : await this.orderRepository.find({
+            where: { id: In(items.map((item) => item.orderId)) },
+          });
+    const users = await this.identity.getUsersByIds(
+      orders.map((order) => order.buyerId),
+    );
+    const orderById = new Map(orders.map((order) => [order.id, order]));
+    const userById = new Map(users.map((user) => [user.id, user]));
+
     return {
-      items,
+      items: items.map((item) => {
+        const order = orderById.get(item.orderId);
+        const buyer = order ? userById.get(order.buyerId) : undefined;
+        return {
+          ...item,
+          orderNumber: order?.orderNumber ?? null,
+          buyerName: buyer?.fullName ?? null,
+        };
+      }),
       meta: {
-        currentPage: page,
-        itemsPerPage: limit,
+        page,
+        limit,
         totalItems,
-        totalPages: Math.ceil(totalItems / limit),
+        totalPages: Math.max(1, Math.ceil(totalItems / limit)),
       },
     };
   }

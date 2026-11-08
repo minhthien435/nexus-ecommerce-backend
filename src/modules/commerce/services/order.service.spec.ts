@@ -268,6 +268,29 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     );
   });
 
+  it('rejects checkout when the buyer owns a selected product', async () => {
+    const s = setup();
+    s.cartItemRepo.find.mockResolvedValue([
+      { id: 'item-1', cartId, skuId: 'sku-1', quantity: 1 },
+    ]);
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      {
+        id: 'sku-1',
+        sellerId: userId,
+        isActive: true,
+        productStatus: 'ACTIVE',
+        productDeletedAt: null,
+        productName: 'Own product',
+      },
+    ]);
+
+    await expect(s.service.checkout(userId, {})).rejects.toMatchObject({
+      status: 403,
+      response: { errorCode: 'CANNOT_BUY_OWN_PRODUCT' },
+    });
+    expect(s.dataSource.transaction).not.toHaveBeenCalled();
+  });
+
   it('successfully creates checkout session and splits orders per seller', async () => {
     const s = setup();
 
@@ -1181,6 +1204,9 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
 
     expect(qb.where).toHaveBeenCalledWith('order.sellerId = :sellerId', {
       sellerId: seller1,
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status != :unpaidStatus', {
+      unpaidStatus: 'PENDING_PAYMENT',
     });
     expect(candidatesQb.where).toHaveBeenCalledWith(
       'order.sellerId = :sellerId',

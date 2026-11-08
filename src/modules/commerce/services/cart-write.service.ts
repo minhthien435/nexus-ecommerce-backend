@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
@@ -79,6 +80,7 @@ export class CartWriteService {
           message: 'SKU was not found',
         });
       }
+      this.assertNotOwnProduct(userId, sku);
       if (!this.isAvailable(sku, existing)) {
         throw new ConflictException({
           errorCode: 'SKU_UNAVAILABLE',
@@ -169,6 +171,10 @@ export class CartWriteService {
           sku,
         ]),
       );
+      const ownProduct = [...skus.values()].find(
+        (sku) => sku.sellerId.toLowerCase() === userId,
+      );
+      if (ownProduct) this.assertNotOwnProduct(userId, ownProduct);
       const stocks = await this.stocks(skuIds, manager);
       const result: CartMergeResult = {
         status: 'skipped',
@@ -300,6 +306,7 @@ export class CartWriteService {
           message: 'SKU was not found',
         });
       }
+      this.assertNotOwnProduct(userId, sku);
       if (!this.isAvailable(sku, existing)) {
         throw new ConflictException({
           errorCode: 'SKU_UNAVAILABLE',
@@ -363,6 +370,15 @@ export class CartWriteService {
       sku.productDeletedAt === null &&
       (!existing || existing.productId === sku.productId)
     );
+  }
+
+  private assertNotOwnProduct(userId: string, sku: CartSku): void {
+    if (sku.sellerId.toLowerCase() === userId) {
+      throw new ForbiddenException({
+        errorCode: 'CANNOT_BUY_OWN_PRODUCT',
+        message: 'Sellers cannot buy their own products',
+      });
+    }
   }
 
   private async stocks(skuIds: string[], manager: EntityManager) {
