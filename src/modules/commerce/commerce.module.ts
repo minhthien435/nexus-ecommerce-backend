@@ -42,6 +42,10 @@ import { OrderRefundService } from './services/order-refund.service.js';
 import { OrderRefundRequestApi } from './order-refund-request.api.js';
 import { SupportOrderCancelController } from './controllers/support-order-cancel.controller.js';
 import { OrderCancellationEntity } from './domain/entities/order-cancellation.entity.js';
+import { OrderDisputeEntity } from './domain/entities/order-dispute.entity.js';
+import { OrderDisputeController } from './controllers/order-dispute.controller.js';
+import { SupportDisputeController } from './controllers/support-dispute.controller.js';
+import { OrderDisputeService } from './services/order-dispute.service.js';
 import { OrderCancelService } from './services/order-cancel.service.js';
 
 @Module({
@@ -58,6 +62,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
       PaymentCallbackEntity,
       OrderRefundEntity,
       OrderCancellationEntity,
+      OrderDisputeEntity,
       UserAddressEntity,
     ]),
     IdentityModule,
@@ -74,6 +79,8 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     ShippingWebhookController,
     SupportRefundController,
     SupportOrderCancelController,
+    OrderDisputeController,
+    SupportDisputeController,
   ],
   providers: [
     CartService,
@@ -88,6 +95,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     SupportOrderService,
     OrderRefundService,
     OrderCancelService,
+    OrderDisputeService,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,
@@ -109,6 +117,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     PaymentWebhookService,
     PayosClientService,
     OrderRefundRequestApi,
+    OrderDisputeService,
   ],
 })
 export class CommerceModule {}
