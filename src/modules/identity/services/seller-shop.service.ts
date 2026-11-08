@@ -32,6 +32,8 @@ export type SellerShopView = {
   email: string | null;
   warehouseAddress: string;
   status: string;
+  statusReason: string | null;
+  statusChangedAt: Date | null;
   ratingAvg: number;
   reviewCount: number;
   followerCount: number;
@@ -144,7 +146,7 @@ export class SellerShopService {
 
   async getMyShop(userId: string): Promise<SellerShopView> {
     const shop = await this.dataSource.getRepository(ShopEntity).findOne({
-      where: { sellerId: userId, status: 'ACTIVE', deletedAt: IsNull() },
+      where: { sellerId: userId, deletedAt: IsNull() },
     });
     if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
     return this.toView(shop);
@@ -312,6 +314,8 @@ export class SellerShopService {
       email: shop.email,
       warehouseAddress: shop.warehouseAddress,
       status: shop.status,
+      statusReason: shop.statusReason,
+      statusChangedAt: shop.statusChangedAt,
       ratingAvg: Number(shop.ratingAvg),
       reviewCount: shop.reviewCount,
       followerCount: shop.followerCount,

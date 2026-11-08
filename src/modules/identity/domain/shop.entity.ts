@@ -70,6 +70,12 @@ export class ShopEntity {
   @Column({ type: 'varchar', length: 30, default: 'ACTIVE' })
   status: ShopStatus;
 
+  @Column({ type: 'text', name: 'status_reason', nullable: true })
+  statusReason: string | null;
+
+  @Column({ type: 'timestamptz', name: 'status_changed_at', nullable: true })
+  statusChangedAt: Date | null;
+
   @Column({ type: 'numeric', precision: 3, scale: 2, name: 'rating_avg' })
   ratingAvg: string;
 

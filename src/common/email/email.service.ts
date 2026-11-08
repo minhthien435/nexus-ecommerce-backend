@@ -65,4 +65,56 @@ export class EmailService {
       );
     }
   }
+
+  async sendShopStatusChanged(input: {
+    recipient: string;
+    shopName: string;
+    status: string;
+    reason: string;
+    statusChangedAt: Date;
+  }): Promise<void> {
+    const changedAt = input.statusChangedAt.toISOString();
+    const appealGuidance =
+      'Nếu bạn cho rằng quyết định này chưa chính xác, vui lòng liên hệ bộ phận hỗ trợ Nexus để gửi yêu cầu khiếu nại.';
+    try {
+      await this.transporter.sendMail({
+        from: this.mailFrom,
+        to: input.recipient,
+        subject: `Trạng thái cửa hàng ${input.shopName} đã thay đổi`,
+        text: [
+          `Trạng thái mới: ${input.status}`,
+          `Lý do: ${input.reason}`,
+          `Thời gian thay đổi: ${changedAt}`,
+          appealGuidance,
+        ].join('\n'),
+        html: [
+          '<div style="font-family: Arial, sans-serif">',
+          `<h2>Trạng thái cửa hàng ${this.escapeHtml(input.shopName)} đã thay đổi</h2>`,
+          `<p><strong>Trạng thái mới:</strong> ${this.escapeHtml(input.status)}</p>`,
+          `<p><strong>Lý do:</strong> ${this.escapeHtml(input.reason)}</p>`,
+          `<p><strong>Thời gian thay đổi:</strong> ${changedAt}</p>`,
+          `<p>${appealGuidance}</p>`,
+          '</div>',
+        ].join(''),
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Đã cập nhật trạng thái cửa hàng nhưng không thể gửi email thông báo.',
+      );
+    }
+  }
+
+  private escapeHtml(value: string): string {
+    return value.replace(
+      /[&<>"']/g,
+      (character) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[character]!,
+    );
+  }
 }

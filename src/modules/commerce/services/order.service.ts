@@ -629,15 +629,15 @@ export class OrderService {
    * Xem chi tiết đơn hàng của người bán. Ownership nằm ngay trong truy vấn để
    * không làm lộ sự tồn tại của đơn hàng thuộc shop khác.
    */
-  async getSellerOrderById(sellerId: string, orderId: string) {
+  async getSellerOrderById(sellerId: string, orderReference: string) {
     const normalizedSellerId = sellerId.toLowerCase();
     await this.reconcileExpiredPayosOrders(
       { sellerId: normalizedSellerId },
-      orderId,
+      orderReference,
     );
     const order = await this.orderRepo.findOne({
       where: {
-        id: orderId,
+        [this.orderReferenceField(orderReference)]: orderReference,
         sellerId: normalizedSellerId,
       },
       relations: { items: true, checkoutSession: true },
@@ -702,12 +702,15 @@ export class OrderService {
   /**
    * Xem chi tiết một đơn hàng theo ID
    */
-  async getOrderById(userId: string, orderId: string) {
+  async getOrderById(userId: string, orderReference: string) {
     const buyerId = userId.toLowerCase();
-    await this.reconcileExpiredPayosOrders({ buyerId }, orderId);
+    await this.reconcileExpiredPayosOrders({ buyerId }, orderReference);
 
     const order = await this.orderRepo.findOne({
-      where: { id: orderId, buyerId },
+      where: {
+        [this.orderReferenceField(orderReference)]: orderReference,
+        buyerId,
+      },
       relations: {
         items: true,
         checkoutSession: true,
@@ -724,7 +727,7 @@ export class OrderService {
     }
 
     const history = await this.orderHistoryRepo.find({
-      where: { orderId },
+      where: { orderId: order.id },
       order: { createdAt: 'ASC', id: 'ASC' },
     });
 
@@ -733,7 +736,7 @@ export class OrderService {
 
   private async reconcileExpiredPayosOrders(
     owner: { buyerId: string } | { sellerId: string },
-    orderId?: string,
+    orderReference?: string,
   ): Promise<void> {
     const candidatesQuery = this.orderRepo
       .createQueryBuilder('order')
@@ -760,8 +763,11 @@ export class OrderService {
         paymentMethod: 'PAYOS',
       });
 
-    if (orderId) {
-      candidatesQuery.andWhere('order.id = :orderId', { orderId });
+    if (orderReference) {
+      const field = this.orderReferenceField(orderReference);
+      candidatesQuery.andWhere(`order.${field} = :orderReference`, {
+        orderReference,
+      });
     }
 
     const candidates = await candidatesQuery.getRawMany<{ orderId: string }>();
@@ -780,6 +786,14 @@ export class OrderService {
         await this.orderStateMachine.finalizeExpiry(candidate.orderId, manager);
       });
     }
+  }
+
+  private orderReferenceField(reference: string): 'id' | 'orderNumber' {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      reference,
+    )
+      ? 'id'
+      : 'orderNumber';
   }
 
   async cancelOrder(userId: string, orderId: string) {

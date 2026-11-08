@@ -73,6 +73,30 @@ describe('EmailService', () => {
     );
   });
 
+  it('sends complete, escaped shop-status notification content', async () => {
+    mailMocks.sendMail.mockResolvedValue({ messageId: 'message-2' });
+    const service = createService();
+    const statusChangedAt = new Date('2026-11-08T03:00:00.000Z');
+
+    await service.sendShopStatusChanged({
+      recipient: 'seller@example.com',
+      shopName: '<Shop>',
+      status: 'SUSPENDED',
+      reason: 'Policy <review>',
+      statusChangedAt,
+    });
+
+    expect(mailMocks.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'seller@example.com',
+        text: expect.stringMatching(
+          /SUSPENDED[\s\S]*Policy <review>[\s\S]*2026-11-08T03:00:00.000Z[\s\S]*khiếu nại/,
+        ),
+        html: expect.stringMatching(/&lt;Shop&gt;[\s\S]*Policy &lt;review&gt;/),
+      }),
+    );
+  });
+
   it.each([
     ['SMTP_PORT', 'invalid', 'SMTP_PORT must be a valid TCP port'],
     ['SMTP_SECURE', 'sometimes', 'SMTP_SECURE must be true or false'],

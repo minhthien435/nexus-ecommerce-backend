@@ -58,9 +58,9 @@ export class OrderController {
   @Permissions('ORDER.VIEW')
   async getOrderById(
     @CurrentUserId() userId: string,
-    @Param('id', new ParseUUIDPipe()) orderId: string,
+    @Param('id') orderReference: string,
   ) {
-    const result = await this.orderService.getOrderById(userId, orderId);
+    const result = await this.orderService.getOrderById(userId, orderReference);
     return {
       success: true as const,
       statusCode: HttpStatus.OK,

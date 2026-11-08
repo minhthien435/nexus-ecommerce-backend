@@ -715,11 +715,16 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
         { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
       ]);
 
-    const order = await s.service.getOrderById(userId, 'order-1');
+    const orderNumber = 'ORD-20261108-000001';
+    const order = await s.service.getOrderById(userId, orderNumber);
     expect(order.id).toBe('order-1');
     expect(order.items![0].imageUrl).toBe('https://img.nexus.com/p1.png');
 
     expect(order.history).toEqual([]);
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith({
+      where: { orderNumber, buyerId: userId },
+      relations: { items: true, checkoutSession: true },
+    });
     expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
       where: { orderId: 'order-1' },
       order: { createdAt: 'ASC', id: 'ASC' },
@@ -729,12 +734,14 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     await expect(
       s.service.getOrderById(userId, 'order-not-found'),
     ).rejects.toThrow(NotFoundException);
-    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
-      orderId: 'order-1',
-    });
-    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
-      orderId: 'order-not-found',
-    });
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.orderNumber = :orderReference',
+      { orderReference: orderNumber },
+    );
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.orderNumber = :orderReference',
+      { orderReference: 'order-not-found' },
+    );
   });
 
   it('reconciles overdue PayOS orders before applying the buyer list status filter', async () => {
@@ -829,9 +836,10 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       status: 'CANCELLED',
       history: [{ toStatus: 'CANCELLED' }],
     });
-    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
-      orderId: 'order-1',
-    });
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.orderNumber = :orderReference',
+      { orderReference: 'order-1' },
+    );
     expect(s.orderStateMachine.finalizeExpiry).toHaveBeenCalledWith(
       'order-1',
       s.manager,
@@ -1279,9 +1287,10 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
       'order.sellerId = :sellerId',
       { sellerId: seller1 },
     );
-    expect(candidatesQb.andWhere).toHaveBeenCalledWith('order.id = :orderId', {
-      orderId: sellerOrder.id,
-    });
+    expect(candidatesQb.andWhere).toHaveBeenCalledWith(
+      'order.id = :orderReference',
+      { orderReference: sellerOrder.id },
+    );
     expect(s.orderHistoryRepo.find).toHaveBeenCalledWith({
       where: { orderId: sellerOrder.id },
       order: { createdAt: 'ASC', id: 'ASC' },
@@ -1301,6 +1310,27 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     expect(result.history[0]).not.toHaveProperty('changedBy');
   });
 
+  it('resolves an owned seller order by its human-facing order number', async () => {
+    const s = setup();
+    const candidatesQb = candidateQueryBuilder();
+    s.orderRepo.createQueryBuilder.mockReturnValue(candidatesQb as never);
+    s.orderRepo.findOne.mockResolvedValue(sellerOrder);
+    (
+      s.dataSource as typeof s.dataSource & { query: ReturnType<typeof vi.fn> }
+    ).query = vi.fn().mockResolvedValue([]);
+
+    const result = await s.service.getSellerOrderById(
+      seller1,
+      sellerOrder.orderNumber,
+    );
+
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith({
+      where: { orderNumber: sellerOrder.orderNumber, sellerId: seller1 },
+      relations: { items: true, checkoutSession: true },
+    });
+    expect(result.orderCode).toBe(sellerOrder.orderNumber);
+  });
+
   it('hides missing and foreign-owned orders behind NotFoundException', async () => {
     const s = setup();
     const candidatesQb = candidateQueryBuilder();
@@ -1308,8 +1338,15 @@ describe('OrderService - Seller Orders (NEX-FAST-02)', () => {
     s.orderRepo.findOne.mockResolvedValue(null);
 
     await expect(
-      s.service.getSellerOrderById(seller2, sellerOrder.id),
+      s.service.getSellerOrderById(seller2, 'ORD-20261108-000001'),
     ).rejects.toThrow(NotFoundException);
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith({
+      where: {
+        orderNumber: 'ORD-20261108-000001',
+        sellerId: seller2,
+      },
+      relations: { items: true, checkoutSession: true },
+    });
     expect(s.orderHistoryRepo.find).not.toHaveBeenCalled();
   });
 

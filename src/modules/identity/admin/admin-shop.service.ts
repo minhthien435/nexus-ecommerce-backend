@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,6 +12,7 @@ import { ShopEntity, type ShopStatus } from '../domain/shop.entity.js';
 import { UserEntity } from '../domain/user.entity.js';
 import { ListShopsQueryDto } from './dtos/admin-shop.dto.js';
 import type { SellerShopView } from '../services/seller-shop.service.js';
+import { EmailService } from '../../../common/email/email.service.js';
 
 export type AdminShopDetail = SellerShopView & {
   seller: Pick<UserEntity, 'id' | 'fullName' | 'email' | 'phone' | 'status'>;
@@ -18,10 +20,13 @@ export type AdminShopDetail = SellerShopView & {
 
 @Injectable()
 export class AdminShopService {
+  private readonly logger = new Logger(AdminShopService.name);
+
   constructor(
     @InjectRepository(ShopEntity)
     private readonly shops: Repository<ShopEntity>,
     private readonly dataSource: DataSource,
+    private readonly emailService: EmailService,
   ) {}
 
   async list(query: ListShopsQueryDto) {
@@ -65,10 +70,11 @@ export class AdminShopService {
     status: ShopStatus,
     reason: string,
   ) {
-    await this.dataSource.transaction(async (manager) => {
+    const notification = await this.dataSource.transaction(async (manager) => {
       const shop = await manager
         .getRepository(ShopEntity)
         .createQueryBuilder('shop')
+        .innerJoinAndSelect('shop.seller', 'seller')
         .setLock('pessimistic_write')
         .where('shop.id = :shopId', { shopId })
         .andWhere('shop.deleted_at IS NULL')
@@ -77,7 +83,10 @@ export class AdminShopService {
       if (shop.status === status)
         throw new ConflictException('Shop already has this status');
       const previousStatus = shop.status;
+      const statusChangedAt = new Date();
       shop.status = status;
+      shop.statusReason = reason;
+      shop.statusChangedAt = statusChangedAt;
       await manager.getRepository(ShopEntity).save(shop);
       await this.recordChange(
         manager,
@@ -87,7 +96,22 @@ export class AdminShopService {
         status,
         reason,
       );
+      return {
+        recipient: shop.seller.email,
+        shopName: shop.name,
+        status,
+        reason,
+        statusChangedAt,
+      };
     });
+    try {
+      await this.emailService.sendShopStatusChanged(notification);
+    } catch (error) {
+      this.logger.error(
+        `Shop ${shopId} status changed, but seller notification failed`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
     return this.getById(shopId);
   }
 
@@ -150,6 +174,8 @@ export class AdminShopService {
       email: shop.email,
       warehouseAddress: shop.warehouseAddress,
       status: shop.status,
+      statusReason: shop.statusReason,
+      statusChangedAt: shop.statusChangedAt,
       ratingAvg: Number(shop.ratingAvg),
       reviewCount: shop.reviewCount,
       followerCount: shop.followerCount,

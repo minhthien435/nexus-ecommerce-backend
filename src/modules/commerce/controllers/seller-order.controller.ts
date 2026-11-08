@@ -47,11 +47,11 @@ export class SellerOrderController {
   @Permissions('ORDER.VIEW')
   async getSellerOrderById(
     @CurrentUserId() sellerId: string,
-    @Param('id', new ParseUUIDPipe()) orderId: string,
+    @Param('id') orderReference: string,
   ) {
     const result = await this.orderService.getSellerOrderById(
       sellerId,
-      orderId,
+      orderReference,
     );
     return {
       success: true as const,

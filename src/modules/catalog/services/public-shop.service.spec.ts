@@ -52,7 +52,6 @@ describe('PublicShopService', () => {
       'SHOP',
     );
     expect(result).toMatchObject({
-      sellerId: 'seller-id',
       warehouseAddress: 'Warehouse',
       trustLevel: level,
       totalProducts: 2,
@@ -61,6 +60,7 @@ describe('PublicShopService', () => {
     });
     expect(result).not.toHaveProperty('productCount');
     expect(result).not.toHaveProperty('liveAuctionCount');
+    expect(result).not.toHaveProperty('sellerId');
     expect(dataSource.query.mock.calls[0][0]).not.toMatch(
       /phone|email|identity_number/,
     );
