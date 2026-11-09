@@ -70,7 +70,10 @@ export class ProfileService {
       avatarUrl: user.avatarUrl,
       roles: roleRows.map(({ code }) => code),
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
-      addresses,
+      addresses: addresses.map((addr) => {
+        const { userId: _, ...rest } = addr;
+        return rest as unknown as typeof addr;
+      }),
     };
   }
 

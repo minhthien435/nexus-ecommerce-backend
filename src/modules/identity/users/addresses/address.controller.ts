@@ -23,18 +23,31 @@ import { AddressService } from './address.service.js';
 export class AddressController {
   constructor(private readonly addresses: AddressService) {}
 
+  private sanitizeAddress(address: Record<string, unknown>) {
+    if (!address) return address;
+    const { userId: _, ...rest } = address;
+    return rest;
+  }
+
   @Get()
-  list(@CurrentUserId() userId: string) {
-    return this.addresses.list(userId);
+  async list(@CurrentUserId() userId: string) {
+    const list = await this.addresses.list(userId);
+    return list.map((addr) =>
+      this.sanitizeAddress(addr as unknown as Record<string, unknown>),
+    );
   }
 
   @Post()
-  create(@CurrentUserId() userId: string, @Body() input: CreateAddressDto) {
-    return this.addresses.create(userId, input);
+  async create(
+    @CurrentUserId() userId: string,
+    @Body() input: CreateAddressDto,
+  ) {
+    const addr = await this.addresses.create(userId, input);
+    return this.sanitizeAddress(addr as unknown as Record<string, unknown>);
   }
 
   @Patch(':id')
-  update(
+  async update(
     @CurrentUserId() userId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() input: UpdateAddressDto,
@@ -42,7 +55,8 @@ export class AddressController {
     if (Object.values(input).every((value) => value === undefined)) {
       throw new BadRequestException('At least one update field is required');
     }
-    return this.addresses.update(userId, id, input);
+    const addr = await this.addresses.update(userId, id, input);
+    return this.sanitizeAddress(addr as unknown as Record<string, unknown>);
   }
 
   @Delete(':id')

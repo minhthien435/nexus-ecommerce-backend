@@ -171,11 +171,17 @@ function setup(ghn?: { createNewAddressOrder: ReturnType<typeof vi.fn> }) {
         return transactionCheckoutSessionRepo;
       if (entity.name === 'PaymentEntity')
         return { find: vi.fn().mockResolvedValue([]) };
+      if (entity.name === 'OrderDisputeEntity')
+        return {
+          count: vi.fn().mockResolvedValue(0),
+          findOne: vi.fn().mockResolvedValue(null),
+        };
       throw new Error(`Unexpected repository: ${entity.name}`);
     }),
   };
 
   const dataSource = {
+    getRepository: vi.fn((entity) => manager.getRepository(entity)),
     transaction: vi.fn(
       async (
         isolationOrCallback: string | ((value: typeof manager) => unknown),
@@ -1705,4 +1711,133 @@ describe('Checkout shipping failure and stale quote protection', () => {
       expect(s.manager.save).not.toHaveBeenCalled();
     },
   );
+
+  describe('confirmOrderDeliveryByBuyer and dispute lookup', () => {
+    it('accepts UUID or orderNumber and completes DELIVERED order', async () => {
+      const s = setup();
+      const mockOrder = {
+        id: '11111111-2222-3333-4444-555555555555',
+        orderNumber: '#ORD-2026-TEST',
+        buyerId: userId,
+        status: 'DELIVERED',
+        updatedAt: new Date(),
+      };
+
+      const orderRepoMock = {
+        findOne: vi.fn().mockResolvedValue(mockOrder),
+        save: vi.fn().mockResolvedValue({
+          ...mockOrder,
+          status: 'COMPLETED',
+        }),
+      };
+
+      (s.manager.getRepository as any).mockImplementation(
+        (entity: { name: string }) => {
+          if (entity.name === 'OrderEntity') return orderRepoMock;
+          if (entity.name === 'OrderDisputeEntity')
+            return { count: vi.fn().mockResolvedValue(0) };
+          return {};
+        },
+      );
+
+      s.orderStateMachine.transition.mockResolvedValue({
+        ...mockOrder,
+        status: 'COMPLETED',
+      });
+
+      // 1. Test by UUID
+      const resUuid = await s.service.confirmOrderDeliveryByBuyer(
+        userId,
+        '11111111-2222-3333-4444-555555555555',
+      );
+      expect(orderRepoMock.findOne).toHaveBeenCalledWith({
+        where: { id: '11111111-2222-3333-4444-555555555555', buyerId: userId },
+      });
+      expect(resUuid.status).toBe('COMPLETED');
+      expect(resUuid.orderNumber).toBe('#ORD-2026-TEST');
+
+      // 2. Test by orderNumber
+      const resOrderNum = await s.service.confirmOrderDeliveryByBuyer(
+        userId,
+        '#ORD-2026-TEST',
+      );
+      expect(orderRepoMock.findOne).toHaveBeenCalledWith({
+        where: { orderNumber: '#ORD-2026-TEST', buyerId: userId },
+      });
+      expect(resOrderNum.status).toBe('COMPLETED');
+    });
+
+    it('rejects confirm when order has any dispute', async () => {
+      const s = setup();
+      const mockOrder = {
+        id: '11111111-2222-3333-4444-555555555555',
+        orderNumber: '#ORD-2026-DISPUTED',
+        buyerId: userId,
+        status: 'DELIVERED',
+        updatedAt: new Date(),
+      };
+
+      (s.manager.getRepository as any).mockImplementation(
+        (entity: { name: string }) => {
+          if (entity.name === 'OrderEntity')
+            return { findOne: vi.fn().mockResolvedValue(mockOrder) };
+          if (entity.name === 'OrderDisputeEntity')
+            return { count: vi.fn().mockResolvedValue(1) };
+          return {};
+        },
+      );
+
+      await expect(
+        s.service.confirmOrderDeliveryByBuyer(userId, '#ORD-2026-DISPUTED'),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: expect.objectContaining({
+          errorCode: 'ORDER_HAS_DISPUTE',
+        }),
+      });
+    });
+
+    it('returns dispute details via getOrderDisputeByBuyer', async () => {
+      const s = setup();
+      const mockOrder = {
+        id: '11111111-2222-3333-4444-555555555555',
+        orderNumber: '#ORD-2026-DISP',
+        buyerId: userId,
+      };
+      const mockDispute = {
+        id: 'dispute-uuid-1',
+        orderId: mockOrder.id,
+        status: 'PENDING_STAFF_REVIEW',
+        reasonCategory: 'DAMAGED',
+        evidenceDescription: 'Damaged item',
+        evidenceImages: [],
+        staffDecisionNote: null,
+        resolvedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      s.orderRepo.findOne.mockResolvedValue(mockOrder as any);
+      (s.manager.getRepository as any).mockImplementation(
+        (entity: { name: string }) => {
+          if (entity.name === 'OrderEntity')
+            return { findOne: vi.fn().mockResolvedValue(mockOrder) };
+          if (entity.name === 'OrderDisputeEntity')
+            return { findOne: vi.fn().mockResolvedValue(mockDispute) };
+          return {};
+        },
+      );
+
+      const result = await s.service.getOrderDisputeByBuyer(
+        userId,
+        '#ORD-2026-DISP',
+      );
+      expect(result).toMatchObject({
+        id: 'dispute-uuid-1',
+        orderId: mockOrder.id,
+        orderNumber: '#ORD-2026-DISP',
+        status: 'PENDING_STAFF_REVIEW',
+      });
+    });
+  });
 });
