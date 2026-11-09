@@ -918,7 +918,29 @@ export class OrderService {
       order: { createdAt: 'ASC', id: 'ASC' },
     });
 
-    return { ...order, history };
+    const dispute =
+      typeof this.dataSource?.getRepository === 'function'
+        ? await this.dataSource.getRepository(OrderDisputeEntity).findOne({
+            where: { orderId: order.id },
+          })
+        : null;
+
+    return {
+      ...order,
+      history,
+      dispute: dispute
+        ? {
+            id: dispute.id,
+            status: dispute.status,
+            reasonCategory: dispute.reasonCategory,
+            evidenceDescription: dispute.evidenceDescription,
+            evidenceImages: dispute.evidenceImages,
+            staffDecisionNote: dispute.staffDecisionNote,
+            resolvedAt: dispute.resolvedAt,
+            createdAt: dispute.createdAt,
+          }
+        : null,
+    };
   }
 
   private async reconcileExpiredPayosOrders(
@@ -976,7 +998,7 @@ export class OrderService {
   }
 
   private orderReferenceField(reference: string): 'id' | 'orderNumber' {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       reference,
     )
       ? 'id'
@@ -1453,7 +1475,8 @@ export class OrderService {
       let order: OrderEntity | null = null;
 
       if (params.orderId) {
-        order = await orderRepo.findOne({ where: { id: params.orderId } });
+        const field = this.orderReferenceField(params.orderId);
+        order = await orderRepo.findOne({ where: { [field]: params.orderId } });
       } else if (params.trackingCode) {
         order = await orderRepo.findOne({
           where: { trackingCode: params.trackingCode },
@@ -1534,11 +1557,12 @@ export class OrderService {
   /**
    * Người mua tự bấm xác nhận đã nhận hàng (DELIVERED -> COMPLETED)
    */
-  async confirmOrderDeliveryByBuyer(buyerId: string, orderId: string) {
+  async confirmOrderDeliveryByBuyer(buyerId: string, orderReference: string) {
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const orderRepo = manager.getRepository(OrderEntity);
+      const field = this.orderReferenceField(orderReference);
       const order = await orderRepo.findOne({
-        where: { id: orderId, buyerId },
+        where: { [field]: orderReference, buyerId },
       });
 
       if (!order) {
@@ -1585,5 +1609,54 @@ export class OrderService {
         updatedAt: saved.updatedAt,
       };
     });
+  }
+
+  /**
+   * Lấy thông tin khiếu nại của đơn hàng cho Người mua
+   */
+  async getOrderDisputeByBuyer(userId: string, orderReference: string) {
+    const buyerId = userId.toLowerCase();
+    const field = this.orderReferenceField(orderReference);
+    const order = await this.orderRepo.findOne({
+      where: {
+        [field]: orderReference,
+        buyerId,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException({
+        errorCode: 'ORDER_NOT_FOUND',
+        message: 'Không tìm thấy đơn hàng yêu cầu',
+      });
+    }
+
+    const dispute =
+      typeof this.dataSource?.getRepository === 'function'
+        ? await this.dataSource.getRepository(OrderDisputeEntity).findOne({
+            where: { orderId: order.id },
+          })
+        : null;
+
+    if (!dispute) {
+      throw new NotFoundException({
+        errorCode: 'DISPUTE_NOT_FOUND',
+        message: 'Đơn hàng này chưa có khiếu nại nào',
+      });
+    }
+
+    return {
+      id: dispute.id,
+      orderId: dispute.orderId,
+      orderNumber: order.orderNumber,
+      status: dispute.status,
+      reasonCategory: dispute.reasonCategory,
+      evidenceDescription: dispute.evidenceDescription,
+      evidenceImages: dispute.evidenceImages,
+      staffDecisionNote: dispute.staffDecisionNote,
+      resolvedAt: dispute.resolvedAt,
+      createdAt: dispute.createdAt,
+      updatedAt: dispute.updatedAt,
+    };
   }
 }

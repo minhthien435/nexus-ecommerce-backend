@@ -103,16 +103,34 @@ export class OrderController {
   @Permissions('ORDER.VIEW')
   async completeOrder(
     @CurrentUserId() userId: string,
-    @Param('id', new ParseUUIDPipe()) orderId: string,
+    @Param('id') orderReference: string,
   ) {
     const result = await this.orderService.confirmOrderDeliveryByBuyer(
       userId,
-      orderId,
+      orderReference,
     );
     return {
       success: true as const,
       statusCode: HttpStatus.OK,
       message: 'Xác nhận nhận hàng thành công. Đơn hàng đã hoàn tất.',
+      data: result,
+    };
+  }
+
+  @Get(':id/dispute')
+  @Permissions('ORDER.VIEW')
+  async getOrderDispute(
+    @CurrentUserId() userId: string,
+    @Param('id') orderReference: string,
+  ) {
+    const result = await this.orderService.getOrderDisputeByBuyer(
+      userId,
+      orderReference,
+    );
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy thông tin khiếu nại của đơn hàng thành công',
       data: result,
     };
   }

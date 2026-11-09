@@ -15,6 +15,17 @@ export function createTypeOrmOptions(
     ssl: enabled(config.get<string>('DB_SSL'))
       ? { rejectUnauthorized: false }
       : false,
+    extra: {
+      max: Number(config.get<string>('DB_POOL_MAX') || 10),
+      idleTimeoutMillis: Number(
+        config.get<string>('DB_POOL_IDLE_TIMEOUT') || 30000,
+      ),
+      connectionTimeoutMillis: Number(
+        config.get<string>('DB_POOL_CONN_TIMEOUT') || 5000,
+      ),
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
+    },
   };
   const url = config.get<string>('DATABASE_URL');
 

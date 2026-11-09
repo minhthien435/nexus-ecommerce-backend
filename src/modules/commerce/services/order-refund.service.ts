@@ -11,6 +11,7 @@ import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup
 import { OrderRefundRequestApi } from '../order-refund-request.api.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { OrderDisputeEntity } from '../domain/entities/order-dispute.entity.js';
 import {
   OrderRefundEntity,
   type OrderRefundStatus,
@@ -140,26 +141,41 @@ export class OrderRefundService extends OrderRefundRequestApi {
       skip: (page - 1) * limit,
       take: limit,
     });
+    const orderIds = items.map((item) => item.orderId);
     const orders =
-      items.length === 0
+      orderIds.length === 0
         ? []
         : await this.orderRepository.find({
-            where: { id: In(items.map((item) => item.orderId)) },
+            where: { id: In(orderIds) },
+          });
+    const disputes =
+      orderIds.length === 0
+        ? []
+        : await this.dataSource.getRepository(OrderDisputeEntity).find({
+            where: { orderId: In(orderIds) },
           });
     const users = await this.identity.getUsersByIds(
       orders.map((order) => order.buyerId),
     );
     const orderById = new Map(orders.map((order) => [order.id, order]));
+    const disputeByOrderId = new Map(disputes.map((d) => [d.orderId, d]));
     const userById = new Map(users.map((user) => [user.id, user]));
 
     return {
       items: items.map((item) => {
         const order = orderById.get(item.orderId);
+        const dispute = disputeByOrderId.get(item.orderId);
         const buyer = order ? userById.get(order.buyerId) : undefined;
+        const source: 'DISPUTE' | 'CANCELLATION' =
+          dispute || order?.status === 'REFUND_REQUESTED'
+            ? 'DISPUTE'
+            : 'CANCELLATION';
         return {
           ...item,
           orderNumber: order?.orderNumber ?? null,
           buyerName: buyer?.fullName ?? null,
+          source,
+          disputeId: dispute?.id ?? null,
         };
       }),
       meta: {
@@ -243,6 +259,20 @@ export class OrderRefundService extends OrderRefundRequestApi {
         'REFUND_TRANSITION_NOT_ALLOWED',
         `Refund cannot transition from ${refund.status} to ${status}`,
       );
+    }
+    if (status === 'REJECTED') {
+      const dispute = await manager.getRepository(OrderDisputeEntity).findOne({
+        where: { orderId: refund.orderId },
+      });
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: refund.orderId },
+      });
+      if (dispute || order?.status === 'REFUND_REQUESTED') {
+        throw this.conflict(
+          'REFUND_REJECT_NOT_ALLOWED',
+          'Không thể từ chối hoàn tiền đối với yêu cầu phát sinh từ khiếu nại đã được chấp thuận.',
+        );
+      }
     }
     refund.status = status;
     refund.processedBy = actorId;

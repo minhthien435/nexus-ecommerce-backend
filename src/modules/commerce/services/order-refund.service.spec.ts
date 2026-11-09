@@ -4,6 +4,7 @@ import { AuditLogEntity } from '../../identity/domain/audit-log.entity.js';
 import { OrderRefundEntity } from '../domain/entities/order-refund.entity.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
+import { OrderDisputeEntity } from '../domain/entities/order-dispute.entity.js';
 import type { OrderStateMachineService } from './order-state-machine.service.js';
 import { OrderRefundService } from './order-refund.service.js';
 
@@ -29,11 +30,20 @@ function setup(
     locked?: Partial<OrderRefundEntity>;
     duplicate?: Partial<OrderRefundEntity> | null;
     orderStatus?: string;
+    dispute?: Partial<OrderDisputeEntity> | null;
   } = {},
 ) {
   const saved: unknown[] = [];
   const buyerId = '11111111-1111-4111-8111-111111111111';
   let orderLookupCount = 0;
+  const disputeRepo = {
+    find: vi.fn(async () =>
+      options.dispute
+        ? [{ id: 'dispute-1', orderId: 'order-1', ...options.dispute }]
+        : [],
+    ),
+    findOne: vi.fn(async () => options.dispute ?? null),
+  };
   const refundRepo = {
     findOne: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
       if ('bankReferenceCode' in where) return options.duplicate ?? null;
@@ -72,6 +82,12 @@ function setup(
   };
   const orderRepo = {
     find: vi.fn(async () => [{ id: 'order-1', orderNumber: 'ORD-1', buyerId }]),
+    findOne: vi.fn(async () => ({
+      id: 'order-1',
+      orderNumber: 'ORD-1',
+      buyerId,
+      status: options.orderStatus ?? 'CANCELLED',
+    })),
     createQueryBuilder: vi.fn(() =>
       qb({
         id: 'order-1',
@@ -100,11 +116,16 @@ function setup(
       if (entity === OrderEntity) return orderRepo;
       if (entity === PaymentEntity) return paymentRepo;
       if (entity === AuditLogEntity) return auditRepo;
+      if (entity === OrderDisputeEntity) return disputeRepo;
       throw new Error('unexpected repository');
     }),
   };
   const dataSource = {
     transaction: vi.fn(async (callback) => callback(manager)),
+    getRepository: vi.fn((entity) => {
+      if (entity === OrderDisputeEntity) return disputeRepo;
+      throw new Error('unexpected repository');
+    }),
   };
   const stateMachine = { transition: vi.fn(async () => ({})) };
   const identity = {
@@ -209,6 +230,8 @@ describe('OrderRefundService', () => {
           orderId: 'order-1',
           orderNumber: 'ORD-1',
           buyerName: 'Nguyen Van A',
+          source: 'CANCELLATION',
+          disputeId: null,
         },
       ],
       meta: { page: 2, limit: 10, totalItems: 1, totalPages: 1 },
@@ -288,6 +311,32 @@ describe('OrderRefundService', () => {
       expect.objectContaining({ status: 'REJECTED', notes: 'invalid account' }),
     );
     expect(stateMachine.transition).not.toHaveBeenCalled();
+  });
+
+  it('blocks reject when refund originates from dispute', async () => {
+    const { service } = setup({
+      locked: { status: 'REQUESTED' },
+      dispute: { id: 'dispute-1' },
+      orderStatus: 'REFUND_REQUESTED',
+    });
+    await expect(
+      service.reject('refund-1', 'staff-1', 'reject dispute refund'),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        errorCode: 'REFUND_REJECT_NOT_ALLOWED',
+      }),
+    });
+  });
+
+  it('lists refunds with source DISPUTE when dispute exists', async () => {
+    const { service } = setup({
+      dispute: { id: 'dispute-99' },
+      orderStatus: 'REFUND_REQUESTED',
+    });
+    const res = await service.list({ page: 1, limit: 10 });
+    expect(res.items[0].source).toBe('DISPUTE');
+    expect(res.items[0].disputeId).toBe('dispute-99');
   });
 
   it('blocks terminal refund mutations', async () => {
