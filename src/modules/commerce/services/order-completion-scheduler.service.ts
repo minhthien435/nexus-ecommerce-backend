@@ -15,10 +15,10 @@ export class OrderCompletionSchedulerService implements OnApplicationBootstrap {
     private readonly queue: Queue,
   ) {}
 
-  async onApplicationBootstrap() {
-    try {
-      // Repeatable BullMQ job chạy mỗi 15 phút (BullMQ v6 upsertJobScheduler)
-      await this.queue.upsertJobScheduler(
+  onApplicationBootstrap() {
+    // Đăng ký non-blocking: Không await để tránh treo bước khởi động NestJS / cổng 3000 nếu Redis chưa bật
+    void this.queue
+      .upsertJobScheduler(
         ORDER_AUTO_COMPLETE_JOB,
         {
           every: 15 * 60 * 1000,
@@ -27,17 +27,19 @@ export class OrderCompletionSchedulerService implements OnApplicationBootstrap {
           name: ORDER_AUTO_COMPLETE_JOB,
           data: {},
         },
-      );
-      this.logger.log(
-        'Đã khởi tạo BullMQ Repeatable Job tự động hoàn tất đơn hàng DELIVERED sau 72h',
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Không thể đăng ký BullMQ repeatable job (có thể Redis chưa kết nối): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
+      )
+      .then(() => {
+        this.logger.log(
+          'Đã khởi tạo BullMQ Repeatable Job tự động hoàn tất đơn hàng DELIVERED sau 72h',
+        );
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `Không thể đăng ký BullMQ repeatable job (có thể Redis chưa kết nối): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
   }
 
   /** Cho phép kích hoạt quét ngay lập tức khi cần test hoặc manual */

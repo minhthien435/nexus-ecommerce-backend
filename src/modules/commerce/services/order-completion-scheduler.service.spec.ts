@@ -32,4 +32,17 @@ describe('OrderCompletionSchedulerService', () => {
       manual: true,
     });
   });
+
+  it('does not block or throw on application bootstrap when Redis is unavailable', async () => {
+    const queue = {
+      upsertJobScheduler: vi
+        .fn()
+        .mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:6379')),
+      add: vi.fn(),
+    };
+    const service = new OrderCompletionSchedulerService(queue as never);
+
+    expect(() => service.onApplicationBootstrap()).not.toThrow();
+    expect(queue.upsertJobScheduler).toHaveBeenCalled();
+  });
 });
