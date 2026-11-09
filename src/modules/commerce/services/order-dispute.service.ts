@@ -259,6 +259,15 @@ export class OrderDisputeService {
       .createQueryBuilder('dispute')
       .leftJoinAndSelect('dispute.order', 'order');
 
+    // Điều kiện nghiệp vụ: Chỉ hiển thị hồ sơ PENDING_STAFF_REVIEW khi đơn hàng ở trạng thái DELIVERED
+    qb.andWhere(
+      '(dispute.status != :pendingDisputeStatus OR order.status = :validOrderPendingStatus)',
+      {
+        pendingDisputeStatus: 'PENDING_STAFF_REVIEW',
+        validOrderPendingStatus: 'DELIVERED',
+      },
+    );
+
     if (buyerIds) {
       qb.andWhere('dispute.buyerId IN (:...buyerIds)', { buyerIds });
     }
