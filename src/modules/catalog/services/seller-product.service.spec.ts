@@ -1,6 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ProductStatus } from '../domain/entities/product.entity.js';
+import {
+  ProductEntity,
+  ProductStatus,
+} from '../domain/entities/product.entity.js';
 import { SellerProductService } from './seller-product.service.js';
 
 describe('SellerProductService', () => {
@@ -54,6 +57,41 @@ describe('SellerProductService', () => {
     await expect(service.get('product-1', 'seller-1')).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('finds owned product by uuid or slug', async () => {
+    const mockProduct = {
+      id: '11111111-2222-3333-4444-555555555555',
+      slug: 'ao-thun-nam-cotton',
+      sellerId: 'seller-1',
+    };
+    manager.findOne.mockResolvedValue(mockProduct);
+
+    // 1. By UUID
+    const resByUuid = await service.get(
+      '11111111-2222-3333-4444-555555555555',
+      'seller-1',
+    );
+    expect(manager.findOne).toHaveBeenCalledWith(
+      ProductEntity,
+      expect.objectContaining({
+        where: {
+          id: '11111111-2222-3333-4444-555555555555',
+          deletedAt: expect.anything(),
+        },
+      }),
+    );
+    expect(resByUuid).toBe(mockProduct);
+
+    // 2. By slug
+    const resBySlug = await service.get('ao-thun-nam-cotton', 'seller-1');
+    expect(manager.findOne).toHaveBeenCalledWith(
+      ProductEntity,
+      expect.objectContaining({
+        where: { slug: 'ao-thun-nam-cotton', deletedAt: expect.anything() },
+      }),
+    );
+    expect(resBySlug).toBe(mockProduct);
   });
 
   it('creates the complete aggregate in one transaction as draft', async () => {

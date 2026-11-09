@@ -13,6 +13,14 @@ export type AuctionStatus = 'SCHEDULED' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
 @Index(['skuId', 'status'])
 export class AuctionEntity {
   @PrimaryGeneratedColumn('uuid') id: string;
+  @Column({
+    name: 'code',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    unique: true,
+  })
+  code?: string | null;
   @Column({ name: 'seller_id', type: 'uuid' }) sellerId: string;
   @Column({ name: 'product_id', type: 'uuid' }) productId: string;
   @Column({ name: 'sku_id', type: 'uuid' }) skuId: string;

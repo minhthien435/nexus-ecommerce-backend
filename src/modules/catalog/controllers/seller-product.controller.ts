@@ -7,7 +7,6 @@ import {
   HttpCode,
   Param,
   ParseFilePipeBuilder,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -99,10 +98,7 @@ export class SellerProductController {
 
   @Permissions('PRODUCT.VIEW')
   @Get(':id')
-  get(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUserId() actorId: string,
-  ) {
+  get(@Param('id') id: string, @CurrentUserId() actorId: string) {
     return this.products.get(id, actorId);
   }
 
@@ -118,7 +114,7 @@ export class SellerProductController {
   @Permissions('PRODUCT.UPDATE')
   @Patch(':id')
   update(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() dto: UpdateSellerProductDto,
     @CurrentUserId() actorId: string,
   ) {
@@ -128,7 +124,7 @@ export class SellerProductController {
   @Permissions('PRODUCT.UPDATE')
   @Patch(':id/status')
   setStatus(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id') id: string,
     @Body() dto: UpdateSellerProductStatusDto,
     @CurrentUserId() actorId: string,
   ) {
@@ -138,10 +134,7 @@ export class SellerProductController {
   @Permissions('PRODUCT.DELETE')
   @Delete(':id')
   @HttpCode(204)
-  remove(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUserId() actorId: string,
-  ) {
+  remove(@Param('id') id: string, @CurrentUserId() actorId: string) {
     return this.products.remove(id, actorId);
   }
 }
