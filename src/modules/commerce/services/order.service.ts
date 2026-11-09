@@ -1639,10 +1639,7 @@ export class OrderService {
         : null;
 
     if (!dispute) {
-      throw new NotFoundException({
-        errorCode: 'DISPUTE_NOT_FOUND',
-        message: 'Đơn hàng này chưa có khiếu nại nào',
-      });
+      return null;
     }
 
     return {

@@ -130,7 +130,9 @@ export class OrderController {
     return {
       success: true as const,
       statusCode: HttpStatus.OK,
-      message: 'Lấy thông tin khiếu nại của đơn hàng thành công',
+      message: result
+        ? 'Lấy thông tin khiếu nại của đơn hàng thành công'
+        : 'Đơn hàng chưa có khiếu nại nào',
       data: result,
     };
   }
