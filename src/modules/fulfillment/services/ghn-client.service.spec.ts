@@ -259,5 +259,78 @@ describe('GhnClientService', () => {
       );
       expect(service.verifyWebhook({})).toBe(false);
     });
+
+    it('ném BadRequestException GHN_ADDRESS_INVALID khi GHN request trả 400 To address conflict', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: vi.fn().mockResolvedValue({
+          code: 400,
+          code_message_value: 'To address conflict',
+          message: 'To address conflict',
+          data: null,
+        }),
+      } as unknown as Response);
+
+      try {
+        await expect(
+          service.request('v2/shipping-order/preview', {}),
+        ).rejects.toMatchObject({
+          status: 400,
+          response: {
+            errorCode: 'GHN_ADDRESS_INVALID',
+            message: 'To address conflict',
+          },
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('ném BadRequestException GHN_ADDRESS_INVALID trong createShippingOrder khi GHN báo lỗi địa chỉ', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: vi.fn().mockResolvedValue({
+          code: 400,
+          message: 'To address conflict',
+          data: null,
+        }),
+      } as unknown as Response);
+
+      try {
+        await expect(
+          service.createShippingOrder(mockPayload),
+        ).rejects.toMatchObject({
+          status: 400,
+          response: {
+            errorCode: 'GHN_ADDRESS_INVALID',
+            message: 'To address conflict',
+          },
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('ném ServiceUnavailableException GHN_REQUEST_FAILED khi GHN sập hoặc lỗi kết nối mạng', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+      try {
+        await expect(
+          service.request('v2/shipping-order/preview', {}),
+        ).rejects.toMatchObject({
+          status: 503,
+          response: {
+            errorCode: 'GHN_REQUEST_FAILED',
+          },
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
   });
 });
