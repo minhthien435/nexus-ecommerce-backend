@@ -68,4 +68,20 @@ describe('OrderController', () => {
       data: mockDispute,
     });
   });
+
+  it('returns data null and appropriate message when order has no dispute', async () => {
+    const orderService = {
+      getOrderDisputeByBuyer: vi.fn().mockResolvedValue(null),
+    };
+
+    const controller = new OrderController(orderService as never);
+    const result = await controller.getOrderDispute('buyer-1', '#ORD-1');
+
+    expect(result).toEqual({
+      success: true,
+      statusCode: 200,
+      message: 'Đơn hàng chưa có khiếu nại nào',
+      data: null,
+    });
+  });
 });

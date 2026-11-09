@@ -1839,5 +1839,45 @@ describe('Checkout shipping failure and stale quote protection', () => {
         status: 'PENDING_STAFF_REVIEW',
       });
     });
+
+    it('returns null via getOrderDisputeByBuyer when order has no dispute', async () => {
+      const s = setup();
+      const mockOrder = {
+        id: '11111111-2222-3333-4444-555555555555',
+        orderNumber: '#ORD-2026-NODISP',
+        buyerId: userId,
+      };
+
+      s.orderRepo.findOne.mockResolvedValue(mockOrder as any);
+      (s.manager.getRepository as any).mockImplementation(
+        (entity: { name: string }) => {
+          if (entity.name === 'OrderEntity')
+            return { findOne: vi.fn().mockResolvedValue(mockOrder) };
+          if (entity.name === 'OrderDisputeEntity')
+            return { findOne: vi.fn().mockResolvedValue(null) };
+          return {};
+        },
+      );
+
+      const result = await s.service.getOrderDisputeByBuyer(
+        userId,
+        '#ORD-2026-NODISP',
+      );
+      expect(result).toBeNull();
+    });
+
+    it('throws ORDER_NOT_FOUND via getOrderDisputeByBuyer when order does not exist', async () => {
+      const s = setup();
+      s.orderRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        s.service.getOrderDisputeByBuyer(userId, '#ORD-UNKNOWN'),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: expect.objectContaining({
+          errorCode: 'ORDER_NOT_FOUND',
+        }),
+      });
+    });
   });
 });
