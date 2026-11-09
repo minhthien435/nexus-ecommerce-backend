@@ -189,6 +189,8 @@ describe('OrderDisputeService', () => {
       mockOrderStateMachine as OrderStateMachineService,
       mockOrderRefundService as OrderRefundService,
     );
+
+    return { disputeQueryBuilder };
   }
 
   describe('createDispute (Buyer)', () => {
@@ -405,6 +407,71 @@ describe('OrderDisputeService', () => {
         'dispute',
       );
     });
+
+    it('Dispute pending + Order DELIVERED: xuất hiện trong danh sách kết quả và áp dụng điều kiện lọc DELIVERED', async () => {
+      const mockDeliveredDispute = {
+        id: 'disp-delivered-1',
+        orderId: 'ord-delivered-1',
+        buyerId,
+        sellerId,
+        reasonCategory: 'DAMAGED',
+        evidenceDescription: 'Bể vỡ khi nhận',
+        evidenceImages: [],
+        status: 'PENDING_STAFF_REVIEW',
+        staffDecisionNote: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: new Date('2026-11-08T10:00:00Z'),
+        updatedAt: new Date('2026-11-08T10:00:00Z'),
+        order: {
+          id: 'ord-delivered-1',
+          orderNumber: 'ORD-2026-DELIVERED',
+          status: 'DELIVERED',
+          total: '350000.00',
+          currency: 'VND',
+        },
+      };
+
+      const { disputeQueryBuilder } = setupService({
+        disputesList: [mockDeliveredDispute],
+        totalItems: 1,
+      });
+
+      const result = await service.listSupportDisputes({});
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe('disp-delivered-1');
+      expect(result.data[0].status).toBe('PENDING_STAFF_REVIEW');
+      expect(result.data[0].order?.status).toBe('DELIVERED');
+      expect(disputeQueryBuilder.andWhere).toHaveBeenCalledWith(
+        '(dispute.status != :pendingDisputeStatus OR order.status = :validOrderPendingStatus)',
+        {
+          pendingDisputeStatus: 'PENDING_STAFF_REVIEW',
+          validOrderPendingStatus: 'DELIVERED',
+        },
+      );
+    });
+
+    it('Dispute pending + Order REFUND_REQUESTED: áp dụng điều kiện lọc loại trừ khỏi danh sách', async () => {
+      const { disputeQueryBuilder } = setupService({
+        disputesList: [],
+        totalItems: 0,
+      });
+
+      const result = await service.listSupportDisputes({
+        status: 'PENDING_STAFF_REVIEW',
+      });
+
+      expect(result.data).toHaveLength(0);
+      expect(result.meta.totalItems).toBe(0);
+      expect(disputeQueryBuilder.andWhere).toHaveBeenCalledWith(
+        '(dispute.status != :pendingDisputeStatus OR order.status = :validOrderPendingStatus)',
+        {
+          pendingDisputeStatus: 'PENDING_STAFF_REVIEW',
+          validOrderPendingStatus: 'DELIVERED',
+        },
+      );
+    });
   });
 
   describe('resolveDispute (Support / Admin)', () => {
@@ -569,6 +636,45 @@ describe('OrderDisputeService', () => {
       await expect(
         service.resolveDispute(disputeId, staffActorId, dto),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('ném lỗi ConflictException ORDER_STATUS_INVALID (409) nếu đơn hàng ở trạng thái REFUND_REQUESTED (như đơn bị lỗi dữ liệu)', async () => {
+      setupService({
+        disputeToResolve: { ...mockPendingDispute },
+        order: { ...mockOrder, status: 'REFUND_REQUESTED' },
+      });
+
+      const dto: ResolveOrderDisputeDto = {
+        decision: 'ACCEPTED_REFUND',
+        staffDecisionNote: 'Lý do xử lý hợp lệ.',
+      };
+
+      await expect(
+        service.resolveDispute(disputeId, staffActorId, dto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('transaction lỗi giữa chừng (requestFullRefund thất bại): rollback và không lưu cập nhật Dispute', async () => {
+      setupService({
+        disputeToResolve: { ...mockPendingDispute },
+        order: { ...mockOrder, status: 'DELIVERED' },
+        payment: { ...mockPayment },
+      });
+
+      (mockOrderRefundService.requestFullRefund as any).mockRejectedValueOnce(
+        new Error('Payment gateway timeout during refund'),
+      );
+
+      const dto: ResolveOrderDisputeDto = {
+        decision: 'ACCEPTED_REFUND',
+        staffDecisionNote: 'Chấp thuận hoàn tiền hợp lệ.',
+      };
+
+      await expect(
+        service.resolveDispute(disputeId, staffActorId, dto),
+      ).rejects.toThrow('Payment gateway timeout during refund');
+
+      expect(mockDisputeRepo.save).not.toHaveBeenCalled();
     });
 
     it('ném lỗi ConflictException REFUND_PAYMENT_NOT_FOUND nếu ACCEPTED_REFUND nhưng không có payment SUCCEEDED', async () => {
