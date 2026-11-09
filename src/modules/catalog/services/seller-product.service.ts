@@ -223,14 +223,23 @@ export class SellerProductService {
     await this.cache.invalidateProduct(slug);
   }
 
+  private isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    );
+  }
+
   private async getOwned(
     manager: EntityManager,
-    id: string,
+    idOrSlug: string,
     actorId: string,
     relations = true,
   ) {
+    const isUuid = this.isUuid(idOrSlug);
     const product = await manager.findOne(ProductEntity, {
-      where: { id, deletedAt: IsNull() },
+      where: isUuid
+        ? { id: idOrSlug, deletedAt: IsNull() }
+        : { slug: idOrSlug, deletedAt: IsNull() },
       relations: relations
         ? { category: true, images: true, skus: true }
         : undefined,
@@ -239,7 +248,9 @@ export class SellerProductService {
       !product ||
       (!(await this.isAdmin(actorId)) && product.sellerId !== actorId)
     ) {
-      throw new NotFoundException(`Không tìm thấy sản phẩm với ID: ${id}`);
+      throw new NotFoundException(
+        `Không tìm thấy sản phẩm với ID: ${idOrSlug}`,
+      );
     }
     return product;
   }

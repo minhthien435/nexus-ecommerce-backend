@@ -64,8 +64,10 @@ export class AuctionService {
     const endsAt = new Date(
       options.startsAt.getTime() + durationDays * 86_400_000,
     );
+    const code = `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     return this.auctions.save(
       this.auctions.create({
+        code,
         sellerId: product.sellerId,
         productId: product.id,
         skuId: sku.id,
