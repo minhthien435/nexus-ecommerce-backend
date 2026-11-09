@@ -18,6 +18,7 @@ import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
+import { OrderDisputeEntity } from '../domain/entities/order-dispute.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import { PayosClientService } from './payos-client.service.js';
@@ -1250,30 +1251,55 @@ export class OrderService {
   }
 
   /**
-   * Cập nhật trạng thái giao hàng thành công từ Webhook bưu cục (SHIPPED -> DELIVERED)
+   * Cập nhật trạng thái giao hàng thành công (SHIPPED -> DELIVERED).
+   * Dùng chung cho cả Webhook bưu tá GHN và nút xác nhận thủ công của Support Desk.
    */
-  async markOrderAsDeliveredViaCarrier(trackingCode: string) {
+  async markOrderAsDelivered(params: {
+    orderId?: string;
+    trackingCode?: string;
+    actorId?: string | null;
+    reason: string;
+    source: 'CARRIER_WEBHOOK' | 'SUPPORT_MANUAL';
+  }) {
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const order = await manager.getRepository(OrderEntity).findOne({
-        where: { trackingCode },
-      });
+      const orderRepo = manager.getRepository(OrderEntity);
+      let order: OrderEntity | null = null;
+
+      if (params.orderId) {
+        order = await orderRepo.findOne({ where: { id: params.orderId } });
+      } else if (params.trackingCode) {
+        order = await orderRepo.findOne({
+          where: { trackingCode: params.trackingCode },
+        });
+      }
 
       if (!order) {
         throw new NotFoundException({
           errorCode: 'ORDER_NOT_FOUND',
-          message: `Không tìm thấy đơn hàng với mã vận đơn ${trackingCode}`,
+          message: params.orderId
+            ? `Không tìm thấy đơn hàng với mã ID ${params.orderId}`
+            : `Không tìm thấy đơn hàng với mã vận đơn ${params.trackingCode}`,
         });
       }
 
       // Idempotency: nếu đơn hàng đã ở trạng thái DELIVERED
       if (order.status === 'DELIVERED') {
-        return {
-          orderId: order.id,
-          status: 'DELIVERED' as const,
-          trackingCode: order.trackingCode,
-          alreadyDelivered: true,
-          updatedAt: order.updatedAt,
-        };
+        if (params.source === 'CARRIER_WEBHOOK') {
+          return {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            status: 'DELIVERED' as const,
+            trackingCode: order.trackingCode,
+            deliveredAt: order.deliveredAt ?? order.updatedAt,
+            alreadyDelivered: true,
+            updatedAt: order.updatedAt,
+          };
+        }
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message:
+            'Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: DELIVERED)',
+        });
       }
 
       if (order.status !== 'SHIPPED') {
@@ -1286,17 +1312,89 @@ export class OrderService {
       const delivered = await this.orderStateMachine.transition(manager, {
         orderId: order.id,
         toStatus: 'DELIVERED',
-        actorId: null,
-        reason: 'Webhook bưu tá GHN cập nhật giao hàng thành công',
+        actorId: params.actorId ?? null,
+        reason: params.reason,
       });
 
-      const saved = await manager.getRepository(OrderEntity).save(delivered);
+      delivered.deliveredAt = new Date();
+      delivered.orderNumber = delivered.orderNumber ?? order.orderNumber;
+      const saved = await orderRepo.save(delivered);
 
       return {
         orderId: saved.id,
+        orderNumber: saved.orderNumber ?? order.orderNumber,
         status: 'DELIVERED' as const,
         trackingCode: saved.trackingCode ?? order.trackingCode,
+        deliveredAt: saved.deliveredAt,
         alreadyDelivered: false,
+        updatedAt: saved.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * Cập nhật trạng thái giao hàng thành công từ Webhook bưu cục (SHIPPED -> DELIVERED)
+   */
+  async markOrderAsDeliveredViaCarrier(trackingCode: string) {
+    return this.markOrderAsDelivered({
+      trackingCode,
+      actorId: null,
+      reason: 'Webhook bưu tá GHN cập nhật giao hàng thành công',
+      source: 'CARRIER_WEBHOOK',
+    });
+  }
+
+  /**
+   * Người mua tự bấm xác nhận đã nhận hàng (DELIVERED -> COMPLETED)
+   */
+  async confirmOrderDeliveryByBuyer(buyerId: string, orderId: string) {
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      const orderRepo = manager.getRepository(OrderEntity);
+      const order = await orderRepo.findOne({
+        where: { id: orderId, buyerId },
+      });
+
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message:
+            'Không tìm thấy đơn hàng hoặc bạn không phải người mua đơn này',
+        });
+      }
+
+      if (order.status !== 'DELIVERED') {
+        throw new ConflictException({
+          errorCode: 'ORDER_STATUS_INVALID',
+          message: `Chỉ có thể xác nhận hoàn tất cho đơn hàng đang ở trạng thái DELIVERED (hiện tại: ${order.status})`,
+        });
+      }
+
+      // Kiểm tra đơn hàng có khiếu nại ở bất kỳ trạng thái nào hay không
+      const disputeCount = await manager
+        .getRepository(OrderDisputeEntity)
+        .count({ where: { orderId: order.id } });
+
+      if (disputeCount > 0) {
+        throw new ConflictException({
+          errorCode: 'ORDER_HAS_DISPUTE',
+          message:
+            'Đơn hàng đang có hồ sơ khiếu nại, không thể tự xác nhận hoàn tất',
+        });
+      }
+
+      const completed = await this.orderStateMachine.transition(manager, {
+        orderId: order.id,
+        toStatus: 'COMPLETED',
+        actorId: buyerId,
+        reason: 'Người mua xác nhận đã nhận được hàng và hài lòng',
+      });
+
+      const saved = await orderRepo.save(completed);
+
+      return {
+        orderId: saved.id,
+        orderNumber: saved.orderNumber,
+        status: 'COMPLETED' as const,
         updatedAt: saved.updatedAt,
       };
     });

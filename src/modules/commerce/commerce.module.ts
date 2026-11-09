@@ -30,6 +30,9 @@ import { PaymentWebhookService } from './services/payment-webhook.service.js';
 import { PayosClientService } from './services/payos-client.service.js';
 import { CartMergeApi } from './cart-merge.api.js';
 import { ORDER_EXPIRY_QUEUE } from './order-expiry.constants.js';
+import { ORDER_COMPLETION_QUEUE } from './order-completion.constants.js';
+import { OrderCompletionProcessor } from './processors/order-completion.processor.js';
+import { OrderCompletionSchedulerService } from './services/order-completion-scheduler.service.js';
 import { OrderExpirySchedulerApi } from './order-expiry-scheduler.api.js';
 import { OrderExpirySchedulerService } from './services/order-expiry-scheduler.service.js';
 import { OrderExpiryOutboxApi } from './order-expiry-outbox.api.js';
@@ -69,6 +72,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     CatalogModule,
     FulfillmentModule,
     BullModule.registerQueue({ name: ORDER_EXPIRY_QUEUE }),
+    BullModule.registerQueue({ name: ORDER_COMPLETION_QUEUE }),
   ],
   controllers: [
     CartController,
@@ -89,6 +93,8 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     OrderStateMachineService,
     OrderExpiryOutboxService,
     OrderExpiryProcessor,
+    OrderCompletionProcessor,
+    OrderCompletionSchedulerService,
     PayosClientService,
     PaymentsService,
     PaymentWebhookService,
@@ -118,6 +124,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
     PayosClientService,
     OrderRefundRequestApi,
     OrderDisputeService,
+    OrderCompletionSchedulerService,
   ],
 })
 export class CommerceModule {}

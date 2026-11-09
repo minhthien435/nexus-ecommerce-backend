@@ -10,6 +10,7 @@ import { PermissionsGuard } from '../../identity/rbac/guards/permissions.guard.j
 import { RolesGuard } from '../../identity/rbac/guards/roles.guard.js';
 import { RbacService } from '../../identity/rbac/rbac.service.js';
 import { SupportOrderService } from '../services/support-order.service.js';
+import { OrderService } from '../services/order.service.js';
 import { SupportOrderController } from './support-order.controller.js';
 
 describe('SupportOrderController security', () => {
@@ -28,6 +29,9 @@ describe('SupportOrderController security', () => {
     list: vi.fn(),
     detail: vi.fn(),
   };
+  const orderService = {
+    markOrderAsDelivered: vi.fn(),
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -36,6 +40,13 @@ describe('SupportOrderController security', () => {
       meta: { page: 1, limit: 20, totalItems: 0, totalPages: 1 },
     });
     service.detail.mockResolvedValue({ id: orderId });
+    orderService.markOrderAsDelivered.mockResolvedValue({
+      orderId,
+      orderNumber: 'ORD-123',
+      status: 'DELIVERED',
+      deliveredAt: new Date(),
+      updatedAt: new Date(),
+    });
     const moduleRef = await Test.createTestingModule({
       controllers: [SupportOrderController],
       providers: [
@@ -47,6 +58,7 @@ describe('SupportOrderController security', () => {
         { provide: getRepositoryToken(UserEntity), useValue: users },
         { provide: RbacService, useValue: rbac },
         { provide: SupportOrderService, useValue: service },
+        { provide: OrderService, useValue: orderService },
       ],
     }).compile();
     app = moduleRef.createNestApplication();
@@ -144,5 +156,38 @@ describe('SupportOrderController security', () => {
 
     expect(response.status).toBe(400);
     expect(service.detail).not.toHaveBeenCalled();
+  });
+
+  it('allows STAFF to mark an order as delivered with valid reason', async () => {
+    authenticate(staffId);
+    rbac.hasAnyRole.mockResolvedValue(true);
+    rbac.hasAllPermissions.mockResolvedValue(true);
+
+    const response = await request(app.getHttpServer())
+      .post(`/api/v1/commerce/support/orders/${orderId}/mark-delivered`)
+      .set('Authorization', 'Bearer staff-token')
+      .send({ reason: 'Khách hàng gọi xác nhận đã nhận bưu phẩm' });
+
+    expect(response.status).toBe(200);
+    expect(orderService.markOrderAsDelivered).toHaveBeenCalledWith({
+      orderId,
+      actorId: staffId,
+      reason: 'Khách hàng gọi xác nhận đã nhận bưu phẩm',
+      source: 'SUPPORT_MANUAL',
+    });
+  });
+
+  it('rejects mark-delivered when reason is missing or shorter than 5 chars', async () => {
+    authenticate(staffId);
+    rbac.hasAnyRole.mockResolvedValue(true);
+    rbac.hasAllPermissions.mockResolvedValue(true);
+
+    const response = await request(app.getHttpServer())
+      .post(`/api/v1/commerce/support/orders/${orderId}/mark-delivered`)
+      .set('Authorization', 'Bearer staff-token')
+      .send({ reason: '123' });
+
+    expect(response.status).toBe(400);
+    expect(orderService.markOrderAsDelivered).not.toHaveBeenCalled();
   });
 });

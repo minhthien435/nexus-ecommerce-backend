@@ -87,6 +87,9 @@ export class OrderEntity {
   @Column('varchar', { name: 'carrier_name', length: 100, nullable: true })
   carrierName: string | null;
 
+  @Column('timestamptz', { name: 'delivered_at', nullable: true })
+  deliveredAt: Date | null;
+
   @Column('timestamptz', { name: 'hold_expires_at', nullable: true })
   holdExpiresAt: Date | null;
 

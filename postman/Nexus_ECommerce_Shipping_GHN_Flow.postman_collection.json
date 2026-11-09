@@ -1,0 +1,627 @@
+{
+  "info": {
+    "_postman_id": "nexus-shipping-ghn-collection-v1",
+    "name": "Nexus E-Commerce - Shipping & GHN Fulfillment Flow",
+    "description": "Postman Collection for GHN Shipping integration: Location lookup, Fee Calculation, Seller Waybill Creation, Print A5, and Webhook Sync.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "07 - Shipping & GHN Fulfillment Flow",
+      "description": "End-to-End Shipping & GHN Express Integration Tests:\n- Master data locations (Provinces, Districts, Wards)\n- Dynamic Fee Calculation & Zone Routing\n- Seller GHN Order Creation & A5 Print Token\n- GHN Webhook Delivery Sync (Delivered -> 72h dispute window)\n- Support Desk Order Search by Tracking Code",
+      "item": [
+        {
+          "name": "00 - Login to get Access Token [Run this first if not logged in Postman]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const token = json.accessToken || json.data?.accessToken;",
+                  "const user = json.user || json.data?.user;",
+                  "",
+                  "pm.test('Access token received successfully', function () {",
+                  "    pm.expect(token).to.be.a('string').and.not.be.empty;",
+                  "});",
+                  "",
+                  "if (token) {",
+                  "    pm.environment.set('accessToken', token);",
+                  "    pm.collectionVariables.set('accessToken', token);",
+                  "    console.log('Access token successfully set in Postman!');",
+                  "}",
+                  "if (user && user.id) {",
+                  "    pm.environment.set('userId', user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"seller.test@nexus.vn\",\n  \"password\": \"Seller@123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "07.1 - Get GHN Provinces [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response is a non-empty array', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Payload is optimized (only code and name, no redundant GHN raw fields)', function () {",
+                  "    const first = list[0];",
+                  "    pm.expect(first).to.have.property('code');",
+                  "    pm.expect(first).to.have.property('name');",
+                  "    pm.expect(Object.keys(first)).to.have.members(['code', 'name']);",
+                  "});",
+                  "",
+                  "const hcm = list.find(p => p.name.includes('Hồ Chí Minh'));",
+                  "if (hcm) {",
+                  "    pm.environment.set('ghnProvinceId', hcm.code);",
+                  "    pm.collectionVariables.set('ghnProvinceId', hcm.code);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/provinces",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "provinces"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.2 - Get GHN Districts by Province ID [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response contains districts for selected province', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Schema is clean (only code and name)', function () {",
+                  "    const district = list.find(d => d.code === '1442' || d.name.includes('Quận 1'));",
+                  "    pm.expect(district).to.be.an('object');",
+                  "    pm.expect(Object.keys(district)).to.have.members(['code', 'name']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/districts?provinceId={{ghnProvinceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "districts"
+              ],
+              "query": [
+                {
+                  "key": "provinceId",
+                  "value": "{{ghnProvinceId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.3 - Get GHN Wards by District ID [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response contains wards for selected district', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Ward schema is clean (only code and name)', function () {",
+                  "    const ward = list.find(w => w.code === '20101' || w.name.includes('Bến Nghé'));",
+                  "    pm.expect(ward).to.be.an('object');",
+                  "    pm.expect(Object.keys(ward)).to.have.members(['code', 'name']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/wards?districtId={{ghnDistrictId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "wards"
+              ],
+              "query": [
+                {
+                  "key": "districtId",
+                  "value": "{{ghnDistrictId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.4 - Calculate Shipping Fee [200/201 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const quote = json.data || json;",
+                  "",
+                  "pm.test('Fee is calculated accurately as positive number', function () {",
+                  "    pm.expect(quote.fee).to.be.a('number').and.be.above(0);",
+                  "    pm.expect(quote.currency).to.equal('VND');",
+                  "    pm.expect(quote.weightGrams).to.equal(500);",
+                  "    pm.expect(quote.serviceTypeId).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.test('No redundant GHN fee breakdown fields in response', function () {",
+                  "    const allowedKeys = ['fee', 'currency', 'weightGrams', 'serviceTypeId', 'expectedDeliveryTime'];",
+                  "    Object.keys(quote).forEach(key => {",
+                  "        pm.expect(allowedKeys).to.include(key);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"toDistrictId\": 1442,\n  \"toWardCode\": \"20101\",\n  \"weightInGrams\": 500\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/calculate-fee",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "fulfillment", "shipping", "calculate-fee"]
+            }
+          }
+        },
+        {
+          "name": "07.4b - Get Seller Orders [Auto-finds Order ID]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const orders = json.data?.orders || json.data || json.orders || [];",
+                  "if (Array.isArray(orders) && orders.length > 0) {",
+                  "    const target = orders.find(o => o.status === 'PROCESSING') || orders[0];",
+                  "    pm.environment.set('orderId', target.id);",
+                  "    pm.collectionVariables.set('orderId', target.id);",
+                  "    if (target.trackingCode) {",
+                  "        pm.environment.set('trackingCode', target.trackingCode);",
+                  "        pm.collectionVariables.set('trackingCode', target.trackingCode);",
+                  "    }",
+                  "    console.log('Selected Order ID for shipping test:', target.id, 'status:', target.status);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/seller/orders?limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "seller", "orders"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.5 - Seller Ship Order via GHN [200 OK or 409 if already shipped]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order is either shipped (200) or was previously shipped (409)', function () {",
+                  "    pm.expect([200, 409]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    const data = json.data || json;",
+                  "    pm.test('Order transitioned to SHIPPED', function () {",
+                  "        pm.expect(data.status).to.equal('SHIPPED');",
+                  "        pm.expect(data.carrierName).to.equal('GHN');",
+                  "        pm.expect(data.trackingCode).to.be.a('string').and.not.be.empty;",
+                  "    });",
+                  "    if (data.trackingCode) {",
+                  "        pm.environment.set('trackingCode', data.trackingCode);",
+                  "        pm.collectionVariables.set('trackingCode', data.trackingCode);",
+                  "    }",
+                  "} else {",
+                  "    console.log('Order already shipped previously, proceeding with existing tracking code');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/seller/orders/{{orderId}}/ghn-ship",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "commerce",
+                "seller",
+                "orders",
+                "{{orderId}}",
+                "ghn-ship"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.6 - GHN Webhook Delivery Sync [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Webhook handled successfully', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.statusCode).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-ghn-token",
+                "value": "nexus_ghn_webhook_secret_2026"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"OrderCode\": \"{{trackingCode}}\",\n  \"Status\": \"delivered\",\n  \"Time\": \"2026-11-09T01:30:56.113Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/ghn-webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "fulfillment", "shipping", "ghn-webhook"]
+            }
+          }
+        },
+        {
+          "name": "07.7 - Support Desk Search Order by Tracking Code [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || json;",
+                  "const items = data.items || data;",
+                  "",
+                  "pm.test('Response is valid array or object', function () {",
+                  "    pm.expect(items).to.be.an('array');",
+                  "});",
+                  "if (Array.isArray(items) && items.length > 0 && items[0].id) {",
+                  "    pm.environment.set('orderId', items[0].id);",
+                  "    pm.collectionVariables.set('orderId', items[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/support/orders?q={{trackingCode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "support", "orders"],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "{{trackingCode}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.8 - Support Desk Mark Order Delivered [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || json;",
+                  "",
+                  "pm.test('Order status transitioned to DELIVERED', function () {",
+                  "    pm.expect(data.status).to.equal('DELIVERED');",
+                  "    pm.expect(data).to.have.property('orderId');",
+                  "    pm.expect(data).to.have.property('orderNumber');",
+                  "    pm.expect(data).to.have.property('deliveredAt');",
+                  "    pm.expect(data).to.have.property('updatedAt');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Bưu tá và người mua xác nhận đã giao nhận kiện hàng thành công qua tổng đài hỗ trợ.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/support/orders/{{orderId}}/mark-delivered",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "commerce",
+                "support",
+                "orders",
+                "{{orderId}}",
+                "mark-delivered"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.9 - Buyer Confirm Receipt & Complete Order [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || json;",
+                  "",
+                  "pm.test('Order status transitioned to COMPLETED', function () {",
+                  "    pm.expect(data.status).to.equal('COMPLETED');",
+                  "    pm.expect(data).to.have.property('orderId');",
+                  "    pm.expect(data).to.have.property('orderNumber');",
+                  "    pm.expect(data).to.have.property('updatedAt');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/orders/{{orderId}}/complete",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "commerce",
+                "orders",
+                "{{orderId}}",
+                "complete"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ghnProvinceId",
+      "value": "202",
+      "type": "string"
+    },
+    {
+      "key": "ghnDistrictId",
+      "value": "1442",
+      "type": "string"
+    },
+    {
+      "key": "ghnWardCode",
+      "value": "20101",
+      "type": "string"
+    },
+    {
+      "key": "trackingCode",
+      "value": "LY7D86",
+      "type": "string"
+    },
+    {
+      "key": "ghnWebhookToken",
+      "value": "nexus_ghn_webhook_secret_2026",
+      "type": "string"
+    }
+  ]
+}
