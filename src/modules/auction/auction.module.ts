@@ -2,13 +2,23 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProductEntity } from '../catalog/domain/entities/product.entity.js';
 import { ProductSkuEntity } from '../catalog/domain/entities/product-sku.entity.js';
+import { ProductImageEntity } from '../catalog/domain/entities/product-image.entity.js';
+import { ShopEntity } from '../identity/domain/shop.entity.js';
+import { AuctionController } from './controllers/auction.controller.js';
 import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AuctionEntity, ProductEntity, ProductSkuEntity]),
+    TypeOrmModule.forFeature([
+      AuctionEntity,
+      ProductEntity,
+      ProductSkuEntity,
+      ProductImageEntity,
+      ShopEntity,
+    ]),
   ],
+  controllers: [AuctionController],
   providers: [AuctionService],
   exports: [AuctionService, TypeOrmModule],
 })
