@@ -13,6 +13,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import { CatalogCartApi } from '../../catalog/catalog-cart.api.js';
 import { UserAddressEntity } from '../../identity/users/entities/user-address.entity.js';
 import { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
+import { InventoryReadApi } from '../../fulfillment/inventory-read.api.js';
 import { CartEntity } from '../domain/entities/cart.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
@@ -32,7 +33,6 @@ import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { GhnClientService } from '../../fulfillment/services/ghn-client.service.js';
-import type { GhnCreateOrderPayload } from '../../fulfillment/dtos/ghn-shipping.dto.js';
 import { ShippingQuoteService } from '../../fulfillment/services/shipping-quote.service.js';
 import type { CartSku } from '../../catalog/catalog-cart.api.js';
 
@@ -66,7 +66,165 @@ export class OrderService {
     private readonly ghnClientService?: GhnClientService,
     @Optional()
     private readonly shippingQuotes?: ShippingQuoteService,
+    @Optional()
+    private readonly inventoryRead?: InventoryReadApi,
   ) {}
+
+  async quoteCart(userId: string, dto: CreateCheckoutDto) {
+    if (
+      !dto.addressId ||
+      !dto.selectedCartItemIds?.length ||
+      new Set(dto.selectedCartItemIds).size !== dto.selectedCartItemIds.length
+    ) {
+      throw new BadRequestException(
+        'A saved address and unique selected cart items are required',
+      );
+    }
+    const cart = await this.cartRepo.findOne({
+      where: { userId: userId.toLowerCase(), status: 'ACTIVE' },
+    });
+    if (!cart) throw new BadRequestException('Cart is unavailable');
+    const items = (
+      await this.cartItemRepo.find({ where: { cartId: cart.id } })
+    ).filter((item) => dto.selectedCartItemIds!.includes(item.id));
+    if (items.length !== dto.selectedCartItemIds.length)
+      throw new BadRequestException('Selected cart items are unavailable');
+    const now = new Date();
+    if (
+      items.some(
+        (item) =>
+          item.reservedOrderId &&
+          (!item.reservationExpiresAt || item.reservationExpiresAt > now),
+      )
+    )
+      throw new ConflictException('A selected cart item is reserved');
+    if (!this.inventoryRead)
+      throw new ServiceUnavailableException(
+        'Inventory availability is unavailable',
+      );
+    const requested = new Map<string, number>();
+    for (const item of items) {
+      if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0)
+        throw new BadRequestException('Invalid cart quantity');
+      const skuId = item.skuId.toLowerCase();
+      const quantity = (requested.get(skuId) ?? 0) + item.quantity;
+      if (!Number.isSafeInteger(quantity))
+        throw new BadRequestException('Invalid cart quantity');
+      requested.set(skuId, quantity);
+    }
+    const stock = await this.inventoryRead.getDefaultWarehouseStock([
+      ...requested.keys(),
+    ]);
+    const available = new Map(
+      stock.map((row) => [row.skuId.toLowerCase(), row.availableQuantity]),
+    );
+    for (const [skuId, quantity] of requested) {
+      const count = available.get(skuId);
+      if (!Number.isSafeInteger(count) || count! < quantity)
+        throw new ConflictException('Insufficient available inventory');
+    }
+    const address = await this.addressRepo.findOne({
+      where: { id: dto.addressId, userId: userId.toLowerCase() },
+    });
+    if (!address) throw new NotFoundException('Address not found');
+    if (
+      address.addressScheme !== 'ghn_v3' ||
+      !address.provinceName ||
+      !address.wardName
+    )
+      throw new BadRequestException(
+        'An upgraded GHN two-level saved address is required',
+      );
+    if (!this.shippingQuotes)
+      throw new ServiceUnavailableException('Shipping quotes are unavailable');
+    const skus = new Map(
+      (await this.catalogApi.getCartSkus(items.map((item) => item.skuId))).map(
+        (sku) => [sku.id, sku],
+      ),
+    );
+    const groups = new Map<string, CartItemEntity[]>();
+    for (const item of items) {
+      const sku = skus.get(item.skuId);
+      if (
+        !sku ||
+        !sku.isActive ||
+        sku.productStatus !== 'ACTIVE' ||
+        sku.productDeletedAt
+      )
+        throw new BadRequestException('Selected product is unavailable');
+      this.assertNotOwnProduct(userId, sku);
+      const group = groups.get(sku.sellerId) ?? [];
+      group.push(item);
+      groups.set(sku.sellerId, group);
+    }
+    const sellers = await this.quoteSellerGroups(groups, skus, address);
+    return {
+      currency: 'VND',
+      totalFee: sellers.reduce((sum, seller) => sum + seller.fee, 0),
+      sellers,
+    };
+  }
+
+  private async quoteSellerGroups(
+    groups: Map<string, CartItemEntity[]>,
+    skus: Map<string, CartSku>,
+    address: {
+      recipientName: string;
+      recipientPhone: string;
+      addressLine: string;
+      provinceName: string | null;
+      wardName: string | null;
+    },
+  ) {
+    if (!this.shippingQuotes)
+      throw new ServiceUnavailableException('Shipping quotes are unavailable');
+    if (!address.provinceName || !address.wardName)
+      throw new BadRequestException(
+        'An upgraded GHN two-level saved address is required',
+      );
+    const sellers: Array<{
+      sellerId: string;
+      weightGrams: number;
+      fee: number;
+    }> = [];
+    for (const [sellerId, items] of groups) {
+      let weightGrams = 0;
+      const names: string[] = [];
+      for (const item of items) {
+        const weight = skus.get(item.skuId)?.weightGrams;
+        const name = skus.get(item.skuId)?.productName?.trim();
+        if (
+          !Number.isSafeInteger(weight) ||
+          weight! <= 0 ||
+          !Number.isSafeInteger(item.quantity) ||
+          item.quantity <= 0
+        ) {
+          throw new BadRequestException({
+            errorCode: 'SHIPPING_WEIGHT_MISSING',
+            message:
+              'Every selected SKU must have a positive persisted weight and quantity',
+          });
+        }
+        if (!name)
+          throw new BadRequestException(
+            'Product name is required for shipping',
+          );
+        names.push(name);
+        weightGrams += weight! * item.quantity;
+      }
+      const quote = await this.shippingQuotes.quoteNewAddress({
+        recipientName: address.recipientName,
+        recipientPhone: address.recipientPhone,
+        addressLine: address.addressLine,
+        provinceName: address.provinceName,
+        wardName: address.wardName,
+        weightGrams,
+        content: names.join(', '),
+      });
+      sellers.push({ sellerId, weightGrams, fee: quote.fee });
+    }
+    return sellers;
+  }
 
   /**
    * Tạo phiên checkout và các đơn hàng tách theo từng Người bán (Seller)
@@ -123,6 +281,7 @@ export class OrderService {
 
     // 4. Xác định địa chỉ giao hàng
     let shippingSnapshot: Record<string, unknown>;
+    let shippingAddressId: string | undefined;
 
     if (dto.shippingAddress) {
       shippingSnapshot = {
@@ -142,7 +301,11 @@ export class OrderService {
           'Không tìm thấy địa chỉ giao hàng được chọn',
         );
       }
+      shippingAddressId = address.id;
       shippingSnapshot = {
+        addressScheme: address.addressScheme,
+        provinceName: address.provinceName,
+        wardName: address.wardName,
         recipientName: address.recipientName,
         recipientPhone: address.recipientPhone,
         addressLine: address.addressLine,
@@ -167,8 +330,12 @@ export class OrderService {
           'Vui lòng cung cấp hoặc chọn một địa chỉ nhận hàng',
         );
       }
+      shippingAddressId = fallbackAddress.id;
 
       shippingSnapshot = {
+        addressScheme: fallbackAddress.addressScheme,
+        provinceName: fallbackAddress.provinceName,
+        wardName: fallbackAddress.wardName,
         recipientName: fallbackAddress.recipientName,
         recipientPhone: fallbackAddress.recipientPhone,
         addressLine: fallbackAddress.addressLine,
@@ -192,43 +359,30 @@ export class OrderService {
     if (!this.shippingQuotes)
       throw new ServiceUnavailableException('Shipping quotes are unavailable');
     if (
-      typeof shippingSnapshot.districtCode !== 'string' ||
-      !/^\d+$/.test(shippingSnapshot.districtCode) ||
-      typeof shippingSnapshot.wardCode !== 'string' ||
-      !/^\d{1,20}$/.test(shippingSnapshot.wardCode)
+      shippingSnapshot.addressScheme !== 'ghn_v3' ||
+      typeof shippingSnapshot.provinceName !== 'string' ||
+      typeof shippingSnapshot.wardName !== 'string'
     ) {
       throw new BadRequestException({
         errorCode: 'INVALID_SHIPPING_INPUT',
-        message: 'A GHN district code and ward code are required for checkout',
+        message:
+          'An upgraded GHN two-level saved address is required for checkout',
       });
     }
     const quotedFingerprint = this.shippingFingerprint(cartItems, skuMap);
-    const shippingFees = new Map<string, bigint>();
-    for (const [sellerId, sellerItems] of itemsBySeller) {
-      let weightGrams = 0;
-      for (const item of sellerItems) {
-        const weight = skuMap.get(item.skuId)?.weightGrams;
-        if (
-          !Number.isSafeInteger(weight) ||
-          weight! <= 0 ||
-          !Number.isSafeInteger(item.quantity) ||
-          item.quantity <= 0
-        ) {
-          throw new BadRequestException({
-            errorCode: 'SHIPPING_WEIGHT_MISSING',
-            message:
-              'Every selected SKU must have a positive persisted weight and quantity',
-          });
-        }
-        weightGrams += weight! * item.quantity;
-      }
-      const quote = await this.shippingQuotes.quote({
-        districtId: Number(shippingSnapshot.districtCode),
-        wardCode: shippingSnapshot.wardCode as string,
-        weightGrams,
-      });
-      shippingFees.set(sellerId, moneyToCents(String(quote.fee)));
-    }
+    const sellerQuotes = await this.quoteSellerGroups(itemsBySeller, skuMap, {
+      recipientName: shippingSnapshot.recipientName as string,
+      recipientPhone: shippingSnapshot.recipientPhone as string,
+      addressLine: shippingSnapshot.addressLine as string,
+      provinceName: shippingSnapshot.provinceName,
+      wardName: shippingSnapshot.wardName,
+    });
+    const shippingFees = new Map(
+      sellerQuotes.map(({ sellerId, fee }) => [
+        sellerId,
+        moneyToCents(String(fee)),
+      ]),
+    );
 
     // 6. Tính toán thời gian hết hạn giữ kho (15 phút)
     const now = new Date();
@@ -236,6 +390,35 @@ export class OrderService {
 
     // 7. Thực thi Transaction tạo CheckoutSession, Orders và OrderItems
     const result = await this.dataSource.transaction(async (manager) => {
+      if (shippingAddressId) {
+        const currentAddress = await manager
+          .getRepository(UserAddressEntity)
+          .findOne({
+            where: { id: shippingAddressId, userId: userId.toLowerCase() },
+            lock: { mode: 'pessimistic_write' },
+          });
+        if (
+          !currentAddress ||
+          (
+            [
+              'addressScheme',
+              'recipientName',
+              'recipientPhone',
+              'addressLine',
+              'provinceCode',
+              'districtCode',
+              'wardCode',
+              'provinceName',
+              'wardName',
+            ] as const
+          ).some((key) => currentAddress[key] !== shippingSnapshot[key])
+        ) {
+          throw new ConflictException({
+            errorCode: 'SHIPPING_QUOTE_STALE',
+            message: 'Shipping address changed; retry checkout',
+          });
+        }
+      }
       const lockedCart = await manager.getRepository(CartEntity).findOne({
         where: { id: cart.id, userId: userId.toLowerCase(), status: 'ACTIVE' },
         lock: { mode: 'pessimistic_write' },
@@ -349,6 +532,7 @@ export class OrderService {
           imageUrl: string | null;
           unitPrice: string;
           quantity: number;
+          weightGrams: number;
           lineTotalCents: bigint;
         }>;
       }> = [];
@@ -372,6 +556,7 @@ export class OrderService {
             imageUrl: sku.primaryImageUrl || null,
             unitPrice: sku.price,
             quantity: item.quantity,
+            weightGrams: sku.weightGrams!,
             lineTotalCents,
           });
         }
@@ -474,6 +659,7 @@ export class OrderService {
             skuAttributesSnapshot: itemData.attributes,
             unitPrice: itemData.unitPrice,
             quantity: itemData.quantity,
+            weightGramsSnapshot: itemData.weightGrams,
             discountAmount: '0.00',
             lineTotal: centsToMoney(itemData.lineTotalCents),
           });
@@ -1141,7 +1327,7 @@ export class OrderService {
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, sellerId: sellerId.toLowerCase() },
-        relations: { items: true },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!order) {
         throw new NotFoundException({
@@ -1157,6 +1343,10 @@ export class OrderService {
         });
       }
 
+      order.items = await manager
+        .getRepository(OrderItemEntity)
+        .find({ where: { orderId: order.id } });
+
       // Chuẩn bị thông tin người nhận từ snapshot địa chỉ
       const snapshot = (order.shippingAddressSnapshot || {}) as Record<
         string,
@@ -1170,60 +1360,57 @@ export class OrderService {
       );
       const toPhone = String(snapshot.recipientPhone || '');
       const toAddress = String(snapshot.addressLine || '');
-      const toWardCode = String(snapshot.wardCode || '');
-      const toDistrictId = Number(snapshot.districtCode);
+      const toWardName = String(snapshot.wardName || '');
+      const toProvinceName = String(snapshot.provinceName || '');
       if (
+        snapshot.addressScheme !== 'ghn_v3' ||
         typeof snapshot.recipientName !== 'string' ||
         !snapshot.recipientName.trim() ||
         !toPhone.trim() ||
         !toAddress.trim() ||
-        !/^\d+$/.test(toWardCode) ||
-        !Number.isSafeInteger(toDistrictId) ||
-        toDistrictId <= 0 ||
+        !toWardName.trim() ||
+        !toProvinceName.trim() ||
         !order.items?.length
       ) {
         throw new BadRequestException(
           'Địa chỉ giao hàng hoặc sản phẩm không hợp lệ',
         );
       }
-      const skus = await this.catalogApi.getCartSkus(
-        order.items.map((item) => item.skuId),
-        manager,
-      );
-      const weights = new Map(skus.map((sku) => [sku.id, sku.weightGrams]));
       let totalWeight = 0;
+      const names: string[] = [];
       for (const item of order.items) {
-        const weight = weights.get(item.skuId);
+        const weight = item.weightGramsSnapshot;
+        const name = item.productNameSnapshot?.trim();
         if (
           !Number.isSafeInteger(weight) ||
           weight! <= 0 ||
           !Number.isSafeInteger(item.quantity) ||
           item.quantity <= 0
         )
-          throw new BadRequestException('Thiếu cân nặng sản phẩm hợp lệ');
+          throw new BadRequestException(
+            'Order item has no valid shipping weight snapshot',
+          );
+        if (!name)
+          throw new BadRequestException(
+            'Product name is required for shipping',
+          );
+        names.push(name);
         totalWeight += weight! * item.quantity;
       }
 
-      const ghnPayload: GhnCreateOrderPayload = {
-        to_name: toName,
-        to_phone: toPhone,
-        to_address: toAddress,
-        to_ward_code: toWardCode,
-        to_district_id: toDistrictId,
-        weight: totalWeight,
-        service_type_id: totalWeight < 20000 ? 2 : 5,
-        client_order_code: order.id,
-        required_note: 'CHOXEMHANGKHONGTHU',
-        items: order.items?.map((item) => ({
-          name: item.productNameSnapshot || 'Sản phẩm Nexus',
-          quantity: item.quantity,
-          price: Number(item.unitPrice) || 0,
-          weight: weights.get(item.skuId)!,
-        })),
+      const ghnPayload = {
+        recipientName: toName,
+        recipientPhone: toPhone,
+        addressLine: toAddress,
+        provinceName: toProvinceName,
+        wardName: toWardName,
+        weightGrams: totalWeight,
+        content: names.join(', '),
+        clientOrderCode: order.id,
       };
 
       const ghnResult =
-        await this.ghnClientService!.createShippingOrder(ghnPayload);
+        await this.ghnClientService!.createNewAddressOrder(ghnPayload);
 
       const reasonDetails = `Đơn vị vận chuyển: GHN | Mã vận đơn: ${ghnResult.order_code}`;
       const shipped = await this.orderStateMachine.transition(manager, {

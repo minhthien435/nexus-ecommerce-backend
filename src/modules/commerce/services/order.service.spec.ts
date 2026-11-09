@@ -25,7 +25,7 @@ function candidateQueryBuilder(orderIds: string[] = []) {
   };
 }
 
-function setup() {
+function setup(ghn?: { createNewAddressOrder: ReturnType<typeof vi.fn> }) {
   const cartRepo = {
     findOne: vi.fn().mockResolvedValue({
       id: cartId,
@@ -105,6 +105,9 @@ function setup() {
       recipientName: 'Nguyen Van A',
       recipientPhone: '0901234567',
       addressLine: '123 Nguyen Hue',
+      addressScheme: 'ghn_v3',
+      provinceName: 'Hồ Chí Minh',
+      wardName: 'Ward',
       provinceCode: '79',
       districtCode: '760',
       wardCode: '26734',
@@ -161,6 +164,7 @@ function setup() {
           })),
         };
       if (entity.name === 'OrderEntity') return orderRepo;
+      if (entity.name === 'UserAddressEntity') return addressRepo;
       if (entity.name === 'OrderItemEntity') return orderItemRepo;
       if (entity.name === 'OrderStatusHistoryEntity') return orderHistoryRepo;
       if (entity.name === 'CheckoutSessionEntity')
@@ -183,7 +187,14 @@ function setup() {
     ),
   };
 
-  const shippingQuotes = { quote: vi.fn().mockResolvedValue({ fee: 30000 }) };
+  const shippingQuotes = {
+    quoteNewAddress: vi.fn().mockResolvedValue({ fee: 30000 }),
+  };
+  const inventoryRead = {
+    getDefaultWarehouseStock: vi.fn(async (ids: string[]) =>
+      ids.map((skuId) => ({ skuId, availableQuantity: 100 })),
+    ),
+  };
   const service = new OrderService(
     dataSource as never,
     cartRepo as never,
@@ -198,12 +209,14 @@ function setup() {
     inventoryReservation as never,
     expiryOutbox as never,
     undefined,
-    undefined,
+    ghn as never,
     shippingQuotes as never,
+    inventoryRead as never,
   );
 
   return {
     shippingQuotes,
+    inventoryRead,
     cartRepo,
     cartItemRepo,
     checkoutSessionRepo,
@@ -224,6 +237,83 @@ function setup() {
 }
 
 describe('OrderService - Checkout Flow (NEX-301.1)', () => {
+  it('locks the seller order and leaves it unshipped when GHN fails', async () => {
+    const ghn = {
+      createNewAddressOrder: vi
+        .fn()
+        .mockRejectedValue(new Error('GHN unavailable')),
+    };
+    const s = setup(ghn);
+    s.orderRepo.findOne.mockResolvedValue({
+      id: 'order-1',
+      sellerId: seller1,
+      status: 'PROCESSING',
+      shippingAddressSnapshot: {
+        addressScheme: 'ghn_v3',
+        recipientName: 'Buyer',
+        recipientPhone: '0901234567',
+        addressLine: 'Street',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward',
+      },
+    } as never);
+    s.orderItemRepo.find.mockResolvedValue([
+      {
+        skuId: 'sku-1',
+        quantity: 2,
+        productNameSnapshot: 'Product',
+        weightGramsSnapshot: 250,
+      },
+    ] as never);
+    s.catalogApi.getCartSkus.mockResolvedValue([
+      { id: 'sku-1', weightGrams: 250 },
+    ] as never);
+    await expect(
+      s.service.shipSellerOrderWithGhn(seller1, 'order-1'),
+    ).rejects.toThrow('GHN unavailable');
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'order-1', sellerId: seller1 },
+        lock: { mode: 'pessimistic_write' },
+      }),
+    );
+    expect(ghn.createNewAddressOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ clientOrderCode: 'order-1', weightGrams: 500 }),
+    );
+    expect(s.orderStateMachine.transition).not.toHaveBeenCalled();
+    expect(s.orderRepo.save).not.toHaveBeenCalled();
+    expect(s.catalogApi.getCartSkus).not.toHaveBeenCalled();
+  });
+
+  it('rejects shipment of historical items without a weight snapshot', async () => {
+    const ghn = { createNewAddressOrder: vi.fn() };
+    const s = setup(ghn);
+    s.orderRepo.findOne.mockResolvedValue({
+      id: 'order-1',
+      sellerId: seller1,
+      status: 'PROCESSING',
+      shippingAddressSnapshot: {
+        addressScheme: 'ghn_v3',
+        recipientName: 'Buyer',
+        recipientPhone: '0901234567',
+        addressLine: 'Street',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward',
+      },
+    } as never);
+    s.orderItemRepo.find.mockResolvedValue([
+      {
+        skuId: 'sku-1',
+        quantity: 1,
+        productNameSnapshot: 'Product',
+        weightGramsSnapshot: null,
+      },
+    ] as never);
+    await expect(
+      s.service.shipSellerOrderWithGhn(seller1, 'order-1'),
+    ).rejects.toThrow('weight snapshot');
+    expect(ghn.createNewAddressOrder).not.toHaveBeenCalled();
+  });
   it('throws BadRequestException if user has no active cart', async () => {
     const s = setup();
     s.cartRepo.findOne.mockResolvedValue(null);
@@ -294,7 +384,9 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
   it('successfully creates checkout session and splits orders per seller', async () => {
     const s = setup();
 
-    s.shippingQuotes.quote
+    s.shippingQuotes.quoteNewAddress
+      .mockResolvedValueOnce({ fee: 30000 })
+      .mockResolvedValueOnce({ fee: 40000 })
       .mockResolvedValueOnce({ fee: 30000 })
       .mockResolvedValueOnce({ fee: 40000 });
     // 2 items from seller 1, 1 item from seller 2
@@ -352,6 +444,16 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       },
     ]);
 
+    const quote = await s.service.quoteCart(userId, {
+      addressId,
+      selectedCartItemIds: ['item-1', 'item-2', 'item-3'],
+    });
+    expect(quote.totalFee).toBe(70000);
+    expect(quote.sellers).toEqual([
+      { sellerId: seller1, weightGrams: 750, fee: 30000 },
+      { sellerId: seller2, weightGrams: 750, fee: 40000 },
+    ]);
+    s.shippingQuotes.quoteNewAddress.mockClear();
     const result = await s.service.checkout(userId, {
       paymentMethod: 'PAYOS',
     });
@@ -361,17 +463,29 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     // Seller 2: 3 * 200,000 = 600,000
     // Total: 950,000 merchandise + 70,000 shipping.
     expect(result.totalAmount).toBe('1020000.00');
+    expect(s.manager.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ skuId: 'sku-1', weightGramsSnapshot: 250 }),
+    );
     expect(result.orders).toHaveLength(2);
-    expect(s.shippingQuotes.quote).toHaveBeenCalledTimes(2);
-    expect(s.shippingQuotes.quote).toHaveBeenNthCalledWith(1, {
-      districtId: 760,
-      wardCode: '26734',
+    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenCalledTimes(2);
+    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(1, {
+      recipientName: 'Nguyen Van A',
+      recipientPhone: '0901234567',
+      addressLine: '123 Nguyen Hue',
+      provinceName: 'Hồ Chí Minh',
+      wardName: 'Ward',
       weightGrams: 750,
+      content: 'Product 1, Product 1',
     });
-    expect(s.shippingQuotes.quote).toHaveBeenNthCalledWith(2, {
-      districtId: 760,
-      wardCode: '26734',
+    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(2, {
+      recipientName: 'Nguyen Van A',
+      recipientPhone: '0901234567',
+      addressLine: '123 Nguyen Hue',
+      provinceName: 'Hồ Chí Minh',
+      wardName: 'Ward',
       weightGrams: 750,
+      content: 'Product 2',
     });
     // Existing PayOS API creates one link per seller order. Their sum must match checkout.
     const payos = {
@@ -1422,6 +1536,7 @@ describe('Checkout shipping failure and stale quote protection', () => {
     const sku = {
       id: 'sku-1',
       productId: 'product-1',
+      productName: 'Product',
       sellerId: seller1,
       weightGrams: 250,
       price: '100000.00',
@@ -1433,13 +1548,76 @@ describe('Checkout shipping failure and stale quote protection', () => {
     s.catalogApi.getCartSkus.mockResolvedValue([sku]);
     return { ...s, item, sku };
   }
+  it('permits expired reservations in a quote but rejects active reservations', async () => {
+    const s = shippingSetup();
+    s.cartItemRepo.find.mockResolvedValue([
+      {
+        ...s.item,
+        reservedOrderId: 'old',
+        reservationExpiresAt: new Date(Date.now() - 1000),
+      },
+    ]);
+    await expect(
+      s.service.quoteCart(userId, {
+        addressId,
+        selectedCartItemIds: ['item-1'],
+      }),
+    ).resolves.toMatchObject({ totalFee: 30000 });
+    s.cartItemRepo.find.mockResolvedValue([
+      {
+        ...s.item,
+        reservedOrderId: 'active',
+        reservationExpiresAt: new Date(Date.now() + 60000),
+      },
+    ]);
+    await expect(
+      s.service.quoteCart(userId, {
+        addressId,
+        selectedCartItemIds: ['item-1'],
+      }),
+    ).rejects.toThrow('reserved');
+  });
+  it('rejects quantities above available stock, including multiple rows for one SKU', async () => {
+    const s = shippingSetup();
+    s.cartItemRepo.find.mockResolvedValue([
+      s.item,
+      { ...s.item, id: 'item-2' },
+    ]);
+    s.inventoryRead.getDefaultWarehouseStock.mockResolvedValue([
+      { skuId: 'sku-1', availableQuantity: 3 },
+    ]);
+    await expect(
+      s.service.quoteCart(userId, {
+        addressId,
+        selectedCartItemIds: ['item-1', 'item-2'],
+      }),
+    ).rejects.toThrow('Insufficient available inventory');
+    expect(s.shippingQuotes.quoteNewAddress).not.toHaveBeenCalled();
+  });
   it('fails before transaction when GHN cannot quote', async () => {
     const s = shippingSetup();
-    s.shippingQuotes.quote.mockRejectedValue(new Error('GHN unavailable'));
+    s.shippingQuotes.quoteNewAddress.mockRejectedValue(
+      new Error('GHN unavailable'),
+    );
     await expect(s.service.checkout(userId, {})).rejects.toThrow(
       'GHN unavailable',
     );
     expect(s.dataSource.transaction).not.toHaveBeenCalled();
+    expect(s.inventoryReservation.reserve).not.toHaveBeenCalled();
+  });
+  it('rejects an address changed after the quote before reserving inventory', async () => {
+    const s = shippingSetup();
+    const original = await s.addressRepo.findOne();
+    s.addressRepo.findOne
+      .mockReset()
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce({ ...original, addressLine: 'Changed street' });
+    await expect(
+      s.service.checkout(userId, { addressId }),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ errorCode: 'SHIPPING_QUOTE_STALE' }),
+    });
     expect(s.inventoryReservation.reserve).not.toHaveBeenCalled();
   });
   it('rejects missing persisted weight before requesting a quote', async () => {
@@ -1450,7 +1628,7 @@ describe('Checkout shipping failure and stale quote protection', () => {
     await expect(s.service.checkout(userId, {})).rejects.toMatchObject({
       status: 400,
     });
-    expect(s.shippingQuotes.quote).not.toHaveBeenCalled();
+    expect(s.shippingQuotes.quoteNewAddress).not.toHaveBeenCalled();
     expect(s.manager.save).not.toHaveBeenCalled();
   });
   it('rejects missing destination codes before quoting or creating payable data', async () => {
@@ -1464,7 +1642,7 @@ describe('Checkout shipping failure and stale quote protection', () => {
         },
       }),
     ).rejects.toMatchObject({ status: 400 });
-    expect(s.shippingQuotes.quote).not.toHaveBeenCalled();
+    expect(s.shippingQuotes.quoteNewAddress).not.toHaveBeenCalled();
     expect(s.dataSource.transaction).not.toHaveBeenCalled();
   });
   it('does not create any order when the second seller quote fails', async () => {
@@ -1477,7 +1655,7 @@ describe('Checkout shipping failure and stale quote protection', () => {
       s.sku,
       { ...s.sku, id: 'sku-2', sellerId: seller2 },
     ]);
-    s.shippingQuotes.quote
+    s.shippingQuotes.quoteNewAddress
       .mockResolvedValueOnce({ fee: 30000 })
       .mockRejectedValueOnce(new Error('second quote failed'));
     await expect(s.service.checkout(userId, {})).rejects.toThrow(

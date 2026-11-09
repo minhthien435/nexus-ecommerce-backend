@@ -29,13 +29,112 @@ export class GhnClientService {
       this.config.get<string>('GHN_WEBHOOK_TOKEN') ||
       this.config.get<string>('GHN_WEBHOOK_SECRET_KEY');
 
-    // Default mock fallback to true in development/test or if no token provided
-    const mockEnv = this.config.get<string>('GHN_MOCK_FALLBACK');
-    this.mockFallbackEnabled =
-      mockEnv !== undefined
-        ? mockEnv === 'true'
-        : !this.apiToken ||
-          this.config.get<string>('NODE_ENV') !== 'production';
+    // Mock shipments must be explicitly enabled; never silently mask GHN errors.
+    this.mockFallbackEnabled = false;
+  }
+
+  private newAddressBody(input: {
+    recipientName: string;
+    recipientPhone: string;
+    addressLine: string;
+    provinceName: string;
+    wardName: string;
+    weightGrams: number;
+    content: string;
+    clientOrderCode?: string;
+  }) {
+    const fromName = this.config.get<string>('GHN_FROM_NAME')?.trim();
+    const fromPhone = this.config.get<string>('GHN_FROM_PHONE')?.trim();
+    const fromAddress = this.config.get<string>('GHN_FROM_ADDRESS')?.trim();
+    const fromProvince = this.config
+      .get<string>('GHN_FROM_PROVINCE_NAME')
+      ?.trim();
+    const fromWard = this.config.get<string>('GHN_FROM_WARD_NAME')?.trim();
+    if (!fromName || !fromPhone || !fromAddress || !fromProvince || !fromWard) {
+      throw new ServiceUnavailableException({
+        errorCode: 'GHN_ORIGIN_UNAVAILABLE',
+        message: 'GHN two-level pickup origin is required',
+      });
+    }
+    if (
+      !input.recipientName?.trim() ||
+      !input.recipientPhone?.trim() ||
+      !input.addressLine?.trim() ||
+      !input.provinceName?.trim() ||
+      !input.wardName?.trim() ||
+      !input.content?.trim() ||
+      !Number.isSafeInteger(input.weightGrams) ||
+      input.weightGrams < 1 ||
+      input.weightGrams > 5000000
+    ) {
+      throw new BadRequestException('Invalid GHN two-level shipping input');
+    }
+    if (input.weightGrams >= 20000) {
+      throw new BadRequestException('GHN heavy service requires item details');
+    }
+    return {
+      payment_type_id: 1,
+      required_note: 'CHOXEMHANGKHONGTHU',
+      from_name: fromName,
+      from_phone: fromPhone,
+      from_address: fromAddress,
+      from_province_name: fromProvince,
+      from_ward_name: fromWard,
+      is_new_from_address: true,
+      to_name: input.recipientName,
+      to_phone: input.recipientPhone,
+      to_address: input.addressLine,
+      to_province_name: input.provinceName,
+      to_ward_name: input.wardName,
+      is_new_to_address: true,
+      content: input.content,
+      weight: input.weightGrams,
+      length: 15,
+      width: 15,
+      height: 10,
+      service_type_id: input.weightGrams < 20000 ? 2 : 5,
+      ...(input.clientOrderCode
+        ? { client_order_code: input.clientOrderCode }
+        : {}),
+    };
+  }
+
+  async previewNewAddress(
+    input: Parameters<GhnClientService['newAddressBody']>[0],
+  ) {
+    const data = await this.request<{
+      total_fee: number;
+      expected_delivery_time?: string;
+    }>('v2/shipping-order/preview', this.newAddressBody(input));
+    if (!Number.isSafeInteger(data.total_fee) || data.total_fee < 0)
+      throw new ServiceUnavailableException(
+        'GHN returned an invalid shipping fee',
+      );
+    return {
+      fee: data.total_fee,
+      expectedDeliveryTime: data.expected_delivery_time ?? null,
+    };
+  }
+
+  async createNewAddressOrder(
+    input: Parameters<GhnClientService['newAddressBody']>[0],
+  ) {
+    if (!input.clientOrderCode)
+      throw new BadRequestException('Client order code is required');
+    const data = await this.request<{
+      order_code: string;
+      total_fee: number;
+      expected_delivery_time?: string;
+    }>('v2/shipping-order/create', this.newAddressBody(input));
+    if (
+      !data.order_code ||
+      !Number.isSafeInteger(data.total_fee) ||
+      data.total_fee < 0
+    )
+      throw new ServiceUnavailableException(
+        'GHN returned an invalid shipping order',
+      );
+    return { ...data, print_url: await this.getPrintOrderUrl(data.order_code) };
   }
 
   /** Read-only GHN calls never use the shipment demo fallback. */
@@ -305,6 +404,7 @@ export class GhnClientService {
           Token: this.apiToken,
         },
         body: JSON.stringify({ order_codes: [orderCode] }),
+        signal: AbortSignal.timeout(5000),
       });
 
       const data = (await response.json()) as {

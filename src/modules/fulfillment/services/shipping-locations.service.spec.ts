@@ -29,6 +29,8 @@ describe('Shipping locations cache', () => {
       request: vi.fn().mockResolvedValue([
         { ProvinceID: 202, ProvinceName: 'HCM' },
         { ProvinceID: 999, ProvinceName: 'Test - Alert - Tỉnh - 001' },
+        { ProvinceID: 2002, ProvinceName: 'Hà Nội 02' },
+        { ProvinceID: 201, ProvinceName: 'Hà Nội' },
       ]),
     };
     const service = new ShippingLocationsService(
@@ -39,11 +41,36 @@ describe('Shipping locations cache', () => {
       JSON.stringify([
         { code: '202', name: 'HCM' },
         { code: '999', name: 'Test - Alert - Tỉnh - 001' },
+        { code: '2002', name: 'Hà Nội 02' },
+        { code: '201', name: 'Hà Nội' },
       ]),
     );
-    const expected = [{ code: '202', name: 'HCM' }];
+    const expected = [
+      { code: '202', name: 'HCM' },
+      { code: '201', name: 'Hà Nội' },
+    ];
     expect(await service.provinces()).toEqual(expected);
     expect(await service.provinces()).toEqual(expected);
+  });
+  it('loads active new-model wards by province and rejects invalid parent IDs', async () => {
+    redis.get.mockResolvedValue(null);
+    const ghn = {
+      request: vi.fn().mockResolvedValue([
+        { _id: 1001, name: 'Phường A', status: 1 },
+        { _id: 1002, name: 'Closed', status: 2 },
+      ]),
+    };
+    const service = new ShippingLocationsService(
+      ghn as never,
+      new ShippingLocationCacheService(new ConfigService()),
+    );
+    await expect(service.newWards(1000001)).resolves.toEqual([
+      { code: '1001', name: 'Phường A' },
+    ]);
+    expect(ghn.request).toHaveBeenCalledWith(
+      'v3/master-data/ward/all-by-province-id?province_id=1000001&limit=200',
+    );
+    await expect(service.newWards(0)).rejects.toMatchObject({ status: 400 });
   });
   it('normalizes GHN locations and reuses Redis results for 24 hours', async () => {
     const ghn = {

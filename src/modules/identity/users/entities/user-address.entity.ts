@@ -32,6 +32,15 @@ export class UserAddressEntity {
   @Column('varchar', { name: 'ward_code', length: 50, nullable: true })
   wardCode: string | null;
 
+  @Column('varchar', { name: 'address_scheme', length: 20, default: 'legacy' })
+  addressScheme: 'legacy' | 'ghn_v3';
+
+  @Column('varchar', { name: 'province_name', length: 150, nullable: true })
+  provinceName: string | null;
+
+  @Column('varchar', { name: 'ward_name', length: 150, nullable: true })
+  wardName: string | null;
+
   @Column('boolean', { name: 'is_default', default: false })
   isDefault: boolean;
 

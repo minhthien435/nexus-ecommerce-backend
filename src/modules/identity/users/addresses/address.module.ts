@@ -7,6 +7,9 @@ import { UserEntity } from '../../domain/user.entity.js';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressController } from './address.controller.js';
 import { AddressService } from './address.service.js';
+import { GhnClientService } from '../../../fulfillment/services/ghn-client.service.js';
+import { ShippingLocationsService } from '../../../fulfillment/services/shipping-locations.service.js';
+import { ShippingLocationCacheService } from '../../../fulfillment/services/shipping-location-cache.service.js';
 
 @Module({
   imports: [
@@ -21,7 +24,13 @@ import { AddressService } from './address.service.js';
     }),
   ],
   controllers: [AddressController],
-  providers: [AddressService, AccessTokenGuard],
+  providers: [
+    AddressService,
+    AccessTokenGuard,
+    GhnClientService,
+    ShippingLocationsService,
+    ShippingLocationCacheService,
+  ],
   exports: [AddressService],
 })
 export class AddressModule {}

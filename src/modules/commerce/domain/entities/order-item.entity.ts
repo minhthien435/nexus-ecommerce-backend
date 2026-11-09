@@ -38,6 +38,9 @@ export class OrderItemEntity {
   @Column('int')
   quantity: number;
 
+  @Column('int', { name: 'weight_grams_snapshot', nullable: true })
+  weightGramsSnapshot: number | null;
+
   @Column('numeric', {
     name: 'discount_amount',
     precision: 18,
