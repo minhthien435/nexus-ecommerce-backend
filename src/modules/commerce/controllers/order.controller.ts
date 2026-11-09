@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
@@ -80,6 +81,25 @@ export class OrderController {
       success: true as const,
       statusCode: HttpStatus.OK,
       message: 'Hủy đơn hàng thành công',
+      data: result,
+    };
+  }
+
+  @Post(':id/complete')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('ORDER.VIEW')
+  async completeOrder(
+    @CurrentUserId() userId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+  ) {
+    const result = await this.orderService.confirmOrderDeliveryByBuyer(
+      userId,
+      orderId,
+    );
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Xác nhận nhận hàng thành công. Đơn hàng đã hoàn tất.',
       data: result,
     };
   }

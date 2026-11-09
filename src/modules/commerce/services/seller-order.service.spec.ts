@@ -621,8 +621,10 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         const { service, orderRepo, orderStateMachine } = setup();
         orderRepo.findOne.mockResolvedValue({
           id: orderAId,
+          orderNumber: 'ORD-DELIVERED-001',
           status: 'DELIVERED',
           trackingCode: 'GHN-DELIVERED-001',
+          deliveredAt: new Date('2026-11-05T12:00:00Z'),
           updatedAt: new Date('2026-11-05T12:00:00Z'),
         });
 
@@ -631,8 +633,10 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
 
         expect(result).toEqual({
           orderId: orderAId,
+          orderNumber: 'ORD-DELIVERED-001',
           status: 'DELIVERED',
           trackingCode: 'GHN-DELIVERED-001',
+          deliveredAt: new Date('2026-11-05T12:00:00Z'),
           alreadyDelivered: true,
           updatedAt: new Date('2026-11-05T12:00:00Z'),
         });
@@ -657,6 +661,7 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         const { service, orderRepo, orderStateMachine } = setup();
         orderRepo.findOne.mockResolvedValue({
           id: orderAId,
+          orderNumber: 'ORD-SHIPPED-001',
           status: 'SHIPPED',
           trackingCode: 'GHN-SHIPPED-001',
           updatedAt: new Date('2026-11-05T10:00:00Z'),
@@ -676,8 +681,10 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         expect(orderRepo.save).toHaveBeenCalled();
         expect(result).toEqual({
           orderId: orderAId,
+          orderNumber: 'ORD-SHIPPED-001',
           status: 'DELIVERED',
           trackingCode: 'GHN-SHIPPED-001',
+          deliveredAt: expect.any(Date),
           alreadyDelivered: false,
           updatedAt: expect.any(Date),
         });

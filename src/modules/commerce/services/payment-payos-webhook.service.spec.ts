@@ -59,6 +59,7 @@ describe('PaymentWebhookService - PayOS Integration', () => {
     currency: 'VND',
     trackingCode: null,
     carrierName: null,
+    deliveredAt: null,
     shippingAddressSnapshot: {},
     holdExpiresAt: new Date(),
     idempotencyKey: null,

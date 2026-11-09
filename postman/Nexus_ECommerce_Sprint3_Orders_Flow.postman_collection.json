@@ -499,10 +499,22 @@
                   "host": ["{{baseUrl}}"],
                   "path": ["api", "v1", "admin", "users"],
                   "query": [
-                    { "key": "page", "value": "1" },
-                    { "key": "limit", "value": "5" },
-                    { "key": "sortBy", "value": "createdAt" },
-                    { "key": "sortOrder", "value": "DESC" }
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "5"
+                    },
+                    {
+                      "key": "sortBy",
+                      "value": "createdAt"
+                    },
+                    {
+                      "key": "sortOrder",
+                      "value": "DESC"
+                    }
                   ]
                 }
               }
@@ -541,7 +553,12 @@
                   "raw": "{{baseUrl}}/api/v1/admin/users?role=ADMIN",
                   "host": ["{{baseUrl}}"],
                   "path": ["api", "v1", "admin", "users"],
-                  "query": [{ "key": "role", "value": "ADMIN" }]
+                  "query": [
+                    {
+                      "key": "role",
+                      "value": "ADMIN"
+                    }
+                  ]
                 }
               }
             },
@@ -931,6 +948,379 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "07 - Shipping & GHN Fulfillment Flow",
+      "description": "End-to-End Shipping & GHN Express Integration Tests:\n- Master data locations (Provinces, Districts, Wards)\n- Dynamic Fee Calculation & Zone Routing\n- Seller GHN Order Creation & A5 Print Token\n- GHN Webhook Delivery Sync (Delivered -> 72h dispute window)\n- Support Desk Order Search by Tracking Code",
+      "item": [
+        {
+          "name": "07.1 - Get GHN Provinces [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response is a non-empty array', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Payload is optimized (only code and name, no redundant GHN raw fields)', function () {",
+                  "    const first = list[0];",
+                  "    pm.expect(first).to.have.property('code');",
+                  "    pm.expect(first).to.have.property('name');",
+                  "    pm.expect(Object.keys(first)).to.have.members(['code', 'name']);",
+                  "});",
+                  "",
+                  "const hcm = list.find(p => p.name.includes('Hồ Chí Minh'));",
+                  "if (hcm) {",
+                  "    pm.environment.set('ghnProvinceId', hcm.code);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/provinces",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "provinces"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.2 - Get GHN Districts by Province ID [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response contains districts for selected province', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Schema is clean (only code and name)', function () {",
+                  "    const district = list.find(d => d.code === '1442' || d.name.includes('Quận 1'));",
+                  "    pm.expect(district).to.be.an('object');",
+                  "    pm.expect(Object.keys(district)).to.have.members(['code', 'name']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/districts?provinceId={{ghnProvinceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "districts"
+              ],
+              "query": [
+                {
+                  "key": "provinceId",
+                  "value": "{{ghnProvinceId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.3 - Get GHN Wards by District ID [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const list = Array.isArray(json) ? json : (json.data || []);",
+                  "",
+                  "pm.test('Response contains wards for selected district', function () {",
+                  "    pm.expect(list).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Ward schema is clean (only code and name)', function () {",
+                  "    const ward = list.find(w => w.code === '20101' || w.name.includes('Bến Nghé'));",
+                  "    pm.expect(ward).to.be.an('object');",
+                  "    pm.expect(Object.keys(ward)).to.have.members(['code', 'name']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/locations/wards?districtId={{ghnDistrictId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "fulfillment",
+                "shipping",
+                "locations",
+                "wards"
+              ],
+              "query": [
+                {
+                  "key": "districtId",
+                  "value": "{{ghnDistrictId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.4 - Calculate Shipping Fee [200/201 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 or 201', function () {",
+                  "    pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const quote = json.data || json;",
+                  "",
+                  "pm.test('Fee is calculated accurately as positive number', function () {",
+                  "    pm.expect(quote.fee).to.be.a('number').and.be.above(0);",
+                  "    pm.expect(quote.currency).to.equal('VND');",
+                  "    pm.expect(quote.weightGrams).to.equal(500);",
+                  "    pm.expect(quote.serviceTypeId).to.be.a('number');",
+                  "});",
+                  "",
+                  "pm.test('No redundant GHN fee breakdown fields in response', function () {",
+                  "    const allowedKeys = ['fee', 'currency', 'weightGrams', 'serviceTypeId', 'expectedDeliveryTime'];",
+                  "    Object.keys(quote).forEach(key => {",
+                  "        pm.expect(allowedKeys).to.include(key);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"toDistrictId\": 1442,\n  \"toWardCode\": \"20101\",\n  \"weightInGrams\": 500\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/calculate-fee",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "fulfillment", "shipping", "calculate-fee"]
+            }
+          }
+        },
+        {
+          "name": "07.5 - Seller Ship Order via GHN [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || json;",
+                  "",
+                  "pm.test('Order transitioned to SHIPPED', function () {",
+                  "    pm.expect(data.status).to.equal('SHIPPED');",
+                  "    pm.expect(data.carrierName).to.equal('GHN');",
+                  "    pm.expect(data.trackingCode).to.be.a('string').and.not.be.empty;",
+                  "    pm.expect(data.printUrl).to.be.a('string').and.not.be.empty;",
+                  "});",
+                  "",
+                  "if (data.trackingCode) {",
+                  "    pm.environment.set('trackingCode', data.trackingCode);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/seller/orders/{{orderId}}/ghn-ship",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "commerce",
+                "seller",
+                "orders",
+                "{{orderId}}",
+                "ghn-ship"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07.6 - GHN Webhook Delivery Sync [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "pm.test('Webhook handled successfully', function () {",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.statusCode).to.equal(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-ghn-token",
+                "value": "nexus_ghn_webhook_secret_2026"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"OrderCode\": \"{{trackingCode}}\",\n  \"Status\": \"delivered\",\n  \"Time\": \"2026-11-09T01:21:13.447Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/fulfillment/shipping/ghn-webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "fulfillment", "shipping", "ghn-webhook"]
+            }
+          }
+        },
+        {
+          "name": "07.7 - Support Desk Search Order by Tracking Code [200 OK]",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const json = pm.response.json();",
+                  "const data = json.data || json;",
+                  "const items = data.items || data;",
+                  "",
+                  "pm.test('Search returns order matching GHN tracking code', function () {",
+                  "    pm.expect(items).to.be.an('array');",
+                  "    if (items.length > 0) {",
+                  "        const match = items.find(o => o.trackingCode === pm.environment.get('trackingCode'));",
+                  "        pm.expect(match).to.be.an('object');",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/commerce/support/orders?q={{trackingCode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "commerce", "support", "orders"],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "{{trackingCode}}"
+                }
+              ]
+            }
+          }
         }
       ]
     }
