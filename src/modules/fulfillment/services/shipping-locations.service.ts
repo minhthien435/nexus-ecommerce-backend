@@ -25,6 +25,57 @@ export class ShippingLocationsService {
     return this.lookup('ward', districtId);
   }
 
+  newProvinces() {
+    return this.lookupNew('province');
+  }
+
+  newWards(provinceId: number) {
+    return this.lookupNew('ward', provinceId);
+  }
+
+  private async lookupNew(
+    kind: 'province' | 'ward',
+    provinceId?: number,
+  ): Promise<ShippingLocation[]> {
+    if (
+      kind === 'ward' &&
+      (!Number.isSafeInteger(provinceId) ||
+        provinceId! < 1 ||
+        provinceId! > 2147483647)
+    )
+      throw new BadRequestException('A positive GHN province ID is required');
+    const key = `shipping:locations:v3:${kind}:${provinceId ?? 'all'}`;
+    const cached = await this.cache.get<ShippingLocation[]>(key);
+    if (cached) return cached;
+    const path =
+      kind === 'province'
+        ? 'v3/master-data/province/all?limit=200'
+        : `v3/master-data/ward/all-by-province-id?province_id=${provinceId}&limit=200`;
+    const data =
+      await this.ghn.request<
+        Array<{ _id: number; name: string; status: number }>
+      >(path);
+    if (
+      !Array.isArray(data) ||
+      data.some(
+        (row) =>
+          !row ||
+          !Number.isSafeInteger(row._id) ||
+          row._id < 1 ||
+          typeof row.name !== 'string' ||
+          !row.name.trim(),
+      )
+    )
+      throw new ServiceUnavailableException(
+        'GHN returned invalid location data',
+      );
+    const locations = data
+      .filter((row) => row.status === 1)
+      .map((row) => ({ code: String(row._id), name: row.name }));
+    await this.cache.set(key, locations);
+    return locations;
+  }
+
   private async lookup(
     kind: 'province' | 'district' | 'ward',
     parentId?: number,
@@ -79,7 +130,9 @@ export class ShippingLocationsService {
     if (kind !== 'province') return locations;
     return locations.filter(
       ({ name }) =>
-        name.trim().toLocaleLowerCase('vi') !== 'test - alert - tỉnh - 001',
+        !['test - alert - tỉnh - 001', 'hà nội 02'].includes(
+          name.trim().toLocaleLowerCase('vi'),
+        ),
     );
   }
 }

@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { DataSource, EntityManager, Repository } from 'typeorm';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressService } from './address.service.js';
+import type { ShippingLocationsService } from '../../../fulfillment/services/shipping-locations.service.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const addressId = '22222222-2222-4222-8222-222222222222';
@@ -88,6 +89,55 @@ const createInput = {
 };
 
 describe('AddressService', () => {
+  it('resolves v3 names and saves them without a district', async () => {
+    const { repository, dataSource, transactionRepository } = setup();
+    const locations = {
+      newProvinces: vi.fn(async () => [{ code: '1', name: 'Hà Nội' }]),
+      newWards: vi.fn(async () => [{ code: '2', name: 'Ward' }]),
+    } as unknown as ShippingLocationsService;
+    const service = new AddressService(repository, dataSource, locations);
+    await service.create(userId, {
+      ...createInput,
+      addressScheme: 'ghn_v3',
+      provinceCode: '1',
+      wardCode: '2',
+    });
+    expect(transactionRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        addressScheme: 'ghn_v3',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward',
+        districtCode: null,
+      }),
+    );
+  });
+
+  it('requires explicit IDs when upgrading a legacy address', async () => {
+    const { service, transactionRepository } = setup();
+    await expect(
+      service.update(userId, addressId, { addressScheme: 'ghn_v3' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(transactionRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a ward outside the selected v3 province without saving', async () => {
+    const { repository, dataSource, transactionRepository } = setup();
+    const locations = {
+      newProvinces: vi.fn(async () => [{ code: '1', name: 'Hà Nội' }]),
+      newWards: vi.fn(async () => [{ code: '2', name: 'Ward' }]),
+    } as unknown as ShippingLocationsService;
+    const service = new AddressService(repository, dataSource, locations);
+    await expect(
+      service.create(userId, {
+        ...createInput,
+        addressScheme: 'ghn_v3',
+        provinceCode: '1',
+        wardCode: '3',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(transactionRepository.save).not.toHaveBeenCalled();
+  });
+
   it('scopes list to the current user', async () => {
     const { service, repository } = setup();
     vi.mocked(repository.find).mockResolvedValue([]);

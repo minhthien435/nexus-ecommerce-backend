@@ -9,6 +9,23 @@ import { GhnClientService } from './ghn-client.service.js';
 export class ShippingQuoteService {
   constructor(private readonly ghn: GhnClientService) {}
 
+  async quoteNewAddress(input: {
+    recipientName: string;
+    recipientPhone: string;
+    addressLine: string;
+    provinceName: string;
+    wardName: string;
+    weightGrams: number;
+    content: string;
+  }) {
+    const result = await this.ghn.previewNewAddress(input);
+    return {
+      ...result,
+      currency: 'VND' as const,
+      weightGrams: input.weightGrams,
+    };
+  }
+
   async quote(input: {
     districtId: number;
     wardCode: string;

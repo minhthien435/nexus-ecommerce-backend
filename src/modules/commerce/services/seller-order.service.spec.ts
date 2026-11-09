@@ -51,6 +51,14 @@ function setup(options?: { ghnClientService?: unknown }) {
           getRepository: (_entity: unknown) => {
             return {
               findOne: orderRepo.findOne,
+              find: vi.fn().mockResolvedValue([
+                {
+                  skuId: 'sku-1',
+                  quantity: 2,
+                  productNameSnapshot: 'Ao khoac Gio',
+                  weightGramsSnapshot: 200,
+                },
+              ]),
               save: orderRepo.save,
             };
           },
@@ -502,18 +510,18 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
       });
 
       it('throws NotFoundException when order does not exist or belongs to another seller', async () => {
-        const ghnClient = { createShippingOrder: vi.fn() };
+        const ghnClient = { createNewAddressOrder: vi.fn() };
         const { service, orderRepo } = setup({ ghnClientService: ghnClient });
         orderRepo.findOne.mockResolvedValue(null);
 
         await expect(
           service.shipSellerOrderWithGhn(sellerAId, orderAId),
         ).rejects.toThrow(NotFoundException);
-        expect(ghnClient.createShippingOrder).not.toHaveBeenCalled();
+        expect(ghnClient.createNewAddressOrder).not.toHaveBeenCalled();
       });
 
       it('throws ConflictException when order status is not PROCESSING', async () => {
-        const ghnClient = { createShippingOrder: vi.fn() };
+        const ghnClient = { createNewAddressOrder: vi.fn() };
         const { service, orderRepo } = setup({ ghnClientService: ghnClient });
         orderRepo.findOne.mockResolvedValue({
           id: orderAId,
@@ -524,12 +532,12 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         await expect(
           service.shipSellerOrderWithGhn(sellerAId, orderAId),
         ).rejects.toThrow(ConflictException);
-        expect(ghnClient.createShippingOrder).not.toHaveBeenCalled();
+        expect(ghnClient.createNewAddressOrder).not.toHaveBeenCalled();
       });
 
       it('successfully creates GHN shipping order and transitions status to SHIPPED', async () => {
         const ghnClient = {
-          createShippingOrder: vi.fn().mockResolvedValue({
+          createNewAddressOrder: vi.fn().mockResolvedValue({
             order_code: 'GHN-AUTO-999',
             total_fee: 32000,
             expected_delivery_time: '2026-11-09T18:00:00Z',
@@ -548,8 +556,9 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
             recipientName: 'Nguyen Van A',
             recipientPhone: '0987654321',
             addressLine: '123 Nguyen Hue',
-            wardCode: '20101',
-            districtCode: '1442',
+            addressScheme: 'ghn_v3',
+            wardName: 'Ward',
+            provinceName: 'Hà Nội',
           },
           items: [
             {
@@ -566,15 +575,15 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
           orderAId,
         );
 
-        expect(ghnClient.createShippingOrder).toHaveBeenCalledWith(
+        expect(ghnClient.createNewAddressOrder).toHaveBeenCalledWith(
           expect.objectContaining({
-            to_name: 'Nguyen Van A',
-            to_phone: '0987654321',
-            to_address: '123 Nguyen Hue',
-            to_ward_code: '20101',
-            to_district_id: 1442,
-            weight: 400,
-            client_order_code: orderAId,
+            recipientName: 'Nguyen Van A',
+            recipientPhone: '0987654321',
+            addressLine: '123 Nguyen Hue',
+            wardName: 'Ward',
+            provinceName: 'Hà Nội',
+            weightGrams: 400,
+            clientOrderCode: orderAId,
           }),
         );
 

@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsIn,
   IsNotEmpty,
   IsString,
   Matches,
@@ -7,6 +8,10 @@ import {
 } from 'class-validator';
 
 export class UpdateAddressDto {
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn(['legacy', 'ghn_v3'])
+  addressScheme?: 'legacy' | 'ghn_v3';
+
   @ValidateIf((_, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()

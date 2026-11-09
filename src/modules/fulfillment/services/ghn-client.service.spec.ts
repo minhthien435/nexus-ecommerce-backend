@@ -4,6 +4,21 @@ import { GhnClientService } from './ghn-client.service.js';
 import type { GhnCreateOrderPayload } from '../dtos/ghn-shipping.dto.js';
 
 describe('GhnClientService', () => {
+  it('does not silently create mock tracking when fallback is unset', async () => {
+    const client = new GhnClientService(
+      new ConfigService({ NODE_ENV: 'development' }),
+    );
+    await expect(
+      client.createShippingOrder({
+        to_name: 'Buyer',
+        to_phone: '0901234567',
+        to_address: 'Street',
+        to_ward_code: '123',
+        to_district_id: 1,
+        weight: 100,
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+  });
   let service: GhnClientService;
   let configService: ConfigService;
 
@@ -38,12 +53,8 @@ describe('GhnClientService', () => {
       service = new GhnClientService(configService);
     });
 
-    it('tạo mã vận đơn mock an toàn khi thiếu token', async () => {
-      const result = await service.createShippingOrder(mockPayload);
-      expect(result).toBeDefined();
-      expect(result.order_code).toMatch(/^GHN/);
-      expect(result.total_fee).toBe(32000);
-      expect(result.print_url).toContain(result.order_code);
+    it('does not fabricate a tracking code when configuration is missing', async () => {
+      await expect(service.createShippingOrder(mockPayload)).rejects.toThrow();
     });
 
     it('tạo đúng đường dẫn print URL chứa order code hoặc token', () => {
@@ -55,6 +66,130 @@ describe('GhnClientService', () => {
     it('chấp nhận webhook khi chưa cấu hình secret key trong dev', () => {
       expect(service.verifyWebhook({})).toBe(true);
     });
+  });
+
+  it('previews a two-level address with a configured sender and never creates an order', async () => {
+    const values: Record<string, string> = {
+      GHN_API_TOKEN: 'token',
+      GHN_SHOP_ID: '1',
+      GHN_FROM_NAME: 'Sender',
+      GHN_FROM_PHONE: '0901234567',
+      GHN_FROM_ADDRESS: 'Street',
+      GHN_FROM_PROVINCE_NAME: 'Hà Nội',
+      GHN_FROM_WARD_NAME: 'Ward A',
+    };
+    const client = new GhnClientService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const request = vi
+      .spyOn(client, 'request')
+      .mockResolvedValue({ total_fee: 20900 });
+    await expect(
+      client.previewNewAddress({
+        recipientName: 'Buyer',
+        recipientPhone: '0901234567',
+        addressLine: 'Street 2',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward B',
+        weightGrams: 500,
+        content: 'Áo khoác',
+      }),
+    ).resolves.toMatchObject({ fee: 20900 });
+    expect(request).toHaveBeenCalledWith(
+      'v2/shipping-order/preview',
+      expect.objectContaining({
+        from_province_name: 'Hà Nội',
+        from_ward_name: 'Ward A',
+        to_province_name: 'Hà Nội',
+        to_ward_name: 'Ward B',
+        is_new_to_address: true,
+        is_new_from_address: true,
+        content: 'Áo khoác',
+        weight: 500,
+      }),
+    );
+    request.mockResolvedValueOnce({ order_code: 'GHN123', total_fee: 20900 });
+    vi.spyOn(client, 'getPrintOrderUrl').mockResolvedValue('print-url');
+    await client.createNewAddressOrder({
+      recipientName: 'Buyer',
+      recipientPhone: '0901234567',
+      addressLine: 'Street 2',
+      provinceName: 'Hà Nội',
+      wardName: 'Ward B',
+      weightGrams: 500,
+      content: 'Áo khoác',
+      clientOrderCode: 'order-1',
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      'v2/shipping-order/create',
+      expect.objectContaining({
+        is_new_from_address: true,
+        is_new_to_address: true,
+        content: 'Áo khoác',
+        client_order_code: 'order-1',
+      }),
+    );
+    request.mockRejectedValueOnce(new Error('GHN unavailable'));
+    await expect(
+      client.previewNewAddress({
+        recipientName: 'Buyer',
+        recipientPhone: '0901234567',
+        addressLine: 'Street 2',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward B',
+        weightGrams: 500,
+        content: 'Áo khoác',
+      }),
+    ).rejects.toThrow('GHN unavailable');
+  });
+
+  it('fails before preview when the pickup origin is incomplete', async () => {
+    const client = new GhnClientService({
+      get: () => undefined,
+    } as unknown as ConfigService);
+    const request = vi.spyOn(client, 'request');
+    await expect(
+      client.previewNewAddress({
+        recipientName: 'Buyer',
+        recipientPhone: '0901234567',
+        addressLine: 'Street',
+        provinceName: 'Hà Nội',
+        wardName: 'Ward',
+        weightGrams: 500,
+        content: 'Áo khoác',
+      }),
+    ).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('rejects heavy parcels before requesting a fee or shipment', async () => {
+    const values: Record<string, string> = {
+      GHN_FROM_NAME: 'Sender',
+      GHN_FROM_PHONE: '0901234567',
+      GHN_FROM_ADDRESS: 'Street',
+      GHN_FROM_PROVINCE_NAME: 'Hà Nội',
+      GHN_FROM_WARD_NAME: 'Ward',
+    };
+    const client = new GhnClientService({
+      get: (key: string) => values[key],
+    } as ConfigService);
+    const request = vi.spyOn(client, 'request');
+    const input = {
+      recipientName: 'Buyer',
+      recipientPhone: '0901234567',
+      addressLine: 'Street',
+      provinceName: 'Hà Nội',
+      wardName: 'Ward',
+      weightGrams: 20000,
+      content: 'Áo khoác',
+    };
+    await expect(client.previewNewAddress(input)).rejects.toThrow(
+      'requires item details',
+    );
+    await expect(
+      client.createNewAddressOrder({ ...input, clientOrderCode: 'order-1' }),
+    ).rejects.toThrow('requires item details');
+    expect(request).not.toHaveBeenCalled();
   });
 
   describe('Sandbox API Mode', () => {

@@ -42,9 +42,11 @@ import { AdminShopController } from './admin/admin-shop.controller.js';
 import { AdminShopService } from './admin/admin-shop.service.js';
 import { IdentitySupportLookupApi } from './identity-support-lookup.api.js';
 import { IdentitySupportLookupService } from './identity-support-lookup.service.js';
+import { AddressModule } from './users/addresses/address.module.js';
 
 @Module({
   imports: [
+    AddressModule,
     EmailModule,
     TypeOrmModule.forFeature([
       UserEntity,

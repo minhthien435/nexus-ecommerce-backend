@@ -21,6 +21,16 @@ export class ShippingController {
     return this.locations.provinces();
   }
 
+  @Get('locations/v2/provinces')
+  newProvinces() {
+    return this.locations.newProvinces();
+  }
+
+  @Get('locations/v2/wards')
+  newWards(@Query() query: DistrictsQueryDto) {
+    return this.locations.newWards(query.provinceId);
+  }
+
   @Get('locations/districts')
   districts(@Query() query: DistrictsQueryDto) {
     return this.locations.districts(query.provinceId);

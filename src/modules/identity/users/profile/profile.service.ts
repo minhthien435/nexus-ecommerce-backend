@@ -7,6 +7,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { UpdateProfileDto } from '../dtos/update-profile.dto.js';
 import { ProfileUserEntity } from '../entities/profile-user.entity.js';
+import { UserAddressEntity } from '../entities/user-address.entity.js';
+import { AddressService } from '../addresses/address.service.js';
 
 export type PublicProfile = {
   id: string;
@@ -16,6 +18,7 @@ export type PublicProfile = {
   avatarUrl: string | null;
   roles: string[];
   trustLevel: string;
+  addresses: UserAddressEntity[];
 };
 
 @Injectable()
@@ -24,6 +27,7 @@ export class ProfileService {
     @InjectRepository(ProfileUserEntity)
     private readonly users: Repository<ProfileUserEntity>,
     private readonly dataSource: DataSource,
+    private readonly addresses: AddressService,
   ) {}
 
   async getProfile(userId: string): Promise<PublicProfile> {
@@ -39,7 +43,7 @@ export class ProfileService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    const [roleRows, trustRows] = await Promise.all([
+    const [roleRows, trustRows, addresses] = await Promise.all([
       this.dataSource.query<{ code: string }[]>(
         `SELECT DISTINCT r.code
            FROM identity.user_roles ur
@@ -55,6 +59,7 @@ export class ProfileService {
           LIMIT 1`,
         [userId],
       ),
+      this.addresses.list(userId),
     ]);
 
     return {
@@ -65,6 +70,7 @@ export class ProfileService {
       avatarUrl: user.avatarUrl,
       roles: roleRows.map(({ code }) => code),
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
+      addresses,
     };
   }
 

@@ -1,7 +1,19 @@
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNotEmpty, IsString, Matches } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateIf,
+} from 'class-validator';
 
 export class CreateAddressDto {
+  @IsOptional()
+  @IsIn(['legacy', 'ghn_v3'])
+  addressScheme?: 'legacy' | 'ghn_v3';
+
   @IsString()
   @IsNotEmpty()
   recipientName: string;
@@ -10,9 +22,10 @@ export class CreateAddressDto {
   @IsNotEmpty()
   provinceCode: string;
 
+  @ValidateIf((dto: CreateAddressDto) => dto.addressScheme !== 'ghn_v3')
   @IsString()
   @IsNotEmpty()
-  districtCode: string;
+  districtCode?: string;
 
   @IsString()
   @IsNotEmpty()

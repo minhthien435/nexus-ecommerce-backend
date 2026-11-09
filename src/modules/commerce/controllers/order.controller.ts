@@ -23,6 +23,19 @@ import { OrderService } from '../services/order.service.js';
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
 
+  @Post('shipping-quote')
+  @Permissions('CHECKOUT.START')
+  async shippingQuote(
+    @CurrentUserId() userId: string,
+    @Body() dto: CreateCheckoutDto,
+  ) {
+    return {
+      success: true as const,
+      statusCode: HttpStatus.CREATED,
+      data: await this.orderService.quoteCart(userId, dto),
+    };
+  }
+
   @Post('checkout')
   @Permissions('CHECKOUT.START')
   async checkout(

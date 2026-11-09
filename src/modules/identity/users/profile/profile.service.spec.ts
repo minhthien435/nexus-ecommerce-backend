@@ -30,8 +30,16 @@ function setup() {
       .mockResolvedValueOnce([{ code: 'CUSTOMER' }, { code: 'SELLER' }])
       .mockResolvedValueOnce([{ trust_level: 'TRUSTED' }]),
   };
+  const addresses = {
+    list: vi.fn().mockResolvedValue([{ addressLine: 'Updated street' }]),
+  };
   return {
-    service: new ProfileService(users as never, dataSource as never),
+    service: new ProfileService(
+      users as never,
+      dataSource as never,
+      addresses as never,
+    ),
+    addresses,
     users,
     dataSource,
     builder,
@@ -48,6 +56,7 @@ describe('ProfileService', () => {
       ...user,
       roles: ['CUSTOMER', 'SELLER'],
       trustLevel: 'TRUSTED',
+      addresses: [{ addressLine: 'Updated street' }],
     });
     expect(users.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
