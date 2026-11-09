@@ -38,8 +38,10 @@ describe('ShippingWebhookController', () => {
     vi.mocked(ghnClient.verifyWebhook).mockReturnValue(true);
     vi.mocked(orderService.markOrderAsDeliveredViaCarrier).mockResolvedValue({
       orderId: 'order-123',
+      orderNumber: '#ORD-123',
       status: 'DELIVERED',
       trackingCode: 'GHN123',
+      deliveredAt: new Date(),
       alreadyDelivered: false,
       updatedAt: new Date(),
     });

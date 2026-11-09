@@ -42,6 +42,7 @@ describe('PaymentsService', () => {
     currency: 'VND',
     trackingCode: null,
     carrierName: null,
+    deliveredAt: null,
     shippingAddressSnapshot: { city: 'HCM' },
     holdExpiresAt: new Date(),
     idempotencyKey: null,

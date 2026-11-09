@@ -65,6 +65,7 @@ describe('PaymentWebhookService', () => {
       currency: 'VND',
       trackingCode: null,
       carrierName: null,
+      deliveredAt: null,
       shippingAddressSnapshot: { city: 'HCM' },
       idempotencyKey: null,
       holdExpiresAt: new Date(),
