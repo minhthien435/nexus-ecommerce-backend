@@ -163,11 +163,65 @@ export class GhnClientService {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(5000),
       });
-      const result = (await response.json()) as { code?: number; data?: T };
-      if (!response.ok || result?.code !== 200 || result.data == null)
-        throw new Error('Invalid GHN response');
+
+      let result: {
+        code?: number;
+        code_message_value?: string;
+        message?: string;
+        message_display?: string;
+        data?: T;
+      } | null = null;
+      try {
+        result = (await response.json()) as {
+          code?: number;
+          code_message_value?: string;
+          message?: string;
+          message_display?: string;
+          data?: T;
+        };
+      } catch {
+        result = null;
+      }
+
+      if (
+        !response.ok ||
+        !result ||
+        result.code !== 200 ||
+        result.data == null
+      ) {
+        const ghnMessage =
+          result?.code_message_value ||
+          result?.message_display ||
+          result?.message ||
+          '';
+
+        const isAddressConflict =
+          /address|conflict|location|phường|quận|tỉnh|địa chỉ/i.test(
+            ghnMessage,
+          ) ||
+          (response.status === 400 &&
+            path.includes('shipping-order') &&
+            Boolean(ghnMessage));
+
+        if (isAddressConflict) {
+          throw new BadRequestException({
+            errorCode: 'GHN_ADDRESS_INVALID',
+            message: ghnMessage || 'To address conflict',
+          });
+        }
+
+        throw new Error(ghnMessage || 'Invalid GHN response');
+      }
+
       return result.data;
-    } catch {
+    } catch (err: unknown) {
+      if (
+        err instanceof BadRequestException ||
+        err instanceof ServiceUnavailableException
+      ) {
+        throw err;
+      }
+
       throw new ServiceUnavailableException({
         errorCode: 'GHN_REQUEST_FAILED',
         message: 'GHN is unavailable or rejected the request; please retry',
@@ -342,10 +396,34 @@ export class GhnClientService {
           return this.generateMockOrder(payload);
         }
 
+        const ghnMessage =
+          (
+            data as {
+              code_message_value?: string;
+              message_display?: string;
+              message?: string;
+            }
+          ).code_message_value ||
+          (data as { message_display?: string; message?: string })
+            .message_display ||
+          data.message ||
+          '';
+
+        if (
+          /address|conflict|location|phường|quận|tỉnh|địa chỉ/i.test(
+            ghnMessage,
+          ) ||
+          (response.status === 400 && Boolean(ghnMessage))
+        ) {
+          throw new BadRequestException({
+            errorCode: 'GHN_ADDRESS_INVALID',
+            message: ghnMessage || 'To address conflict',
+          });
+        }
+
         throw new BadRequestException({
           errorCode: 'GHN_CREATE_ORDER_FAILED',
-          message:
-            data.message || 'Không thể tạo đơn vận chuyển với GHN Express',
+          message: ghnMessage || 'Không thể tạo đơn vận chuyển với GHN Express',
         });
       }
 
