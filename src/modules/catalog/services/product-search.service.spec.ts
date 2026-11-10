@@ -317,3 +317,34 @@ describe('ProductSearchService', () => {
     expect(query.mock.calls[0][0]).toContain('shop.deleted_at IS NULL');
   });
 });
+
+it('AI shop filtering runs before pagination and bypasses potentially stale search cache', async () => {
+  const query = vi.fn().mockImplementation(async (sql: string) => {
+    if (sql.includes('COUNT(*)')) return [{ total: '1' }];
+    return [];
+  });
+  const cache = { searchKey: vi.fn(() => 'key'), get: vi.fn(), set: vi.fn() };
+  const service = new ProductSearchService(
+    { query } as unknown as DataSource,
+    cache as unknown as CatalogCacheService,
+  );
+  await service.search(new SearchProductsQueryDto(), { activeShopOnly: true });
+  expect(cache.get).not.toHaveBeenCalled();
+  expect(cache.set).not.toHaveBeenCalled();
+  expect(query).toHaveBeenCalledTimes(3);
+  for (const [sql] of query.mock.calls) {
+    expect(sql).toContain(
+      "ai_shop.status = 'ACTIVE' AND ai_shop.deleted_at IS NULL",
+    );
+    expect(sql).toContain('ai_shop.id = p.shop_id');
+  }
+  const sql = query.mock.calls[0][0];
+  expect(sql.indexOf("ai_shop.status = 'ACTIVE'")).toBeLessThan(
+    sql.indexOf('LIMIT $6 OFFSET $7'),
+  );
+  query.mockClear();
+  cache.get.mockResolvedValue(null);
+  await service.search(new SearchProductsQueryDto());
+  expect(cache.get).toHaveBeenCalled();
+  expect(query.mock.calls[0][0]).not.toContain('ai_shop');
+});

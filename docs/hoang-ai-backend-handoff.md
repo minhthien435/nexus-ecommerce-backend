@@ -1,112 +1,150 @@
-# Hoang AI backend handoff (BE-11 / BE-12 / BE-13)
+# Bàn giao Hoàng — AI backend v2 (BE-11 / BE-12 / BE-13)
 
-## Integration blocker: intentionally not a live endpoint
+## Phạm vi và trạng thái
 
-`AppModule` does **not** import the AI module. Minh must supply real orchestration, authenticated access, session ownership checks and rate limiting before enabling it. This change does not provide a fake working assistant, persistence, analytics, detail tools or order mutation. Khoa owns analytics/detail tools. `HANDOFF_TO_SHOP` is deferred and is not an executable tool here.
+Endpoint `POST /api/v1/ai/chat` đã đăng ký trong AppModule. Mặc định trả **503 AI_UNAVAILABLE**, kể cả đã cấu hình Gemini, cho đến khi Minh thay provider điều phối. Có mẫu JSON chỉ bật rõ trong development/test để FE nối sớm. Mẫu không gọi Gemini/DB, không giả sản phẩm thật.
 
-The opt-in controller is `POST /api/v1/ai/chat`. The existing `TransformInterceptor` wraps its result once as `{ "success": true, "data": ... }`. Invalid input produces 400; denied access 403; sanitized Gemini failures 503. No production Gemini request or recognition-quality evaluation was performed; tests use fakes.
+Hoàng cung cấp Gemini client, DTO/controller, JWT tùy chọn, kiểm tra ảnh, search_products, track_my_order, ui_action và dispatch allowlist. Không sửa Chat của Duy, không làm tool detail/trending/compare/price-insight của Khoa, không làm vòng lặp agent/session/Redis của Minh. AiSampleOrchestrator và AiSampleAccessPolicy là cầu nối tối thiểu để mở endpoint mẫu an toàn, không phải BE-01/02/03 đầy đủ.
 
-## Environment and SDK
+## Mẫu chạy sớm
 
-Set server-only `GEMINI_API_KEY` and `GEMINI_MODEL` locally; there is no default model. Select a model actually enabled for your Google project. Do not put keys in frontend configuration or logs. `.env` is untouched. Image URLs use the existing `SUPABASE_URL` and `SUPABASE_STORAGE_BUCKET`.
-
-Official SDK API checked against [Google Gen AI JavaScript documentation](https://googleapis.github.io/js-genai/release_docs/index.html). The installed `@google/genai` type declarations confirm `generateContent`, `parametersJsonSchema`, abort signals, safety settings and `httpOptions.retryOptions.attempts` (1 disables SDK retries). The client permits at most three total attempts on 429/500/502/503/504, with 200/400 ms delays, under one 15-second deadline. Authentication errors are not retried. It never executes model tools automatically. Runtime requires Node 22+ for the installed SDK.
-
-## Exact integration contract
-
-```ts
-AiAssistantModule.register({
-  // These classes are implemented by Minh, not included in this change.
-  orchestrator: { provide: AiOrchestrator, useClass: MinhAiOrchestrator },
-  accessPolicy: { provide: AiAccessPolicy, useClass: MinhAiAccessPolicy },
-  imports: [MinhSessionModule],
-});
+```dotenv
+NODE_ENV=development
+AI_MOCK_ENABLED=true
+# Khi Minh nối agent thật:
+GEMINI_API_KEY=<khóa riêng trên máy chủ>
+GEMINI_MODEL=<model đang được hỗ trợ và bật trong dự án Google>
+GEMINI_TIMEOUT_MS=15000
 ```
 
-The registration requires both explicit provider tokens. Imported modules must export dependencies used by those classes; additional providers can be passed via `providers`. Existing instances can use `useExisting` with their exporting module in `imports`. There is no default permissive policy. `AiAccessPolicy.canActivate(context)` must authenticate and rate-limit before the controller runs. `AiOrchestrator.chat(input, request)` receives the parsed DTO and the HTTP request so it can bind the session to the authenticated principal. Session IDs and `context.currentUrl` / `context.currentProductSlug` are hints, never authorization or product evidence.
+AI_MOCK_ENABLED=false là mặc định. Chỉ chuỗi `true` cùng NODE_ENV=development hoặc test được mở mẫu; production/staging/không cấu hình trả 503. Thiếu key/model không lỗi khởi tạo module. Không hardcode model chưa kiểm chứng. Timeout số nguyên 1–120000 ms, sai cấu hình dùng 15000. Tối đa 3 lần thử cùng một deadline; lỗi upstream được che. Không gọi Gemini thật khi test.
 
-`AiChatResult` is `{ sessionId, reply, products, action, suggestions }`. `products` are `AiProduct[]`, `action` is one validated action or null, and `suggestions` is a string array. Monetary values remain decimal strings or null; no currency is invented.
+Request mẫu không cần đăng nhập:
 
-Minh must call `GeminiClientService.prepareUserContent(input)` **before** `generate(contents)`: this validates/decodes images and produces text/inlineData parts. `generate` accepts trusted server-built conversation contents, with default declarations `search_products` and `ui_action`; it returns the SDK response, including function calls, for Minh's bounded orchestration loop. Preserve model content/thought signatures when appending tool results. Allowlist tool names and pass each function's unknown arguments to its validator; never execute arbitrary function names or trust free-text URLs/product claims. Build returned product cards from `SearchProductsTool.execute` results. Keep those results in a fresh local variable for each HTTP request and pass only that variable to `UiActionHandler.execute`. Do not retain navigation evidence in a singleton/session or accept it from the model/client. Reject unsupported tools; impose a bounded number of tool rounds. Khoa can supply additional read-only declarations through `generate` when integrated. Minh can pass the trusted BE-03 server prompt as the optional third argument, `generate(contents, declarations, systemInstruction)` (pass `undefined` for declarations to retain the defaults). Omitting it retains the safe catalog prompt. Never derive this argument from HTTP input; the request parser rejects prompt fields at both the top level and inside context. Context `currentUrl` accepts a bounded internal path or absolute HTTP(S) URL without credentials; it is never fetched or used as an action destination. `currentProductSlug` must be a bounded lowercase hyphenated slug and does not establish product evidence.
+```http
+POST /api/v1/ai/chat
+Content-Type: application/json
 
-### Request body limit before registration
-
-The current application has Express's default JSON size limit, too small for 5 MiB images encoded as Base64. When enabling the module, configure a bounded 7 MiB JSON parser before Nest's default parser, preferably scoped to this route; keep the normal smaller limit elsewhere. For example, create the app with `{ bodyParser: false }`, register `express.json({ limit: '7mb' })` on `/api/v1/ai/chat`, then normal JSON/urlencoded parsers for other routes. Ensure the reverse proxy also accepts this bound. The module HTTP test uses Nest's `useBodyParser('json', { limit: '7mb' })` on an isolated test app and checks a body over 100 KB. Application bootstrap remains unchanged until integration.
-
-## API examples
-
-```json
 {
-  "sessionId": "session_123",
-  "message": "Find red shoes",
-  "context": {
-    "currentUrl": "/products/red-shoe",
-    "currentProductSlug": "red-shoe"
-  }
+  "sessionId": "4f9b8c5a-1122-482a-9e58-69ebf4249a11",
+  "message": "Tìm áo polo dưới 200k",
+  "context": { "currentPath": "/products/ao-polo" }
 }
 ```
 
-```json
-{
-  "message": "Find something similar",
-  "imageUrl": "https://YOUR_PROJECT.supabase.co/storage/v1/object/public/YOUR_BUCKET/shoe.png"
-}
-```
-
-```json
-{ "imageBase64": "BASE64_BYTES_ONLY", "imageMimeType": "image/png" }
-```
-
-Omit sessionId on a new session; Minh allocates it. Message max 4,000 characters; session ID max 128 alphanumeric/underscore/hyphen characters. Images may accompany text or stand alone. Supply exactly one image source. Raw, canonical Base64 requires imageMimeType; data URLs are unsupported. JPEG/PNG/WebP only, max 5 MiB decoded, max 16 million pixels, single frame, full successful decode required. Sharp rejects corrupt/truncated images and MIME mismatch.
-
-URL images must be HTTPS on the exact configured Supabase project and public bucket path. Credentials, query strings, fragments, encoded paths, alternative hosts and redirects are rejected. Only public IPv4 resolutions are accepted; the vetted address is pinned to the HTTPS connection to prevent DNS rebinding. Retrieval has a 5-second deadline and streaming 5 MiB cap. IPv6-only/custom-domain/private/signed storage URLs are intentionally unsupported.
-
-```json
-{
-  "name": "search_products",
-  "args": {
-    "query": "red shoes",
-    "categorySlug": "footwear",
-    "minPrice": 10,
-    "maxPrice": 50,
-    "sort": "relevance",
-    "limit": 5
-  }
-}
-```
-
-`query` is required; categorySlug/minPrice/maxPrice/sort/limit are optional. Unknown keys, nonnumeric prices, reversed ranges and limits outside 1–5 are rejected. Active category slugs resolve through the catalog service; missing/inactive categories cannot broaden the search. Search reuses the catalog's active/undeleted product filtering and returns at most five cards, mapping `minimumPrice` → `minPrice`, `primaryImageUrl` → `imageUrl`. Relevance maps to catalog `newest`, whose keyword ranking already precedes its tie-break sort; price sorting also retains catalog keyword relevance precedence.
-
-```json
-{ "name": "ui_action", "args": { "type": "NAVIGATE", "slug": "red-shoe" } }
-```
-
-Navigation requires exact membership in this request's database results and constructs `/products/red-shoe` server-side. `SHOW_PRODUCTS` requires nonempty current results and returns `{ "type": "SHOW_PRODUCTS" }` with cards in top-level products. `OPEN_SEARCH` accepts bounded `searchQuery` and constructs `/search?q=<encoded query>`. URLs are never accepted as arguments. Unknown action types and fields are rejected.
-
-Example wrapped response (illustrative, not a real database result):
+Response mẫu chính xác:
 
 ```json
 {
   "success": true,
+  "statusCode": 200,
+  "message": "OK",
   "data": {
-    "sessionId": "session_123",
-    "reply": "I found this product.",
-    "products": [
-      {
-        "id": "PRODUCT_ID",
-        "slug": "red-shoe",
-        "name": "Red shoe",
-        "minPrice": "12.50",
-        "currency": "USD",
-        "imageUrl": null
-      }
-    ],
-    "action": { "type": "NAVIGATE", "url": "/products/red-shoe" },
-    "suggestions": []
+    "reply": "Đây là dữ liệu mẫu để nối giao diện; trợ lý AI thật chưa được kết nối.",
+    "products": [],
+    "action": null,
+    "suggestions": ["Tìm áo polo dưới 200k"]
   }
 }
 ```
 
-## Verification
+Mẫu không có thẻ sản phẩm để không hiểu nhầm fixture là DB thật. TransformInterceptor giữ nguyên envelope.
 
-Focused tests cover request parsing, actual image decoding, MIME/size rejection, storage address checks, catalog adaptation, request-local navigation, bounded Gemini retry/deadline/error sanitization, and Nest registration/HTTP access/response wrapping with fake contracts. Full repository lint, typecheck, tests and build are recorded in the implementation handoff. Real database, storage and Gemini integration remains for Minh's protected end-to-end assembly; mocks do not prove recognition quality or live credential/model availability.
+Request ảnh (JWT hợp lệ; upload trước bằng MediaModule, folder=ai):
+
+```http
+POST /api/v1/ai/chat
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{
+  "sessionId": "4f9b8c5a-1122-482a-9e58-69ebf4249a11",
+  "message": "",
+  "image": {
+    "url": "https://<project>.supabase.co/storage/v1/object/public/<bucket>/ai/1794-uuid.png",
+    "key": "ai/1794-uuid.png"
+  }
+}
+```
+
+Thay project/bucket/key bằng kết quả upload thật. sessionId là UUID FE tạo, bắt buộc. Message là chuỗi tối đa 1000 ký tự, chỉ rỗng khi có image. Context chỉ nhận currentPath nội bộ, là gợi ý không đáng tin, không phải bằng chứng sản phẩm. Không nhận imageUrl, Base64, imageMimeType hoặc identity trong body.
+
+Ảnh: URL bằng chính xác storagePrefix + key; file trực tiếp trong ai/, đuôi jpg/jpeg/png/webp. HTTPS đúng Supabase project/bucket cấu hình; cấm query/hash/credentials/encoded traversal/redirect. DNS chỉ public IPv4, ghim vào TLS. Tải tối đa 5 MiB trong 5 giây; MIME đúng bytes, decode đầy đủ, tối đa 16 triệu pixel và 1 frame. Không tăng JSON body limit. Chưa nhận GIF, IPv6-only, custom domain hoặc signed URL.
+
+## Mã lỗi
+
+| HTTP | errorCode               | Trường hợp                                                          |
+| ---- | ----------------------- | ------------------------------------------------------------------- |
+| 400  | AI_MESSAGE_INVALID      | Sai UUID/message/context/field không được phép                      |
+| 400  | AI_IMAGE_INVALID        | Hợp đồng ảnh cũ, URL/key/bytes không hợp lệ                         |
+| 401  | AI_IMAGE_LOGIN_REQUIRED | Guest gửi ảnh đúng hình dạng                                        |
+| 401  | UNAUTHORIZED            | Có Authorization nhưng token sai/hết hạn/user khóa/tokenVersion sai |
+| 401  | AI_ORDER_LOGIN_REQUIRED | Tool tra đơn không có principal đã xác minh                         |
+| 429  | AI_RATE_LIMITED         | Vượt giới hạn mẫu; data.retryAfterSeconds và header Retry-After     |
+| 503  | AI_UNAVAILABLE          | Agent chưa nối, mock bị cấm, thiếu key/model hoặc Gemini lỗi        |
+
+503 có lời nhắn “Xin lỗi, trợ lý đang tạm bận. Bạn vui lòng thử lại hoặc mở trang tìm kiếm.” Envelope lỗi chung thêm timestamp/path. JWT dùng lại AccessTokenGuard của Identity, kiểm tra user ACTIVE/undeleted và tokenVersion. Không có Authorization là guest; token sai bị từ chối.
+
+Bảo vệ mẫu: cửa sổ 60 giây, 10 lượt/IP guest hoặc 20 lượt/user, map tối đa 10000 khóa, đầy thì từ chối. Giới hạn cục bộ từng tiến trình, không phải bảo vệ phân tán. AI_RATE_LIMIT_GUEST/USER trong .env.example dành cho Minh; bridge hiện cố định 10/20. Không đọc X-Forwarded-For trực tiếp; proxy cần cấu hình trust proxy đúng trước khi dựa request.ip.
+
+## Tool và dữ liệu
+
+search_products dùng lại ProductSearchService/CategoryService, tối đa 5 candidate. SQL bổ sung có tham số, kiểm tra lại product/shop ACTIVE, undeleted trong DB dù catalog cache cũ. Shop lấy identity.shops, ảnh product_images, giá/originalPrice đúng SKU catalog đã chọn. Decimal là string, originalPrice nullable, không trả id/currency. unitsSold cộng order_items một lần cho đơn PAID/PROCESSING/SHIPPED/DELIVERED/COMPLETED, không nhân theo SKU. Đây là làm giàu thẻ search, không phải trending của Khoa. Candidate không có SKU/shop phù hợp bị loại; không tự tìm thêm trang nên có thể trả ít hơn limit.
+
+Ví dụ hình dạng thẻ, chỉ minh họa:
+
+```json
+{
+  "slug": "ao-polo",
+  "name": "Áo polo",
+  "imageUrl": null,
+  "minPrice": "180000.00",
+  "originalPrice": null,
+  "unitsSold": 2,
+  "shop": { "name": "Shop mẫu", "slug": "shop-mau" }
+}
+```
+
+track_my_order({orderNumber}, verifiedUserId) chỉ nhận orderNumber từ model. SQL luôn có `order_number = $1 AND buyer_id = $2::uuid`. Kết quả `{status, trackingCode}` hoặc null; trackingCode chỉ khi carrier_name = GHN, không phân biệt hoa/thường. Không lộ địa chỉ/tổng tiền/ID. Đơn không tồn tại và đơn người khác đều null.
+
+UiActionHandler.execute(args, currentProducts, actualUserMessage):
+
+- SHOW_PRODUCTS cần sản phẩm hiện tại.
+- NAVIGATE cần slug hiện tại và câu người dùng trực tiếp yêu cầu mở/dẫn tới sản phẩm. Model không thể cấp consent. Nhận diện bảo thủ, câu mơ hồ trả null.
+- OPEN_SEARCH dựng /search?q= bằng encodeURIComponent.
+- HANDOFF_TO_SHOP cần shopSlug/productSlug (hoặc slug sản phẩm) khớp cùng thẻ hiện tại.
+- Field thừa, slug/shop lạ, action sai đều null, không ném lỗi HTTP.
+
+## Điểm nối Minh/Khoa
+
+Thay đăng ký mặc định trong AppModule, không import module AI thứ hai có controller trùng:
+
+```ts
+AiAssistantModule.register({
+  orchestrator: { provide: AiOrchestrator, useClass: MinhAiOrchestrator },
+  accessPolicy: { provide: AiAccessPolicy, useClass: MinhAiAccessPolicy },
+  imports: [MinhSessionModule],
+  providers: [/* dependency server cần thiết */],
+});
+```
+
+AiOptionalAuthGuard chạy trước policy Minh. Policy quản lý quota/session ownership bằng request.user đã xác minh. AiOrchestrator.chat(input,request) trả `{reply, products, action, suggestions}`, products 0–5, suggestions 0–3, reply không link. Controller bọc envelope v2 và kiểm tra ảnh kể cả mẫu.
+
+GeminiClientService.prepareUserContent(input) tạo user content với bytes đã decode trước generate. Controller hiện kiểm tra ảnh độc lập nên helper này sẽ tải/kiểm tra lại khi agent dùng; Minh có thể nối cache nội bộ theo request sau, tuyệt đối không lấy bytes “đã xác minh” từ client. `generate(contents, declarations?, trustedSystemPrompt?)` chỉ nhận prompt server (BE-03), không input. Declarations mặc định search_products, track_my_order, ui_action; không tự chạy function calls.
+
+ToolExecutorService.execute(name,args,turn): Minh tạo turn mới mỗi request:
+
+```ts
+{ verifiedUserId: request.user?.id, userMessage: input.message, products: [] }
+```
+
+Không lấy identity từ model/sessionId/body. Search/đọc tool cập nhật evidence mới; ui_action chỉ đọc turn hiện tại. Câu “mở sản phẩm đầu tiên” tham chiếu lịch sử/currentPath phải gọi tool revalidate trong lượt này trước action, không seed products từ lịch sử/context.
+
+Khoa nối provider abstract AiReadTools: execute(name,args) trả `{result, products}` đã kiểm tra ACTIVE/undeleted trong DB. Allowlist chỉ get_product_detail/get_trending_products/compare_products/get_price_insight; chưa có provider trả 503. Khoa sở hữu validators, SQL/cache và declarations. Minh sở hữu vòng lặp hữu hạn, session 6 lượt/TTL 30 phút, prompt tiếng Việt, chống prompt injection và lọc response cuối. Chưa hoàn thành end-to-end thật khi các phần này chưa nối.
+
+## Kiểm chứng và giới hạn
+
+48 focused tests đã qua: DTO/auth, storage URL/key, DNS/redirect/byte/decode/MIME/deadline, own/other order, điều kiện shop ACTIVE, action null/consent/evidence, timeout config, thiếu key vẫn tạo module, HTTP envelope, rate limit mẫu và production fail-closed. Dùng DB/Gemini/storage giả; không gọi Gemini thật, không đọc/sửa .env bí mật.
+
+Kết quả toàn bộ npm run validate ghi trong báo cáo bàn giao. Chưa kiểm thử PostgreSQL/storage/Gemini thật, chất lượng nhận diện, session hoặc agent loop. Kiểm tra query bằng mock không thay integration DB. Không tuyên bố hoàn tất AI end-to-end.
+Kết quả `npm run validate`: **PASS** — lint, typecheck, 140 test files / 1139 tests, build. Focused AI: 48/48. Lần chạy đầu bị chặn thao tác cache tạm trước khi load test; chạy lại với quyền truy cập file tạm bình thường đã qua. Không có lỗi kiểm thử còn mở.

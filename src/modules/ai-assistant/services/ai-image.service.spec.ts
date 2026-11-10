@@ -9,7 +9,8 @@ vi.mock('node:dns/promises', () => ({ lookup: mocks.lookup }));
 vi.mock('node:https', () => ({ request: mocks.request }));
 import { AiImageService } from './ai-image.service.js';
 
-const url = 'https://project.supabase.co/storage/v1/object/public/media/a.png';
+const url =
+  'https://project.supabase.co/storage/v1/object/public/media/ai/a.png';
 const config = new ConfigService({
   SUPABASE_URL: 'https://project.supabase.co',
   SUPABASE_STORAGE_BUCKET: 'media',
@@ -53,7 +54,13 @@ it('downloads approved storage bytes with pinned public DNS and preserves MIME',
     .png()
     .toBuffer();
   response(200, [png]);
-  expect(await new AiImageService(config).prepare({ imageUrl: url })).toEqual({
+  expect(
+    await new AiImageService(config).prepare({
+      sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+      message: '',
+      image: { url, key: 'ai/a.png' },
+    }),
+  ).toEqual({
     mimeType: 'image/png',
     data: png.toString('base64'),
   });
@@ -69,7 +76,11 @@ it('rejects mixed DNS answers before opening a socket', async () => {
     { address: '127.0.0.1', family: 4 },
   ]);
   await expect(
-    new AiImageService(config).prepare({ imageUrl: url }),
+    new AiImageService(config).prepare({
+      sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+      message: '',
+      image: { url, key: 'ai/a.png' },
+    }),
   ).rejects.toThrow();
   expect(mocks.request).not.toHaveBeenCalled();
 });
@@ -80,7 +91,11 @@ it.each([301, 302, 307, 308])('never follows redirect %s', async (status) => {
     location: 'http://127.0.0.1/secret',
   });
   await expect(
-    new AiImageService(config).prepare({ imageUrl: url }),
+    new AiImageService(config).prepare({
+      sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+      message: '',
+      image: { url, key: 'ai/a.png' },
+    }),
   ).rejects.toThrow();
   expect(stream.destroy).toHaveBeenCalled();
   expect(mocks.request).toHaveBeenCalledTimes(1);
@@ -92,7 +107,11 @@ it('enforces the streamed byte cap even without content-length', async () => {
     Buffer.alloc(1),
   ]);
   await expect(
-    new AiImageService(config).prepare({ imageUrl: url }),
+    new AiImageService(config).prepare({
+      sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+      message: '',
+      image: { url, key: 'ai/a.png' },
+    }),
   ).rejects.toThrow();
   expect(stream.destroy).toHaveBeenCalled();
 });
@@ -103,7 +122,11 @@ it('rejects a declared oversized or unsupported response before buffering', asyn
     'content-length': String(MAX_IMAGE_BYTES + 1),
   });
   await expect(
-    new AiImageService(config).prepare({ imageUrl: url }),
+    new AiImageService(config).prepare({
+      sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+      message: '',
+      image: { url, key: 'ai/a.png' },
+    }),
   ).rejects.toThrow();
   expect(stream.destroy).toHaveBeenCalled();
 });
@@ -111,9 +134,35 @@ it('rejects a declared oversized or unsupported response before buffering', asyn
 it('bounds stalled DNS to five seconds', async () => {
   vi.useFakeTimers();
   mocks.lookup.mockImplementation(() => new Promise(() => {}));
-  const pending = new AiImageService(config).prepare({ imageUrl: url });
+  const pending = new AiImageService(config).prepare({
+    sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+    message: '',
+    image: { url, key: 'ai/a.png' },
+  });
   const assertion = expect(pending).rejects.toThrow('Invalid image');
   await vi.advanceTimersByTimeAsync(5000);
   await assertion;
   expect(mocks.request).not.toHaveBeenCalled();
+});
+
+it('rejects corrupt bytes, false MIME and truncated actual images', async () => {
+  const png = await sharp({
+    create: { width: 2, height: 2, channels: 3, background: 'red' },
+  })
+    .png()
+    .toBuffer();
+  for (const [bytes, mime] of [
+    [Buffer.from('junk'), 'image/png'],
+    [png, 'image/jpeg'],
+    [png.subarray(0, 30), 'image/png'],
+  ] as const) {
+    response(200, [bytes], { 'content-type': mime });
+    await expect(
+      new AiImageService(config).prepare({
+        sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+        message: '',
+        image: { url, key: 'ai/a.png' },
+      }),
+    ).rejects.toThrow();
+  }
 });

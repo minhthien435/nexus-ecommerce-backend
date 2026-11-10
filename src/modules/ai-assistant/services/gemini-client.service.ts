@@ -1,8 +1,6 @@
-import {
-  Inject,
-  Injectable,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { aiUnavailable } from '../ai-errors.js';
+import { TRACK_MY_ORDER_DECLARATION } from '../tools/track-my-order.tool.js';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   GoogleGenAI,
@@ -33,11 +31,13 @@ export class GoogleGeminiTransport extends GeminiTransport {
     request: GenerateContentParameters,
   ): Promise<GenerateContentResponse> {
     const key = this.config.get<string>('GEMINI_API_KEY')?.trim();
-    if (!key)
-      throw new ServiceUnavailableException('AI service is not configured');
+    if (!key) throw aiUnavailable();
     return new GoogleGenAI({
       apiKey: key,
-      httpOptions: { timeout: 15000, retryOptions: { attempts: 1 } },
+      httpOptions: {
+        timeout: geminiTimeout(this.config),
+        retryOptions: { attempts: 1 },
+      },
     }).models.generateContent(request);
   }
 }
@@ -68,19 +68,20 @@ export class GeminiClientService {
     declarations: FunctionDeclaration[] = [
       SEARCH_PRODUCTS_DECLARATION,
       UI_ACTION_DECLARATION,
+      TRACK_MY_ORDER_DECLARATION,
     ],
     systemInstruction?: string,
   ): Promise<GenerateContentResponse> {
     const model = this.config.get<string>('GEMINI_MODEL')?.trim();
-    if (!model)
-      throw new ServiceUnavailableException('AI service is not configured');
+    if (!model || !this.config.get<string>('GEMINI_API_KEY')?.trim())
+      throw aiUnavailable();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort();
         reject(new Error('deadline'));
-      }, 15000);
+      }, geminiTimeout(this.config));
     });
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -91,7 +92,10 @@ export class GeminiClientService {
               contents,
               config: {
                 abortSignal: controller.signal,
-                httpOptions: { timeout: 15000, retryOptions: { attempts: 1 } },
+                httpOptions: {
+                  timeout: geminiTimeout(this.config),
+                  retryOptions: { attempts: 1 },
+                },
                 tools: [{ functionDeclarations: declarations }],
                 maxOutputTokens: 2048,
                 systemInstruction:
@@ -130,11 +134,16 @@ export class GeminiClientService {
       throw new Error();
     } catch {
       // No upstream message, payload or credential can escape through this boundary.
-      throw new ServiceUnavailableException(
-        'AI service is temporarily unavailable',
-      );
+      throw aiUnavailable();
     } finally {
       clearTimeout(timer);
     }
   }
+}
+
+export function geminiTimeout(config: ConfigService): number {
+  const value = Number(config.get('GEMINI_TIMEOUT_MS') ?? 15000);
+  return Number.isInteger(value) && value >= 1 && value <= 120000
+    ? value
+    : 15000;
 }

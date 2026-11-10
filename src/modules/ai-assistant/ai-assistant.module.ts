@@ -1,3 +1,11 @@
+import { IdentityModule } from '../identity/identity.module.js';
+import {
+  AiOptionalAuthGuard,
+  AiSampleAccessPolicy,
+} from './services/ai-http-access.guard.js';
+import { AiSampleOrchestrator } from './services/ai-sample-orchestrator.js';
+import { TrackMyOrderTool } from './tools/track-my-order.tool.js';
+import { ToolExecutorService } from './tools/tool-executor.service.js';
 import {
   Module,
   type DynamicModule,
@@ -24,10 +32,15 @@ export interface AiAssistantRegistration {
   providers?: Provider[];
 }
 
-/** Deliberately absent from AppModule until Minh's orchestration and protection are ready. */
+/** Default registration exposes only the protected opt-in sample or 503. */
 @Module({})
 export class AiAssistantModule {
-  static register(options: AiAssistantRegistration): DynamicModule {
+  static register(
+    options: AiAssistantRegistration = {
+      orchestrator: { provide: AiOrchestrator, useClass: AiSampleOrchestrator },
+      accessPolicy: { provide: AiAccessPolicy, useClass: AiSampleAccessPolicy },
+    },
+  ): DynamicModule {
     for (const [provider, token] of [
       [options.orchestrator, AiOrchestrator],
       [options.accessPolicy, AiAccessPolicy],
@@ -44,9 +57,17 @@ export class AiAssistantModule {
     }
     return {
       module: AiAssistantModule,
-      imports: [ConfigModule, CatalogModule, ...(options.imports ?? [])],
+      imports: [
+        ConfigModule,
+        CatalogModule,
+        IdentityModule,
+        ...(options.imports ?? []),
+      ],
       controllers: [AiAssistantController],
       providers: [
+        AiOptionalAuthGuard,
+        TrackMyOrderTool,
+        ToolExecutorService,
         AiImageService,
         GeminiClientService,
         { provide: GeminiTransport, useClass: GoogleGeminiTransport },
@@ -57,6 +78,8 @@ export class AiAssistantModule {
         options.accessPolicy,
       ],
       exports: [
+        ToolExecutorService,
+        TrackMyOrderTool,
         GeminiClientService,
         AiImageService,
         SearchProductsTool,

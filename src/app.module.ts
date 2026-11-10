@@ -1,3 +1,4 @@
+import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -39,6 +40,7 @@ import { ChatModule } from './modules/chat/chat.module.js';
     IntegrationsModule,
     MediaModule,
     ChatModule,
+    AiAssistantModule.register(),
   ],
   controllers: [AppController],
   providers: [
