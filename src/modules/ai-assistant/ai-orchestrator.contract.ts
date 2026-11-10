@@ -9,7 +9,6 @@ import type { AiProduct } from './tools/search-products.tool.js';
 import type { UiAction } from './tools/ui-action.handler.js';
 
 export type AiChatResult = {
-  sessionId: string;
   reply: string;
   products: AiProduct[];
   action: UiAction | null;
@@ -18,7 +17,9 @@ export type AiChatResult = {
 
 /** Minh supplies authenticated identity, rate limiting and session ownership enforcement. */
 export abstract class AiAccessPolicy implements CanActivate {
-  abstract canActivate: CanActivate['canActivate'];
+  abstract canActivate(
+    context: ExecutionContext,
+  ): ReturnType<CanActivate['canActivate']>;
 }
 
 export abstract class AiOrchestrator {

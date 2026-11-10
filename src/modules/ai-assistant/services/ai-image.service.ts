@@ -42,22 +42,11 @@ export class AiImageService {
 
   async prepare(value: AiChatDto): Promise<ValidatedImage | undefined> {
     const dto = parseAiChat(value);
-    if (!dto.imageUrl && !dto.imageBase64) return undefined;
+    if (!dto.image) return undefined;
     try {
-      let bytes: Buffer;
-      let mime: string;
-      if (dto.imageBase64) {
-        const encoded = dto.imageBase64;
-        if (encoded.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(encoded))
-          throw new Error();
-        bytes = Buffer.from(encoded, 'base64');
-        // Round-trip enforces canonical padding without recursive regex groups
-        // that can exhaust the regex engine stack on valid multi-megabyte input.
-        if (bytes.toString('base64') !== encoded) throw new Error();
-        mime = dto.imageMimeType!;
-      } else {
-        ({ bytes, mime } = await this.download(this.storageUrl(dto.imageUrl!)));
-      }
+      const { bytes, mime } = await this.download(
+        this.storageUrl(dto.image.url, dto.image.key),
+      );
       if (
         !bytes.length ||
         bytes.length > MAX_IMAGE_BYTES ||
@@ -76,17 +65,21 @@ export class AiImageService {
       await decoder.raw().toBuffer();
       return { mimeType: mime as ImageMime, data: bytes.toString('base64') };
     } catch {
-      throw new BadRequestException(
-        'Invalid image or unavailable approved storage image',
-      );
+      throw new BadRequestException({
+        errorCode: 'AI_IMAGE_INVALID',
+        message:
+          'Invalid image: ảnh không hợp lệ hoặc không tải được từ kho Nexus.',
+      });
     }
   }
 
-  private storageUrl(input: string): URL {
+  private storageUrl(input: string, key: string): URL {
     const url = new URL(input);
     const origin = new URL(this.config.get<string>('SUPABASE_URL') ?? '');
     const bucket = this.config.get<string>('SUPABASE_STORAGE_BUCKET') ?? '';
     if (
+      !/^ai\/[a-zA-Z0-9_-]+\.(?:jpg|jpeg|png|webp)$/.test(key) ||
+      input !== `${origin.origin}/storage/v1/object/public/${bucket}/${key}` ||
       !/^[a-zA-Z0-9_-]+$/.test(bucket) ||
       origin.protocol !== 'https:' ||
       !/^[a-z0-9-]+\.supabase\.co$/.test(origin.hostname) ||

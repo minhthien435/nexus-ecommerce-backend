@@ -1,3 +1,4 @@
+import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -37,6 +38,7 @@ import { createBullMqOptions } from './config/bullmq.config.js';
     AuctionModule,
     IntegrationsModule,
     MediaModule,
+    AiAssistantModule.register(),
   ],
   controllers: [AppController],
   providers: [
