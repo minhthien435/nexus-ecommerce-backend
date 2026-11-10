@@ -11,7 +11,7 @@ export class AiChatDto {
   imageUrl?: string;
   imageBase64?: string;
   imageMimeType?: ImageMime;
-  context?: { currentPath?: string };
+  context?: { currentUrl?: string; currentProductSlug?: string };
 }
 
 export function strictObject(
@@ -70,11 +70,40 @@ export function parseAiChat(value: unknown): AiChatDto {
   if (!dto.message && !dto.imageUrl && !dto.imageBase64)
     throw new BadRequestException('Provide a message or image');
   if (input.context !== undefined) {
-    const context = strictObject(input.context, ['currentPath']);
-    const currentPath = optionalText(context.currentPath, 512);
-    if (currentPath && !/^\/(?!\/)[a-zA-Z0-9/_-]*$/.test(currentPath))
-      throw new BadRequestException('Invalid context path');
-    dto.context = { currentPath };
+    const context = strictObject(input.context, [
+      'currentUrl',
+      'currentProductSlug',
+    ]);
+    const currentUrl = optionalText(context.currentUrl, 2048);
+    if (currentUrl) {
+      try {
+        if (
+          [...currentUrl].some(
+            (character) => character.charCodeAt(0) <= 32 || character === '\\',
+          ) ||
+          currentUrl.startsWith('//')
+        )
+          throw new Error();
+        const url = currentUrl.startsWith('/')
+          ? new URL(currentUrl, 'https://context.invalid')
+          : new URL(currentUrl);
+        if (
+          !['http:', 'https:'].includes(url.protocol) ||
+          url.username ||
+          url.password
+        )
+          throw new Error();
+      } catch {
+        throw new BadRequestException('Invalid context URL');
+      }
+    }
+    const currentProductSlug = optionalText(context.currentProductSlug, 200);
+    if (
+      currentProductSlug &&
+      !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(currentProductSlug)
+    )
+      throw new BadRequestException('Invalid context product slug');
+    dto.context = { currentUrl, currentProductSlug };
   }
   return dto;
 }
