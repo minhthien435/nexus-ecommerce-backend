@@ -113,4 +113,27 @@ describe('AuctionController', () => {
       NotFoundException,
     );
   });
+
+  it('creates an auction and places a bid through the authenticated routes', async () => {
+    const created = { id: 'auction-1' };
+    const bidResult = { bid: { id: 'bid-1' }, minNextBid: 120 };
+    const mockService = {
+      create: vi.fn().mockResolvedValue(created),
+      placeBid: vi.fn().mockResolvedValue(bidResult),
+    } as unknown as AuctionService;
+    const controller = new AuctionController(mockService);
+    const createDto = { skuId: 'sku-1' };
+
+    await expect(
+      controller.create(createDto as never, 'seller-1'),
+    ).resolves.toMatchObject({ statusCode: HttpStatus.CREATED, data: created });
+    await expect(
+      controller.placeBid('AUC-1', { amount: 110 }, 'buyer-1'),
+    ).resolves.toMatchObject({
+      statusCode: HttpStatus.CREATED,
+      data: bidResult,
+    });
+    expect(mockService.create).toHaveBeenCalledWith(createDto, 'seller-1');
+    expect(mockService.placeBid).toHaveBeenCalledWith('AUC-1', 'buyer-1', 110);
+  });
 });

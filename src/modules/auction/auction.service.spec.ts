@@ -1,9 +1,25 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { In } from 'typeorm';
 import { AuctionService } from './auction.service.js';
 import type { AuctionEntity } from './entities/auction.entity.js';
 
 describe('AuctionService', () => {
+  const bidReadRepository = (rows: unknown[] = [], bids: unknown[] = []) => ({
+    createQueryBuilder: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      addSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      groupBy: vi.fn().mockReturnThis(),
+      getRawMany: vi.fn().mockResolvedValue(rows),
+    }),
+    find: vi.fn().mockResolvedValue(bids),
+  });
   it('calculates demo prices using the approved ratios', () => {
     const service = new AuctionService(
       {} as never,
@@ -17,6 +33,35 @@ describe('AuctionService', () => {
       bidIncrement: '20.00',
     });
     expect(() => service.calculateDemoPrices(-1)).toThrow(BadRequestException);
+  });
+
+  it('keeps zero/empty bid projections for an auction without bids', () => {
+    const service = new AuctionService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const auction = {
+      id: 'auction-1',
+      sellerId: 'seller-1',
+      titleSnapshot: 'Product',
+      startPrice: '100.00',
+      currentPrice: '100.00',
+      bidIncrement: '10.00',
+      bidCount: 0,
+      highestBidderId: null,
+      startsAt: new Date(Date.now() - 1000),
+      endsAt: new Date(Date.now() + 60000),
+      status: 'ACTIVE',
+    } as AuctionEntity;
+
+    expect(service.toView(auction)).toMatchObject({
+      bidCount: 0,
+      bidderCount: 0,
+      highestBidderMasked: null,
+    });
+    expect(service.toDetailView(auction).recentBids).toEqual([]);
   });
 
   it('skips a SKU that already has an open auction', async () => {
@@ -85,6 +130,8 @@ describe('AuctionService', () => {
       reservePrice: '1200000.00',
       bidIncrement: '50000.00',
       currentPrice: '1500000.00',
+      highestBidderId: '00000000-0000-0000-0000-000000001234',
+      bidCount: 3,
       currency: 'VND',
       startsAt: new Date(Date.now() - 3600000),
       endsAt: new Date(Date.now() + 3600000),
@@ -121,8 +168,28 @@ describe('AuctionService', () => {
         where: vi.fn().mockReturnThis(),
         getOne: vi.fn().mockResolvedValue(mockAuction),
       };
+      const bidRepository = bidReadRepository(
+        [
+          {
+            auctionId: mockAuction.id,
+            bidCount: '3',
+            bidderCount: '2',
+          },
+        ],
+        [
+          {
+            id: 'bid-3',
+            bidderId: '00000000-0000-0000-0000-000000001234',
+            amount: '1500000.00',
+            placedAt: new Date('2026-11-10T00:00:00Z'),
+          },
+        ],
+      );
       const auctions = {
         createQueryBuilder: vi.fn().mockReturnValue(qb),
+        manager: {
+          getRepository: vi.fn().mockReturnValue(bidRepository),
+        },
       };
       const products = {
         findOne: vi.fn().mockResolvedValue(mockProduct),
@@ -156,6 +223,30 @@ describe('AuctionService', () => {
       expect(result.currentPrice).toBe(1500000);
       expect(result.bidStep).toBe(50000);
       expect(result.minNextBid).toBe(1550000);
+      expect(result.bidCount).toBe(3);
+      expect(result.bidderCount).toBe(2);
+      expect(result.highestBidderMasked).toBe('***1234');
+      const summaryQb = bidRepository.createQueryBuilder.mock.results[0]?.value;
+      expect(summaryQb.andWhere).toHaveBeenCalledWith(
+        'bid.status IN (:...acceptedStatuses)',
+        { acceptedStatuses: ['WINNING', 'OUTBID'] },
+      );
+      expect(bidRepository.find).toHaveBeenCalledWith({
+        where: {
+          auctionId: mockAuction.id,
+          status: In(['WINNING', 'OUTBID']),
+        },
+        order: { placedAt: 'DESC' },
+        take: 10,
+      });
+      expect(result.recentBids).toEqual([
+        {
+          id: 'bid-3',
+          bidderMaskedName: '***1234',
+          amount: 1500000,
+          bidTime: '2026-11-10T00:00:00.000Z',
+        },
+      ]);
       expect(result.images).toEqual([
         'https://example.com/img1.jpg',
         'https://example.com/img2.jpg',
@@ -175,6 +266,9 @@ describe('AuctionService', () => {
       };
       const auctions = {
         createQueryBuilder: vi.fn().mockReturnValue(qb),
+        manager: {
+          getRepository: vi.fn().mockReturnValue(bidReadRepository()),
+        },
       };
       const products = {
         findOne: vi.fn().mockResolvedValue(mockProduct),
@@ -246,6 +340,15 @@ describe('AuctionService', () => {
       };
       const auctions = {
         createQueryBuilder: vi.fn().mockReturnValue(qb),
+        manager: {
+          getRepository: vi
+            .fn()
+            .mockReturnValue(
+              bidReadRepository([
+                { auctionId: 'auc-uuid-1', bidCount: '3', bidderCount: '2' },
+              ]),
+            ),
+        },
       };
       const products = {
         find: vi.fn().mockResolvedValue([
@@ -291,6 +394,284 @@ describe('AuctionService', () => {
       expect(result.items).toHaveLength(1);
       expect(result.items[0]?.id).toBe('AUC-1');
       expect(result.items[0]?.seller.trustLevel).toBe('TOP_SELLER');
+      expect(result.items[0]?.bidCount).toBe(3);
+      expect(result.items[0]?.bidderCount).toBe(2);
+    });
+  });
+
+  describe('create', () => {
+    it('creates an auction for an owned active eligible SKU', async () => {
+      const auctions = {
+        findOne: vi.fn().mockResolvedValue(null),
+        create: vi.fn((value) => value),
+        save: vi.fn(async (value) => ({ id: 'auction-1', ...value })),
+      };
+      const products = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'product-1',
+          sellerId: 'seller-1',
+          name: 'Product',
+          status: 'ACTIVE',
+          isAuctionEligible: true,
+          deletedAt: null,
+        }),
+      };
+      const skus = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          productId: 'product-1',
+          currency: 'VND',
+        }),
+      };
+      const service = new AuctionService(
+        auctions as never,
+        products as never,
+        skus as never,
+        {} as never,
+      );
+      const result = await service.create(
+        {
+          skuId: 'sku-1',
+          startPrice: 100,
+          reservePrice: 120,
+          bidIncrement: 10,
+          startsAt: new Date(Date.now() + 1000).toISOString(),
+          endsAt: new Date(Date.now() + 3600000).toISOString(),
+        },
+        'seller-1',
+      );
+      expect(result).toMatchObject({
+        id: 'auction-1',
+        sellerId: 'seller-1',
+        currentPrice: '100.00',
+        bidCount: 0,
+      });
+    });
+
+    it('rejects an unowned SKU without creating an auction', async () => {
+      const auctions = { findOne: vi.fn(), save: vi.fn() };
+      const products = { findOne: vi.fn().mockResolvedValue(null) };
+      const skus = {
+        findOne: vi
+          .fn()
+          .mockResolvedValue({ id: 'sku-1', productId: 'product-1' }),
+      };
+      const service = new AuctionService(
+        auctions as never,
+        products as never,
+        skus as never,
+        {} as never,
+      );
+
+      await expect(
+        service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() + 1000).toISOString(),
+            endsAt: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'other-seller',
+        ),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { errorCode: 'AUCTION_SKU_NOT_OWNED_OR_INELIGIBLE' },
+      });
+      expect(auctions.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a duplicate open auction for the SKU', async () => {
+      const auctions = {
+        findOne: vi.fn().mockResolvedValue({ id: 'existing' }),
+        save: vi.fn(),
+      };
+      const products = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'product-1',
+          sellerId: 'seller-1',
+          name: 'Product',
+          status: 'ACTIVE',
+          isAuctionEligible: true,
+          deletedAt: null,
+        }),
+      };
+      const skus = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          productId: 'product-1',
+        }),
+      };
+      const service = new AuctionService(
+        auctions as never,
+        products as never,
+        skus as never,
+        {} as never,
+      );
+
+      await expect(
+        service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() + 1000).toISOString(),
+            endsAt: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'seller-1',
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'AUCTION_ALREADY_OPEN' },
+      });
+      expect(auctions.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('placeBid', () => {
+    const activeAuction = () => ({
+      id: 'auction-1',
+      code: 'AUC-1',
+      sellerId: 'seller-1',
+      currentPrice: '100.00',
+      bidIncrement: '10.00',
+      bidCount: 1,
+      highestBidId: 'old-bid',
+      startsAt: new Date(Date.now() - 1000),
+      endsAt: new Date(Date.now() + 60000),
+      status: 'ACTIVE',
+    });
+
+    function biddingService(auction = activeAuction()) {
+      const auctionQb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auction),
+      };
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue(auctionQb),
+        save: vi.fn().mockResolvedValue(auction),
+      };
+      const bidRepo = {
+        update: vi.fn().mockResolvedValue({ affected: 1 }),
+        create: vi.fn((value) => value),
+        save: vi.fn(async (value) => ({
+          id: 'new-bid',
+          placedAt: new Date(),
+          ...value,
+        })),
+      };
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(auctionRepo)
+          .mockReturnValueOnce(bidRepo),
+      };
+      const auctions = {
+        manager: {
+          transaction: vi.fn(async (callback) => callback(manager)),
+        },
+      };
+      return {
+        service: new AuctionService(
+          auctions as never,
+          {} as never,
+          {} as never,
+          {} as never,
+        ),
+        auctionRepo,
+        bidRepo,
+      };
+    }
+
+    it('atomically outbids the previous winner and updates counters', async () => {
+      const { service, auctionRepo, bidRepo } = biddingService();
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 110),
+      ).resolves.toMatchObject({
+        bid: { id: 'new-bid', amount: '110.00', status: 'WINNING' },
+        minNextBid: 120,
+      });
+      expect(bidRepo.update).toHaveBeenCalledWith(
+        { id: 'old-bid', status: 'WINNING' },
+        { status: 'OUTBID' },
+      );
+      expect(auctionRepo.createQueryBuilder().setLock).toHaveBeenCalledWith(
+        'pessimistic_write',
+      );
+      expect(auctionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentPrice: '110.00',
+          highestBidId: 'new-bid',
+          highestBidderId: 'buyer-1',
+          bidCount: 2,
+        }),
+      );
+    });
+
+    it('rejects self-bidding without writes', async () => {
+      const { service, auctionRepo, bidRepo } = biddingService();
+      await expect(
+        service.placeBid('AUC-1', 'seller-1', 110),
+      ).rejects.toMatchObject({
+        status: 403,
+        response: { errorCode: 'CANNOT_BID_OWN_AUCTION' },
+      });
+      expect(bidRepo.save).not.toHaveBeenCalled();
+      expect(auctionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bid below minNextBid without writes', async () => {
+      const { service, auctionRepo, bidRepo } = biddingService();
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 109),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'BID_TOO_LOW', minNextBid: 110 },
+      });
+      expect(bidRepo.save).not.toHaveBeenCalled();
+      expect(auctionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects bids outside the active time window without writes', async () => {
+      const auction = activeAuction();
+      auction.endsAt = new Date(Date.now() - 1);
+      const { service, auctionRepo, bidRepo } = biddingService(auction);
+      await expect(service.placeBid('AUC-1', 'buyer-1', 110)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(bidRepo.save).not.toHaveBeenCalled();
+      expect(auctionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('activates a scheduled auction once its persisted window opens', async () => {
+      const auction = activeAuction();
+      auction.status = 'SCHEDULED';
+      const { service, auctionRepo } = biddingService(auction);
+      await service.placeBid('AUC-1', 'buyer-1', 110);
+      expect(auctionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'ACTIVE' }),
+      );
+    });
+
+    it('uses cent-safe arithmetic for bid thresholds and responses', async () => {
+      const auction = {
+        ...activeAuction(),
+        currentPrice: '0.10',
+        bidIncrement: '0.20',
+      };
+      const { service, auctionRepo } = biddingService(auction);
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 0.3),
+      ).resolves.toMatchObject({
+        bid: { amount: '0.30' },
+        minNextBid: 0.5,
+      });
+      expect(auctionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ currentPrice: '0.30' }),
+      );
     });
   });
 });

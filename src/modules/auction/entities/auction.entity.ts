@@ -33,6 +33,11 @@ export class AuctionEntity {
   bidIncrement: string;
   @Column({ name: 'current_price', type: 'numeric', precision: 18, scale: 2 })
   currentPrice: string;
+  @Column({ name: 'highest_bid_id', type: 'uuid', nullable: true })
+  highestBidId?: string | null;
+  @Column({ name: 'highest_bidder_id', type: 'uuid', nullable: true })
+  highestBidderId?: string | null;
+  @Column({ name: 'bid_count', type: 'integer', default: 0 }) bidCount: number;
   @Column({ type: 'varchar', length: 3 }) currency: string;
   @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
   @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;

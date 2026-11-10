@@ -315,6 +315,59 @@ describe('GhnClientService', () => {
       }
     });
 
+    it.each([
+      'Weight must be less than 50000 gram',
+      'Invalid dimensions',
+      'Service type is not supported',
+    ])(
+      'classifies non-address HTTP 400 as GHN_CREATE_ORDER_FAILED: %s',
+      async (message) => {
+        const originalFetch = global.fetch;
+        global.fetch = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 400,
+          json: vi.fn().mockResolvedValue({ code: 400, message, data: null }),
+        } as unknown as Response);
+
+        try {
+          await expect(
+            service.createShippingOrder(mockPayload),
+          ).rejects.toMatchObject({
+            status: 400,
+            response: { errorCode: 'GHN_CREATE_ORDER_FAILED', message },
+          });
+        } finally {
+          global.fetch = originalFetch;
+        }
+      },
+    );
+
+    it('preserves a non-address GHN message in request()', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: vi.fn().mockResolvedValue({
+          code: 400,
+          message: 'Package weight is invalid',
+          data: null,
+        }),
+      } as unknown as Response);
+      try {
+        await expect(
+          service.request('v2/shipping-order/preview', {}),
+        ).rejects.toMatchObject({
+          status: 400,
+          response: {
+            errorCode: 'GHN_CREATE_ORDER_FAILED',
+            message: 'Package weight is invalid',
+          },
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
     it('ném ServiceUnavailableException GHN_REQUEST_FAILED khi GHN sập hoặc lỗi kết nối mạng', async () => {
       const originalFetch = global.fetch;
       global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
