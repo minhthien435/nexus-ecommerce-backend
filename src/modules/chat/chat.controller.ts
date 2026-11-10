@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -15,6 +16,7 @@ import { Roles } from '../identity/rbac/decorators/roles.decorator.js';
 import { RolesGuard } from '../identity/rbac/guards/roles.guard.js';
 import { ChatService } from './chat.service.js';
 import {
+  ConversationQueryDto,
   HistoryQueryDto,
   OpenConversationDto,
   SendMessageDto,
@@ -30,8 +32,19 @@ export class ChatController {
   ) {
     return this.chat.open(id, dto);
   }
-  @Get('conversations') list(@CurrentUserId() id: string) {
-    return this.chat.list(id);
+  @Get('conversations')
+  async list(
+    @CurrentUserId() id: string,
+    @Query() query: ConversationQueryDto,
+  ) {
+    const result = await this.chat.list(id, query);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách hội thoại thành công',
+      data: result.items,
+      meta: result.meta,
+    };
   }
   @Get('unread-summary') unread(@CurrentUserId() id: string) {
     return this.chat.unread(id);

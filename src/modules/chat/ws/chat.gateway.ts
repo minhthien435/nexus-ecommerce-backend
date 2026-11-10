@@ -1,4 +1,4 @@
-import { UsePipes, ValidationPipe } from '@nestjs/common';
+import { HttpException, UsePipes, ValidationPipe } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -8,6 +8,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
+  WsException,
 } from '@nestjs/websockets';
 import { isUUID } from 'class-validator';
 import { IsNull, Repository } from 'typeorm';
@@ -72,65 +73,118 @@ export class ChatGateway implements OnGatewayConnection {
       client.disconnect(true);
     }
   }
+  private toWsException(error: unknown): WsException {
+    if (error instanceof WsException) {
+      return error;
+    }
+    if (error instanceof HttpException) {
+      const res = error.getResponse();
+      if (typeof res === 'object' && res !== null && 'errorCode' in res) {
+        const { errorCode, message } = res as {
+          errorCode: string;
+          message: string;
+        };
+        return new WsException({ errorCode, message });
+      }
+      return new WsException({
+        errorCode: (res as any)?.errorCode ?? 'WS_ERROR',
+        message: (res as any)?.message ?? error.message,
+      });
+    }
+    if (error instanceof Error) {
+      return new WsException({
+        errorCode: 'INTERNAL_ERROR',
+        message: error.message,
+      });
+    }
+    return new WsException({
+      errorCode: 'INTERNAL_ERROR',
+      message: 'Unknown error',
+    });
+  }
+
   private id(client: AuthedSocket): string {
-    if (!client.data.userId) throw new Error('Unauthorized');
+    if (!client.data.userId) {
+      throw new WsException({
+        errorCode: 'UNAUTHORIZED',
+        message: 'Unauthorized',
+      });
+    }
     return client.data.userId;
   }
+
   @SubscribeMessage('message:send') async send(
     @ConnectedSocket() client: AuthedSocket,
     @MessageBody() body: SocketSendMessageDto,
   ) {
-    if (!isUUID(body.conversationId)) throw new Error('Invalid conversation');
-    const result = await this.chat.send(
-      this.id(client),
-      body.conversationId,
-      body.message,
-    );
-    client.emit('message:ack', result);
-    return result;
+    if (!isUUID(body?.conversationId)) {
+      throw new WsException({
+        errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+        message: 'Invalid conversation id',
+      });
+    }
+    try {
+      const result = await this.chat.send(
+        this.id(client),
+        body.conversationId,
+        body.message,
+      );
+      client.emit('message:ack', result);
+      return result;
+    } catch (error) {
+      throw this.toWsException(error);
+    }
   }
-  @SubscribeMessage('typing') async typing(
-    @ConnectedSocket() client: AuthedSocket,
-    @MessageBody() body: { conversationId: string; isTyping: boolean },
-  ) {
-    if (!isUUID(body.conversationId) || typeof body.isTyping !== 'boolean')
-      throw new Error('Invalid typing event');
-    const userId = this.id(client);
-    const recipient = await this.chat.counterpart(userId, body.conversationId);
-    this.events.emit(recipient, 'typing', {
-      conversationId: body.conversationId,
-      userId,
-      isTyping: body.isTyping,
-    });
-  }
+
   @SubscribeMessage('typing:start') async typingStart(
     @ConnectedSocket() client: AuthedSocket,
     @MessageBody() body: { conversationId: string },
   ) {
-    return this.relayTyping(client, body.conversationId, true, 'typing:start');
+    return this.relayTyping(client, body?.conversationId, true, 'typing:start');
   }
+
   @SubscribeMessage('typing:stop') async typingStop(
     @ConnectedSocket() client: AuthedSocket,
     @MessageBody() body: { conversationId: string },
   ) {
-    return this.relayTyping(client, body.conversationId, false, 'typing:stop');
+    return this.relayTyping(client, body?.conversationId, false, 'typing:stop');
   }
+
   private async relayTyping(
     client: AuthedSocket,
     conversationId: string,
     isTyping: boolean,
     event: string,
   ) {
-    if (!isUUID(conversationId)) throw new Error('Invalid conversation');
-    const userId = this.id(client);
-    const recipient = await this.chat.counterpart(userId, conversationId);
-    this.events.emit(recipient, event, { conversationId, userId, isTyping });
+    if (!isUUID(conversationId)) {
+      throw new WsException({
+        errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+        message: 'Invalid conversation id',
+      });
+    }
+    try {
+      const userId = this.id(client);
+      const recipient = await this.chat.counterpart(userId, conversationId);
+      this.events.emit(recipient, event, { conversationId, userId, isTyping });
+    } catch (error) {
+      throw this.toWsException(error);
+    }
   }
+
   @SubscribeMessage('message:read') async read(
     @ConnectedSocket() client: AuthedSocket,
     @MessageBody() body: { conversationId: string },
   ) {
-    if (!isUUID(body.conversationId)) throw new Error('Invalid conversation');
-    return this.chat.markRead(this.id(client), body.conversationId);
+    if (!isUUID(body?.conversationId)) {
+      throw new WsException({
+        errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+        message: 'Invalid conversation id',
+      });
+    }
+    try {
+      return await this.chat.markRead(this.id(client), body.conversationId);
+    } catch (error) {
+      throw this.toWsException(error);
+    }
   }
 }

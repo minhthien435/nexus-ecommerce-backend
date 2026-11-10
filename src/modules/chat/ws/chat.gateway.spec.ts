@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { WsException } from '@nestjs/websockets';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatGateway } from './chat.gateway.js';
 
@@ -133,5 +135,183 @@ describe('ChatGateway', () => {
       updated: 2,
     });
     expect(chat.markRead).toHaveBeenCalledWith(userId, conversationId);
+  });
+
+  describe('WebSocket error handling with WsException (BE-06)', () => {
+    it('throws WsException when conversationId is not a UUID', async () => {
+      const client = socket();
+      client.data.userId = userId;
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+      );
+
+      await expect(
+        gateway.send(client, {
+          conversationId: 'invalid-id',
+          message: { clientMessageId: otherId, type: 'TEXT', text: 'hi' },
+        }),
+      ).rejects.toThrow(WsException);
+
+      try {
+        await gateway.send(client, {
+          conversationId: 'invalid-id',
+          message: { clientMessageId: otherId, type: 'TEXT', text: 'hi' },
+        });
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+          message: 'Invalid conversation id',
+        });
+      }
+    });
+
+    it('throws WsException when socket is not authenticated', async () => {
+      const client = socket(); // no client.data.userId
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+      );
+
+      await expect(
+        gateway.send(client, {
+          conversationId,
+          message: { clientMessageId: otherId, type: 'TEXT', text: 'hi' },
+        }),
+      ).rejects.toThrow(WsException);
+
+      try {
+        await gateway.send(client, {
+          conversationId,
+          message: { clientMessageId: otherId, type: 'TEXT', text: 'hi' },
+        });
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'UNAUTHORIZED',
+          message: 'Unauthorized',
+        });
+      }
+    });
+
+    it('converts ChatService business HttpException into WsException with matching payload', async () => {
+      const client = socket();
+      client.data.userId = userId;
+      const chat = {
+        send: vi.fn().mockRejectedValue(
+          new BadRequestException({
+            errorCode: 'CHAT_TEXT_REQUIRED',
+            message: 'Message text is required',
+          }),
+        ),
+      };
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        chat as any,
+        {} as any,
+      );
+
+      try {
+        await gateway.send(client, {
+          conversationId,
+          message: { clientMessageId: otherId, type: 'TEXT', text: '   ' },
+        });
+        expect.unreachable('Should have thrown WsException');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'CHAT_TEXT_REQUIRED',
+          message: 'Message text is required',
+        });
+      }
+    });
+
+    it('converts CHAT_SHOP_UNAVAILABLE HttpException into WsException', async () => {
+      const client = socket();
+      client.data.userId = userId;
+      const chat = {
+        send: vi.fn().mockRejectedValue(
+          new ForbiddenException({
+            errorCode: 'CHAT_SHOP_UNAVAILABLE',
+            message: 'Shop is currently unavailable',
+          }),
+        ),
+      };
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        chat as any,
+        {} as any,
+      );
+
+      try {
+        await gateway.send(client, {
+          conversationId,
+          message: { clientMessageId: otherId, type: 'TEXT', text: 'Hello' },
+        });
+        expect.unreachable('Should have thrown WsException');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'CHAT_SHOP_UNAVAILABLE',
+          message: 'Shop is currently unavailable',
+        });
+      }
+    });
+
+    it('throws WsException on invalid typing:start and typing:stop events', async () => {
+      const client = socket();
+      client.data.userId = userId;
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+      );
+
+      try {
+        await gateway.typingStart(client, {
+          conversationId: 'not-uuid',
+        });
+        expect.unreachable('Should have thrown WsException');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+          message: 'Invalid conversation id',
+        });
+      }
+
+      try {
+        await gateway.typingStop(client, {
+          conversationId: 'not-uuid',
+        });
+        expect.unreachable('Should have thrown WsException');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(WsException);
+        expect(err.getError()).toEqual({
+          errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+          message: 'Invalid conversation id',
+        });
+      }
+    });
+
+    it('confirms redundant typing event handler is removed (C7)', () => {
+      const gateway = new ChatGateway(
+        {} as any,
+        {} as any,
+        {} as any,
+        {} as any,
+      );
+      expect((gateway as any).typing).toBeUndefined();
+      expect(typeof gateway.typingStart).toBe('function');
+      expect(typeof gateway.typingStop).toBe('function');
+    });
   });
 });
