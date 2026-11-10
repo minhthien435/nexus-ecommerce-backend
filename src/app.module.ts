@@ -18,6 +18,7 @@ import { MediaModule } from './modules/media/media.module.js';
 import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module.js';
 import { BullModule } from '@nestjs/bullmq';
 import { createBullMqOptions } from './config/bullmq.config.js';
+import { ChatModule } from './modules/chat/chat.module.js';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { createBullMqOptions } from './config/bullmq.config.js';
     AuctionModule,
     IntegrationsModule,
     MediaModule,
+    ChatModule,
     AiAssistantModule,
   ],
   controllers: [AppController],
