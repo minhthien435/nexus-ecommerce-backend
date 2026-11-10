@@ -196,17 +196,22 @@ export class GhnClientService {
           '';
 
         const isAddressConflict =
-          /address|conflict|location|phường|quận|tỉnh|địa chỉ/i.test(
+          /address|location|ward|district|province|phường|xã|quận|huyện|tỉnh|địa chỉ/i.test(
             ghnMessage,
-          ) ||
-          (response.status === 400 &&
-            path.includes('shipping-order') &&
-            Boolean(ghnMessage));
+          );
 
         if (isAddressConflict) {
           throw new BadRequestException({
             errorCode: 'GHN_ADDRESS_INVALID',
             message: ghnMessage || 'To address conflict',
+          });
+        }
+
+        if (response.status === 400 && path.includes('shipping-order')) {
+          throw new BadRequestException({
+            errorCode: 'GHN_CREATE_ORDER_FAILED',
+            message:
+              ghnMessage || 'Không thể tạo đơn vận chuyển với GHN Express',
           });
         }
 
@@ -410,10 +415,9 @@ export class GhnClientService {
           '';
 
         if (
-          /address|conflict|location|phường|quận|tỉnh|địa chỉ/i.test(
+          /address|location|ward|district|province|phường|xã|quận|huyện|tỉnh|địa chỉ/i.test(
             ghnMessage,
-          ) ||
-          (response.status === 400 && Boolean(ghnMessage))
+          )
         ) {
           throw new BadRequestException({
             errorCode: 'GHN_ADDRESS_INVALID',

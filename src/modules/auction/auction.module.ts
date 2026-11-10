@@ -7,11 +7,15 @@ import { ShopEntity } from '../identity/domain/shop.entity.js';
 import { AuctionController } from './controllers/auction.controller.js';
 import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
+import { BidEntity } from './entities/bid.entity.js';
+import { IdentityModule } from '../identity/identity.module.js';
 
 @Module({
   imports: [
+    IdentityModule,
     TypeOrmModule.forFeature([
       AuctionEntity,
+      BidEntity,
       ProductEntity,
       ProductSkuEntity,
       ProductImageEntity,
