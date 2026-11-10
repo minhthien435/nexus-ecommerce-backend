@@ -48,14 +48,11 @@ export class AiImageService {
       let mime: string;
       if (dto.imageBase64) {
         const encoded = dto.imageBase64;
-        if (
-          encoded.length % 4 !== 0 ||
-          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-            encoded,
-          )
-        )
+        if (encoded.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(encoded))
           throw new Error();
         bytes = Buffer.from(encoded, 'base64');
+        // Round-trip enforces canonical padding without recursive regex groups
+        // that can exhaust the regex engine stack on valid multi-megabyte input.
         if (bytes.toString('base64') !== encoded) throw new Error();
         mime = dto.imageMimeType!;
       } else {

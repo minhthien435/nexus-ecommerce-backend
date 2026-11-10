@@ -23,11 +23,11 @@ AiAssistantModule.register({
 });
 ```
 
-The registration requires both explicit provider tokens. Imported modules must export dependencies used by those classes; additional providers can be passed via `providers`. Existing instances can use `useExisting` with their exporting module in `imports`. There is no default permissive policy. `AiAccessPolicy.canActivate(context)` must authenticate and rate-limit before the controller runs. `AiOrchestrator.chat(input, request)` receives the parsed DTO and the HTTP request so it can bind the session to the authenticated principal. Session IDs and `context.currentPath` are hints, never authorization or product evidence.
+The registration requires both explicit provider tokens. Imported modules must export dependencies used by those classes; additional providers can be passed via `providers`. Existing instances can use `useExisting` with their exporting module in `imports`. There is no default permissive policy. `AiAccessPolicy.canActivate(context)` must authenticate and rate-limit before the controller runs. `AiOrchestrator.chat(input, request)` receives the parsed DTO and the HTTP request so it can bind the session to the authenticated principal. Session IDs and `context.currentUrl` / `context.currentProductSlug` are hints, never authorization or product evidence.
 
 `AiChatResult` is `{ sessionId, reply, products, action, suggestions }`. `products` are `AiProduct[]`, `action` is one validated action or null, and `suggestions` is a string array. Monetary values remain decimal strings or null; no currency is invented.
 
-Minh must call `GeminiClientService.prepareUserContent(input)` **before** `generate(contents)`: this validates/decodes images and produces text/inlineData parts. `generate` accepts trusted server-built conversation contents, with default declarations `search_products` and `ui_action`; it returns the SDK response, including function calls, for Minh's bounded orchestration loop. Preserve model content/thought signatures when appending tool results. Allowlist tool names and pass each function's unknown arguments to its validator; never execute arbitrary function names or trust free-text URLs/product claims. Build returned product cards from `SearchProductsTool.execute` results. Keep those results in a fresh local variable for each HTTP request and pass only that variable to `UiActionHandler.execute`. Do not retain navigation evidence in a singleton/session or accept it from the model/client. Reject unsupported tools; impose a bounded number of tool rounds. Khoa can supply additional read-only declarations through `generate` when integrated.
+Minh must call `GeminiClientService.prepareUserContent(input)` **before** `generate(contents)`: this validates/decodes images and produces text/inlineData parts. `generate` accepts trusted server-built conversation contents, with default declarations `search_products` and `ui_action`; it returns the SDK response, including function calls, for Minh's bounded orchestration loop. Preserve model content/thought signatures when appending tool results. Allowlist tool names and pass each function's unknown arguments to its validator; never execute arbitrary function names or trust free-text URLs/product claims. Build returned product cards from `SearchProductsTool.execute` results. Keep those results in a fresh local variable for each HTTP request and pass only that variable to `UiActionHandler.execute`. Do not retain navigation evidence in a singleton/session or accept it from the model/client. Reject unsupported tools; impose a bounded number of tool rounds. Khoa can supply additional read-only declarations through `generate` when integrated. Minh can pass the trusted BE-03 server prompt as the optional third argument, `generate(contents, declarations, systemInstruction)` (pass `undefined` for declarations to retain the defaults). Omitting it retains the safe catalog prompt. Never derive this argument from HTTP input; the request parser rejects prompt fields at both the top level and inside context. Context `currentUrl` accepts a bounded internal path or absolute HTTP(S) URL without credentials; it is never fetched or used as an action destination. `currentProductSlug` must be a bounded lowercase hyphenated slug and does not establish product evidence.
 
 ### Request body limit before registration
 
@@ -39,7 +39,10 @@ The current application has Express's default JSON size limit, too small for 5 M
 {
   "sessionId": "session_123",
   "message": "Find red shoes",
-  "context": { "currentPath": "/products" }
+  "context": {
+    "currentUrl": "/products/red-shoe",
+    "currentProductSlug": "red-shoe"
+  }
 }
 ```
 
