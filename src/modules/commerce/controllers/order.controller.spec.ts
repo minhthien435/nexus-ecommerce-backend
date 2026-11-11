@@ -84,4 +84,52 @@ describe('OrderController', () => {
       data: null,
     });
   });
+
+  it('calls refundService.updateBuyerRefundAccount on updateRefundAccount and returns envelope', async () => {
+    const mockResult = {
+      refundId: 'refund-1',
+      orderId: 'order-1',
+      refundCode: 'REF-ORD-1',
+      status: 'REQUESTED',
+      amount: '150000.00',
+      currency: 'VND',
+      buyerBankName: 'Vietcombank',
+      buyerAccountNumber: '1234567890',
+      buyerAccountHolderName: 'NGUYEN VAN A',
+      updatedAt: new Date('2026-11-10T15:30:00Z'),
+    };
+    const orderService = {};
+    const refundService = {
+      updateBuyerRefundAccount: vi.fn().mockResolvedValue(mockResult),
+    };
+
+    const controller = new OrderController(
+      orderService as never,
+      refundService as never,
+    );
+
+    const dto = {
+      bankName: 'Vietcombank',
+      accountNumber: '1234567890',
+      accountHolderName: 'NGUYEN VAN A',
+    };
+
+    const result = await controller.updateRefundAccount(
+      'buyer-1',
+      'order-1',
+      dto,
+    );
+
+    expect(refundService.updateBuyerRefundAccount).toHaveBeenCalledWith(
+      'order-1',
+      'buyer-1',
+      dto,
+    );
+    expect(result).toEqual({
+      success: true,
+      statusCode: 200,
+      message: 'Cập nhật thông tin tài khoản hoàn tiền thành công',
+      data: mockResult,
+    });
+  });
 });

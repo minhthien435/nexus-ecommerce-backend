@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   InternalServerErrorException,
@@ -17,6 +18,7 @@ import {
   type OrderRefundStatus,
 } from '../domain/entities/order-refund.entity.js';
 import type { QueryOrderRefundsDto } from '../dtos/order-refund.dto.js';
+import type { UpdateBuyerRefundAccountDto } from '../dtos/update-buyer-refund-account.dto.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 
 @Injectable()
@@ -239,6 +241,101 @@ export class OrderRefundService extends OrderRefundRequestApi {
         notes: notes ?? null,
       });
       return saved;
+    });
+  }
+
+  async updateBuyerRefundAccount(
+    orderId: string,
+    buyerId: string,
+    dto: UpdateBuyerRefundAccountDto,
+  ) {
+    const normalizedOrderId = orderId.toLowerCase();
+    const normalizedBuyerId = buyerId.toLowerCase();
+
+    return this.dataSource.transaction(async (manager) => {
+      const order = await manager.getRepository(OrderEntity).findOne({
+        where: { id: normalizedOrderId, buyerId: normalizedBuyerId },
+      });
+      if (!order) {
+        throw new NotFoundException({
+          errorCode: 'ORDER_NOT_FOUND',
+          message: 'Order was not found',
+        });
+      }
+
+      const refund = await manager
+        .getRepository(OrderRefundEntity)
+        .createQueryBuilder('refund')
+        .setLock('pessimistic_write')
+        .where('refund.order_id = :orderId', { orderId: normalizedOrderId })
+        .getOne();
+
+      if (!refund) {
+        throw new BadRequestException({
+          errorCode: 'REFUND_NOT_FOUND',
+          message: 'No refund request exists for this order',
+        });
+      }
+
+      if (refund.status === 'COMPLETED') {
+        throw this.conflict(
+          'REFUND_ALREADY_COMPLETED',
+          'Refund has already been completed and cannot be updated',
+        );
+      }
+      if (refund.status === 'REJECTED') {
+        throw this.conflict(
+          'REFUND_REJECTED',
+          'Refund request has been rejected',
+        );
+      }
+      if (!['REQUESTED', 'PROCESSING'].includes(refund.status)) {
+        throw this.conflict(
+          'REFUND_STATUS_INVALID',
+          `Refund cannot be updated from status ${refund.status}`,
+        );
+      }
+
+      refund.buyerBankName = dto.bankName.trim();
+      refund.buyerAccountNumber = dto.accountNumber.trim();
+      refund.buyerAccountHolderName = dto.accountHolderName
+        .trim()
+        .toUpperCase();
+
+      const saved = await manager.getRepository(OrderRefundEntity).save(refund);
+
+      const maskedAccountNumber =
+        saved.buyerAccountNumber && saved.buyerAccountNumber.length > 4
+          ? '*'.repeat(saved.buyerAccountNumber.length - 4) +
+            saved.buyerAccountNumber.slice(-4)
+          : '****';
+
+      await this.audit(
+        manager,
+        normalizedBuyerId,
+        'BUYER_UPDATED_REFUND_ACCOUNT',
+        saved,
+        {
+          orderId: saved.orderId,
+          refundId: saved.id,
+          buyerBankName: saved.buyerBankName,
+          buyerAccountHolderName: saved.buyerAccountHolderName,
+          maskedAccountNumber,
+        },
+      );
+
+      return {
+        refundId: saved.id,
+        orderId: saved.orderId,
+        refundCode: saved.refundCode,
+        status: saved.status,
+        amount: saved.amount,
+        currency: saved.currency,
+        buyerBankName: saved.buyerBankName,
+        buyerAccountNumber: saved.buyerAccountNumber,
+        buyerAccountHolderName: saved.buyerAccountHolderName,
+        updatedAt: saved.updatedAt,
+      };
     });
   }
 

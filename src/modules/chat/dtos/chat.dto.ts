@@ -50,3 +50,51 @@ export class HistoryQueryDto {
   @IsOptional() @IsString() cursor?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 30;
 }
+
+export class ConversationQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 20;
+}
+
+export interface ChatShopSummary {
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+}
+
+export interface ChatBuyerSummary {
+  fullName: string;
+  avatarUrl: string | null;
+}
+
+export interface ChatConversationItemResponse {
+  id: string;
+  shopId: string;
+  shop: ChatShopSummary | null;
+  buyer: ChatBuyerSummary | null;
+  lastMessagePreview: string | null;
+  lastMessageAt: Date | null;
+  myUnreadCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ChatConversationListResponse {
+  items: ChatConversationItemResponse[];
+  meta: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+  };
+}

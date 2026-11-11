@@ -31,6 +31,7 @@ function setup(
     duplicate?: Partial<OrderRefundEntity> | null;
     orderStatus?: string;
     dispute?: Partial<OrderDisputeEntity> | null;
+    order?: Partial<OrderEntity> | null;
   } = {},
 ) {
   const saved: unknown[] = [];
@@ -82,12 +83,17 @@ function setup(
   };
   const orderRepo = {
     find: vi.fn(async () => [{ id: 'order-1', orderNumber: 'ORD-1', buyerId }]),
-    findOne: vi.fn(async () => ({
-      id: 'order-1',
-      orderNumber: 'ORD-1',
-      buyerId,
-      status: options.orderStatus ?? 'CANCELLED',
-    })),
+    findOne: vi.fn(async () =>
+      options.order === null
+        ? null
+        : {
+            id: 'order-1',
+            orderNumber: 'ORD-1',
+            buyerId,
+            status: options.orderStatus ?? 'CANCELLED',
+            ...options.order,
+          },
+    ),
     createQueryBuilder: vi.fn(() =>
       qb({
         id: 'order-1',
@@ -344,5 +350,156 @@ describe('OrderRefundService', () => {
     await expect(service.process('refund-1', 'staff-1')).rejects.toBeInstanceOf(
       ConflictException,
     );
+  });
+
+  describe('updateBuyerRefundAccount', () => {
+    const buyerId = '11111111-1111-4111-8111-111111111111';
+    const validDto = {
+      bankName: 'Vietcombank',
+      accountNumber: '0123456789',
+      accountHolderName: 'NGUYEN VAN A',
+    };
+
+    it('updates bank info successfully when refund status is REQUESTED', async () => {
+      const { service, auditRepo } = setup({
+        locked: {
+          id: 'refund-1',
+          orderId: 'order-1',
+          refundCode: 'REF-ORD-1',
+          status: 'REQUESTED',
+          amount: '150000.00',
+          currency: 'VND',
+        },
+      });
+
+      const res = await service.updateBuyerRefundAccount(
+        'order-1',
+        buyerId,
+        validDto,
+      );
+
+      expect(res).toEqual(
+        expect.objectContaining({
+          refundId: 'refund-1',
+          orderId: 'order-1',
+          refundCode: 'REF-ORD-1',
+          status: 'REQUESTED',
+          amount: '150000.00',
+          currency: 'VND',
+          buyerBankName: 'Vietcombank',
+          buyerAccountNumber: '0123456789',
+          buyerAccountHolderName: 'NGUYEN VAN A',
+        }),
+      );
+
+      expect(auditRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: buyerId,
+          action: 'BUYER_UPDATED_REFUND_ACCOUNT',
+          changes: expect.objectContaining({
+            orderId: 'order-1',
+            refundId: 'refund-1',
+            buyerBankName: 'Vietcombank',
+            buyerAccountHolderName: 'NGUYEN VAN A',
+            maskedAccountNumber: '******6789',
+          }),
+        }),
+      );
+    });
+
+    it('updates bank info successfully when refund status is PROCESSING', async () => {
+      const { service } = setup({
+        locked: {
+          id: 'refund-1',
+          orderId: 'order-1',
+          status: 'PROCESSING',
+        },
+      });
+
+      const res = await service.updateBuyerRefundAccount(
+        'order-1',
+        buyerId,
+        validDto,
+      );
+
+      expect(res.status).toBe('PROCESSING');
+      expect(res.buyerAccountNumber).toBe('0123456789');
+    });
+
+    it('throws 404 when order does not belong to buyer', async () => {
+      const { service } = setup({ order: null });
+
+      await expect(
+        service.updateBuyerRefundAccount('order-1', buyerId, validDto),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: expect.objectContaining({ errorCode: 'ORDER_NOT_FOUND' }),
+      });
+    });
+
+    it('throws 400 when no refund exists for the order', async () => {
+      const { service } = setup({ locked: undefined });
+
+      await expect(
+        service.updateBuyerRefundAccount('order-1', buyerId, validDto),
+      ).rejects.toMatchObject({
+        status: 400,
+        response: expect.objectContaining({ errorCode: 'REFUND_NOT_FOUND' }),
+      });
+    });
+
+    it('throws 409 when refund is already COMPLETED', async () => {
+      const { service } = setup({
+        locked: { id: 'refund-1', orderId: 'order-1', status: 'COMPLETED' },
+      });
+
+      await expect(
+        service.updateBuyerRefundAccount('order-1', buyerId, validDto),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: expect.objectContaining({
+          errorCode: 'REFUND_ALREADY_COMPLETED',
+        }),
+      });
+    });
+
+    it('throws 409 when refund is REJECTED', async () => {
+      const { service } = setup({
+        locked: { id: 'refund-1', orderId: 'order-1', status: 'REJECTED' },
+      });
+
+      await expect(
+        service.updateBuyerRefundAccount('order-1', buyerId, validDto),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: expect.objectContaining({ errorCode: 'REFUND_REJECTED' }),
+      });
+    });
+
+    it('includes buyer bank details in support list() output', async () => {
+      const { service, refundRepo } = setup();
+      refundRepo.findAndCount.mockResolvedValueOnce([
+        [
+          {
+            id: 'refund-1',
+            orderId: 'order-1',
+            status: 'REQUESTED',
+            buyerBankName: 'Vietcombank',
+            buyerAccountNumber: '0123456789',
+            buyerAccountHolderName: 'NGUYEN VAN A',
+          },
+        ] as never,
+        1,
+      ]);
+
+      const res = await service.list({ page: 1, limit: 10 });
+      expect(res.items[0]).toEqual(
+        expect.objectContaining({
+          buyerBankName: 'Vietcombank',
+          buyerAccountNumber: '0123456789',
+          buyerAccountHolderName: 'NGUYEN VAN A',
+        }),
+      );
+    });
   });
 });
