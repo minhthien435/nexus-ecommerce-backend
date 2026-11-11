@@ -31,13 +31,19 @@ import {
 import { AiRateLimitService } from './services/ai-rate-limit.service.js';
 import { AiSampleOrchestrator } from './services/ai-sample-orchestrator.js';
 import { AiSessionService } from './services/ai-session.service.js';
+import { AiCacheService } from './services/ai-cache.service.js';
+import { TrendingProductsQuery } from './queries/trending-products.query.js';
 import {
   GeminiClientService,
   GeminiTransport,
   GoogleGeminiTransport,
 } from './services/gemini-client.service.js';
 import { SearchProductsTool } from './tools/search-products.tool.js';
-import { ToolExecutorService } from './tools/tool-executor.service.js';
+import {
+  AiReadTools,
+  ToolExecutorService,
+} from './tools/tool-executor.service.js';
+import { AiReadToolsService } from './tools/ai-read-tools.service.js';
 import { TrackMyOrderTool } from './tools/track-my-order.tool.js';
 import { UiActionHandler } from './tools/ui-action.handler.js';
 
@@ -94,6 +100,10 @@ export class AiAssistantModule {
         { provide: GeminiTransport, useClass: GoogleGeminiTransport },
         SearchProductsTool,
         UiActionHandler,
+        TrendingProductsQuery,
+        AiCacheService,
+        AiReadToolsService,
+        { provide: AiReadTools, useExisting: AiReadToolsService },
         ...(options.providers ?? []),
         options.orchestrator,
         options.accessPolicy,
@@ -105,6 +115,7 @@ export class AiAssistantModule {
         AiImageService,
         SearchProductsTool,
         UiActionHandler,
+        AiReadTools,
         ...(options.exports ?? []),
       ],
     };

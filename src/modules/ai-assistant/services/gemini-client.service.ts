@@ -15,6 +15,7 @@ import { AiImageService } from './ai-image.service.js';
 import { parseAiChat } from '../dtos/ai-chat.dto.js';
 import { SEARCH_PRODUCTS_DECLARATION } from '../tools/search-products.tool.js';
 import { UI_ACTION_DECLARATION } from '../tools/ui-action.handler.js';
+import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 
 export abstract class GeminiTransport {
   abstract generate(
@@ -69,6 +70,7 @@ export class GeminiClientService {
       SEARCH_PRODUCTS_DECLARATION,
       UI_ACTION_DECLARATION,
       TRACK_MY_ORDER_DECLARATION,
+      ...AI_READ_DECLARATIONS,
     ],
     systemInstruction?: string,
   ): Promise<GenerateContentResponse> {
