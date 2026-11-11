@@ -78,7 +78,28 @@ export class DefaultAiUiActionGuard extends AiUiActionGuardApi {
     switch (actionType) {
       case 'SHOW_PRODUCTS': {
         if (observedProducts.length === 0) return null;
-        return { type: 'SHOW_PRODUCTS' };
+        if (args.slugs === undefined) {
+          return { type: 'SHOW_PRODUCTS' };
+        }
+        if (
+          !Array.isArray(args.slugs) ||
+          args.slugs.length > 5 ||
+          !args.slugs.every(
+            (slug) =>
+              typeof slug === 'string' &&
+              SLUG_PATTERN.test(slug.trim().toLowerCase()),
+          )
+        ) {
+          return null;
+        }
+        const validSlugs = new Set(
+          observedProducts.map((p) => p.slug.trim().toLowerCase()),
+        );
+        return args.slugs.some((slug) =>
+          validSlugs.has(slug.trim().toLowerCase()),
+        )
+          ? { type: 'SHOW_PRODUCTS' }
+          : null;
       }
 
       case 'NAVIGATE': {
