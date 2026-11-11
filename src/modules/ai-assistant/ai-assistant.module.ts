@@ -1,11 +1,3 @@
-import { IdentityModule } from '../identity/identity.module.js';
-import {
-  AiOptionalAuthGuard,
-  AiSampleAccessPolicy,
-} from './services/ai-http-access.guard.js';
-import { AiSampleOrchestrator } from './services/ai-sample-orchestrator.js';
-import { TrackMyOrderTool } from './tools/track-my-order.tool.js';
-import { ToolExecutorService } from './tools/tool-executor.service.js';
 import {
   Module,
   type DynamicModule,
@@ -14,31 +6,62 @@ import {
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CatalogModule } from '../catalog/catalog.module.js';
+import { IdentityModule } from '../identity/identity.module.js';
 import { AiAccessPolicy, AiOrchestrator } from './ai-orchestrator.contract.js';
+import {
+  AiModelClientApi,
+  AiToolExecutorApi,
+  AiUiActionGuardApi,
+} from './contracts/ai-assistant.types.js';
 import { AiAssistantController } from './controllers/ai-assistant.controller.js';
+import { AiAgentService } from './services/ai-agent.service.js';
+import {
+  AiOptionalAuthGuard,
+  AiSampleAccessPolicy,
+} from './services/ai-http-access.guard.js';
 import { AiImageService } from './services/ai-image.service.js';
+import {
+  AiRequestContextService,
+  GeminiClientAdapter,
+  MinhAiAccessPolicy,
+  MinhAiOrchestrator,
+  ToolExecutorAdapter,
+  UiActionGuardAdapter,
+} from './services/ai-orchestrator.adapters.js';
+import { AiRateLimitService } from './services/ai-rate-limit.service.js';
+import { AiSampleOrchestrator } from './services/ai-sample-orchestrator.js';
+import { AiSessionService } from './services/ai-session.service.js';
+import { AiCacheService } from './services/ai-cache.service.js';
+import { TrendingProductsQuery } from './queries/trending-products.query.js';
 import {
   GeminiClientService,
   GeminiTransport,
   GoogleGeminiTransport,
 } from './services/gemini-client.service.js';
 import { SearchProductsTool } from './tools/search-products.tool.js';
-import { UiActionHandler } from './tools/ui-action.handler.js';
-import { AiReadTools } from './tools/tool-executor.service.js';
+import {
+  AiReadTools,
+  ToolExecutorService,
+} from './tools/tool-executor.service.js';
 import { AiReadToolsService } from './tools/ai-read-tools.service.js';
-import { TrendingProductsQuery } from './queries/trending-products.query.js';
-import { AiCacheService } from './services/ai-cache.service.js';
+import { TrackMyOrderTool } from './tools/track-my-order.tool.js';
+import { UiActionHandler } from './tools/ui-action.handler.js';
 
 export interface AiAssistantRegistration {
   orchestrator: Provider<AiOrchestrator>;
   accessPolicy: Provider<AiAccessPolicy>;
   imports?: ModuleMetadata['imports'];
   providers?: Provider[];
+  exports?: ModuleMetadata['exports'];
 }
 
-/** Default registration exposes only the protected opt-in sample or 503. */
+/**
+ * AI Assistant module supporting both standalone/sample verification (`register()`)
+ * and full live agent orchestration (`registerAgent()`).
+ */
 @Module({})
 export class AiAssistantModule {
+  /** Default registration exposes only the protected opt-in sample or 503. */
   static register(
     options: AiAssistantRegistration = {
       orchestrator: { provide: AiOrchestrator, useClass: AiSampleOrchestrator },
@@ -93,7 +116,35 @@ export class AiAssistantModule {
         SearchProductsTool,
         UiActionHandler,
         AiReadTools,
+        ...(options.exports ?? []),
       ],
     };
+  }
+
+  /** Production wiring combining Minh's Agent/Session/RateLimit with Hoang's Gemini/Tools/Guards. */
+  static registerAgent(): DynamicModule {
+    return AiAssistantModule.register({
+      orchestrator: { provide: AiOrchestrator, useClass: MinhAiOrchestrator },
+      accessPolicy: { provide: AiAccessPolicy, useClass: MinhAiAccessPolicy },
+      providers: [
+        AiRequestContextService,
+        AiSessionService,
+        AiRateLimitService,
+        AiAgentService,
+        { provide: AiModelClientApi, useClass: GeminiClientAdapter },
+        { provide: AiToolExecutorApi, useClass: ToolExecutorAdapter },
+        { provide: AiUiActionGuardApi, useClass: UiActionGuardAdapter },
+      ],
+      exports: [
+        AiOrchestrator,
+        AiAccessPolicy,
+        AiAgentService,
+        AiSessionService,
+        AiRateLimitService,
+        AiModelClientApi,
+        AiToolExecutorApi,
+        AiUiActionGuardApi,
+      ],
+    });
   }
 }

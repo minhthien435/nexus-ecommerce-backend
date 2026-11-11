@@ -1,4 +1,3 @@
-import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module.js';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -16,6 +15,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { AuctionModule } from './modules/auction/auction.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { MediaModule } from './modules/media/media.module.js';
+import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module.js';
 import { BullModule } from '@nestjs/bullmq';
 import { createBullMqOptions } from './config/bullmq.config.js';
 import { ChatModule } from './modules/chat/chat.module.js';
@@ -39,8 +39,8 @@ import { ChatModule } from './modules/chat/chat.module.js';
     AuctionModule,
     IntegrationsModule,
     MediaModule,
-    AiAssistantModule.register(),
     ChatModule,
+    AiAssistantModule.registerAgent(),
   ],
   controllers: [AppController],
   providers: [
