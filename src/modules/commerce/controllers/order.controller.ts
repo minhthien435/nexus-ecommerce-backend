@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  InternalServerErrorException,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -17,12 +18,17 @@ import { Permissions } from '../../identity/rbac/decorators/permissions.decorato
 import { PermissionsGuard } from '../../identity/rbac/guards/permissions.guard.js';
 import { CreateCheckoutDto } from '../dtos/create-checkout.dto.js';
 import { QueryOrdersDto } from '../dtos/query-orders.dto.js';
+import { UpdateBuyerRefundAccountDto } from '../dtos/update-buyer-refund-account.dto.js';
+import { OrderRefundService } from '../services/order-refund.service.js';
 import { OrderService } from '../services/order.service.js';
 
 @Controller('api/v1/commerce/orders')
 @UseGuards(AccessTokenGuard, PermissionsGuard)
 export class OrderController {
-  constructor(private readonly orderService: OrderService) {}
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly refundService?: OrderRefundService,
+  ) {}
 
   @Post('shipping-quote')
   @Permissions('CHECKOUT.START')
@@ -133,6 +139,31 @@ export class OrderController {
       message: result
         ? 'Lấy thông tin khiếu nại của đơn hàng thành công'
         : 'Đơn hàng chưa có khiếu nại nào',
+      data: result,
+    };
+  }
+
+  @Patch(':id/refund-account')
+  @Permissions('ORDER.VIEW')
+  async updateRefundAccount(
+    @CurrentUserId() userId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+    @Body() dto: UpdateBuyerRefundAccountDto,
+  ) {
+    if (!this.refundService) {
+      throw new InternalServerErrorException(
+        'OrderRefundService is not available',
+      );
+    }
+    const result = await this.refundService.updateBuyerRefundAccount(
+      orderId,
+      userId,
+      dto,
+    );
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Cập nhật thông tin tài khoản hoàn tiền thành công',
       data: result,
     };
   }

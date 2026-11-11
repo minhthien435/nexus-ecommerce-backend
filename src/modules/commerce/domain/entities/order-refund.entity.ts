@@ -41,6 +41,24 @@ export class OrderRefundEntity {
     unique: true,
   })
   bankReferenceCode: string | null;
+  @Column('varchar', {
+    name: 'buyer_bank_name',
+    length: 100,
+    nullable: true,
+  })
+  buyerBankName: string | null;
+  @Column('varchar', {
+    name: 'buyer_account_number',
+    length: 50,
+    nullable: true,
+  })
+  buyerAccountNumber: string | null;
+  @Column('varchar', {
+    name: 'buyer_account_holder_name',
+    length: 150,
+    nullable: true,
+  })
+  buyerAccountHolderName: string | null;
   @Column('varchar', { name: 'idempotency_key', length: 100, unique: true })
   idempotencyKey: string;
   @Column('uuid', { name: 'requested_by' }) requestedBy: string;
