@@ -40,7 +40,7 @@ import { ChatModule } from './modules/chat/chat.module.js';
     IntegrationsModule,
     MediaModule,
     ChatModule,
-    AiAssistantModule,
+    AiAssistantModule.registerAgent(),
   ],
   controllers: [AppController],
   providers: [

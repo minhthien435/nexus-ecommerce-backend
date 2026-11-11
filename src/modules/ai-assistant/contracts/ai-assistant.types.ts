@@ -70,6 +70,7 @@ export interface AiUiAction {
 
 export interface AiUiActionVerifyOptions {
   allowedShopSlugs?: readonly string[];
+  userMessage?: string;
 }
 
 export interface AiAgentChatInput {
@@ -79,6 +80,8 @@ export interface AiAgentChatInput {
   context?: AiChatContext;
   requesterKey: string;
   isAuthenticated: boolean;
+  /** Internal flag set when an HTTP guard has already consumed the rate-limit quota */
+  skipRateLimit?: boolean;
 }
 
 export interface AiAgentChatOutput {

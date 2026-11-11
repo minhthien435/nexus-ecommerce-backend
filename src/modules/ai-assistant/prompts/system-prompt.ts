@@ -3,6 +3,7 @@ export interface AiPromptContext {
   currentUrl?: string;
   currentProductSlug?: string;
   isAuthenticated?: boolean;
+  hasReadTools?: boolean;
 }
 
 export const AI_ASSISTANT_BASE_SYSTEM_PROMPT = `Bạn là "Nexus Assistant" - Trợ lý mua sắm AI của sàn thương mại điện tử Nexus.
@@ -79,6 +80,11 @@ export function buildAiAssistantSystemPrompt(
       ? '- Trạng thái đăng nhập: ĐÃ ĐĂNG NHẬP (được phép dùng `track_my_order` khi khách hỏi về đơn hàng của họ).'
       : '- Trạng thái đăng nhập: KHÁCH VÃNG LAI (chưa đăng nhập; nếu khách hỏi tra cứu đơn hàng cá nhân, hãy nhắc khách đăng nhập trước).',
   );
+  if (context.hasReadTools === false) {
+    contextLines.push(
+      `- Tool dữ liệu đang bật trong môi trường này: \`search_products\`, \`ui_action\`${context.isAuthenticated ? ', `track_my_order`' : ''} (chỉ gọi đúng các tool đã khai báo).`,
+    );
+  }
 
   return `${AI_ASSISTANT_BASE_SYSTEM_PROMPT}
 

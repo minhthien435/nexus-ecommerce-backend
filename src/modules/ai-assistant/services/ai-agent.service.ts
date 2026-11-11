@@ -97,12 +97,17 @@ export class AiAgentService {
       Boolean(normalizedImage),
     );
 
-    await this.rateLimitService.consume({
-      requesterKey: input.requesterKey,
-      isAuthenticated: input.isAuthenticated,
-    });
+    if (!input.skipRateLimit) {
+      await this.rateLimitService.consume({
+        requesterKey: input.requesterKey,
+        isAuthenticated: input.isAuthenticated,
+      });
+    }
 
-    const context = this.resolveChatContext(input.context);
+    const context = this.resolveChatContext(
+      input.context,
+      input.isAuthenticated,
+    );
     const sessionOwnerKey =
       input.isAuthenticated && context.userId
         ? `user:${context.userId}`
@@ -113,14 +118,18 @@ export class AiAgentService {
       6,
       sessionOwnerKey,
     );
+    const toolDeclarations = this.toolExecutor.getDeclarations({
+      isAuthenticated: input.isAuthenticated,
+    });
+    const hasReadTools = toolDeclarations.some(
+      (decl) => decl.name === 'get_product_detail',
+    );
     const systemPrompt = buildAiAssistantSystemPrompt({
       currentPath: context.currentPath,
       currentUrl: context.currentUrl,
       currentProductSlug: context.currentProductSlug,
       isAuthenticated: input.isAuthenticated,
-    });
-    const toolDeclarations = this.toolExecutor.getDeclarations({
-      isAuthenticated: input.isAuthenticated,
+      hasReadTools,
     });
 
     const observedProducts: AiProductCard[] = [];
@@ -191,7 +200,10 @@ export class AiAgentService {
           const action = await this.uiActionGuard.verifyAndBuildAction(
             uiCall,
             observedProducts,
-            { allowedShopSlugs: [...allowedShopSlugs] },
+            {
+              allowedShopSlugs: [...allowedShopSlugs],
+              userMessage: effectiveMessage,
+            },
           );
           if (action) {
             verifiedAction = action;
@@ -352,7 +364,10 @@ export class AiAgentService {
     };
   }
 
-  private resolveChatContext(raw?: AiChatContext): AiChatContext {
+  private resolveChatContext(
+    raw?: AiChatContext,
+    isAuthenticated = false,
+  ): AiChatContext {
     const rawPath = (raw?.currentPath ?? raw?.currentUrl)?.trim();
     const currentPath = rawPath ? rawPath.slice(0, 500) : undefined;
 
@@ -381,7 +396,7 @@ export class AiAgentService {
     return {
       ...(currentPath ? { currentPath, currentUrl: currentPath } : {}),
       ...(currentProductSlug ? { currentProductSlug } : {}),
-      ...(raw?.userId ? { userId: raw.userId } : {}),
+      ...(isAuthenticated && raw?.userId ? { userId: raw.userId } : {}),
     };
   }
 
