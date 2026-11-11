@@ -3,6 +3,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { describe, expect, it } from 'vitest';
 import {
+  ConversationQueryDto,
   HistoryQueryDto,
   SendMessageDto,
   SocketSendMessageDto,
@@ -57,5 +58,31 @@ describe('chat DTOs', () => {
       },
     });
     expect(await validate(valid)).toHaveLength(0);
+  });
+
+  it('validates ConversationQueryDto defaults and boundaries', async () => {
+    const defaultQuery = plainToInstance(ConversationQueryDto, {});
+    expect(defaultQuery.page).toBe(1);
+    expect(defaultQuery.limit).toBe(20);
+    expect(await validate(defaultQuery)).toHaveLength(0);
+
+    const valid = plainToInstance(ConversationQueryDto, {
+      page: '2',
+      limit: '50',
+    });
+    expect(await validate(valid)).toHaveLength(0);
+
+    const invalidPage = plainToInstance(ConversationQueryDto, { page: 0 });
+    expect((await validate(invalidPage)).length).toBeGreaterThan(0);
+
+    const invalidLimitZero = plainToInstance(ConversationQueryDto, {
+      limit: 0,
+    });
+    expect((await validate(invalidLimitZero)).length).toBeGreaterThan(0);
+
+    const invalidLimitOver = plainToInstance(ConversationQueryDto, {
+      limit: 101,
+    });
+    expect((await validate(invalidLimitOver)).length).toBeGreaterThan(0);
   });
 });

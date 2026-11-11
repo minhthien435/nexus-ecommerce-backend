@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
   DataSource,
+  In,
   IsNull,
   LessThanOrEqual,
   Repository,
@@ -16,6 +18,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { isUUID } from 'class-validator';
 import { ShopEntity } from '../identity/domain/shop.entity.js';
+import { UserEntity } from '../identity/domain/user.entity.js';
 import {
   ProductEntity,
   ProductStatus,
@@ -26,6 +29,11 @@ import { OrderEntity } from '../commerce/domain/entities/order.entity.js';
 import { ChatConversationEntity } from './domain/entities/chat-conversation.entity.js';
 import { ChatMessageEntity } from './domain/entities/chat-message.entity.js';
 import type {
+  ChatBuyerSummary,
+  ChatConversationItemResponse,
+  ChatConversationListResponse,
+  ChatShopSummary,
+  ConversationQueryDto,
   HistoryQueryDto,
   OpenConversationDto,
   SendMessageDto,
@@ -60,7 +68,10 @@ export class ChatService {
   ): 'BUYER' | 'SELLER' {
     if (conversation.buyerId === userId) return 'BUYER';
     if (conversation.sellerId === userId) return 'SELLER';
-    throw new NotFoundException('Conversation not found');
+    throw new NotFoundException({
+      errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+      message: 'Conversation not found',
+    });
   }
 
   private async conversationFor(
@@ -68,7 +79,12 @@ export class ChatService {
     id: string,
   ): Promise<ChatConversationEntity> {
     const conversation = await this.conversations.findOne({ where: { id } });
-    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (!conversation) {
+      throw new NotFoundException({
+        errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+        message: 'Conversation not found',
+      });
+    }
     this.member(conversation, userId);
     return conversation;
   }
@@ -82,9 +98,18 @@ export class ChatService {
       const shop = await manager.getRepository(ShopEntity).findOne({
         where: { id: dto.shopId, status: 'ACTIVE', deletedAt: IsNull() },
       });
-      if (!shop) throw new NotFoundException('Active shop not found');
-      if (shop.sellerId === userId)
-        throw new BadRequestException('Cannot chat with your own shop');
+      if (!shop) {
+        throw new NotFoundException({
+          errorCode: 'CHAT_SHOP_NOT_FOUND',
+          message: 'Active shop not found',
+        });
+      }
+      if (shop.sellerId === userId) {
+        throw new BadRequestException({
+          errorCode: 'CHAT_OWN_SHOP',
+          message: 'Cannot chat with your own shop',
+        });
+      }
       const repo = manager.getRepository(ChatConversationEntity);
       let conversation = await repo.findOne({
         where: { buyerId: userId, shopId: shop.id },
@@ -105,8 +130,12 @@ export class ChatService {
         .setLock('pessimistic_write')
         .where('conversation.id = :id', { id: conversation.id })
         .getOneOrFail();
-      if (dto.productSlug && dto.orderNumber)
-        throw new BadRequestException('Choose one context');
+      if (dto.productSlug && dto.orderNumber) {
+        throw new BadRequestException({
+          errorCode: 'CHAT_CONTEXT_CONFLICT',
+          message: 'Choose one context',
+        });
+      }
       if (dto.productSlug)
         emitted = await this.addProductContext(
           manager,
@@ -123,7 +152,10 @@ export class ChatService {
         );
       return repo.findOneOrFail({ where: { id: conversation.id } });
     });
-    if (emitted) this.events.emit(result.sellerId, 'message:new', emitted);
+    if (emitted) {
+      this.events.emit(result.sellerId, 'message:new', emitted);
+      this.events.emit(userId, 'message:new', emitted);
+    }
     return result;
   }
 
@@ -141,7 +173,12 @@ export class ChatService {
         deletedAt: IsNull(),
       },
     });
-    if (!product) throw new NotFoundException('Product not found');
+    if (!product) {
+      throw new NotFoundException({
+        errorCode: 'CHAT_PRODUCT_NOT_FOUND',
+        message: 'Product not found',
+      });
+    }
     const recent = await manager
       .getRepository(ChatMessageEntity)
       .createQueryBuilder('m')
@@ -183,7 +220,12 @@ export class ChatService {
     const order = await manager.getRepository(OrderEntity).findOne({
       where: { orderNumber, buyerId: c.buyerId, sellerId: shop.sellerId },
     });
-    if (!order) throw new NotFoundException('Order not found');
+    if (!order) {
+      throw new NotFoundException({
+        errorCode: 'CHAT_ORDER_NOT_FOUND',
+        message: 'Order not found',
+      });
+    }
     const recent = await manager
       .getRepository(ChatMessageEntity)
       .createQueryBuilder('m')
@@ -229,13 +271,103 @@ export class ChatService {
     return message;
   }
 
-  async list(userId: string): Promise<ChatConversationEntity[]> {
-    return this.conversations
+  async list(
+    userId: string,
+    query?: ConversationQueryDto,
+  ): Promise<ChatConversationListResponse> {
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const [items, totalItems] = await this.conversations
       .createQueryBuilder('c')
       .where('c.buyer_id = :userId OR c.seller_id = :userId', { userId })
       .orderBy('c.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('c.created_at', 'DESC')
-      .getMany();
+      .addOrderBy('c.id', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    if (items.length === 0) {
+      return {
+        items: [],
+        meta: {
+          page,
+          limit,
+          totalItems,
+          totalPages: Math.max(1, Math.ceil(totalItems / limit)),
+        },
+      };
+    }
+
+    const shopIds = Array.from(new Set(items.map((i) => i.shopId)));
+    // Only query buyer details for conversations where current user is the seller
+    const buyerIds = Array.from(
+      new Set(items.filter((i) => i.sellerId === userId).map((i) => i.buyerId)),
+    );
+
+    const [shops, buyers] = await Promise.all([
+      shopIds.length > 0
+        ? this.dataSource.getRepository(ShopEntity).find({
+            where: { id: In(shopIds) },
+            select: { id: true, name: true, slug: true, logoUrl: true },
+          })
+        : [],
+      buyerIds.length > 0
+        ? this.dataSource.getRepository(UserEntity).find({
+            where: { id: In(buyerIds) },
+            select: { id: true, fullName: true, avatarUrl: true },
+          })
+        : [],
+    ]);
+
+    const shopMap = new Map(shops.map((s) => [s.id, s]));
+    const buyerMap = new Map(buyers.map((b) => [b.id, b]));
+
+    const responseItems: ChatConversationItemResponse[] = items.map((c) => {
+      const isBuyer = c.buyerId === userId;
+      const myUnreadCount = isBuyer ? c.buyerUnreadCount : c.sellerUnreadCount;
+
+      const shopEntity = shopMap.get(c.shopId);
+      const shop: ChatShopSummary | null = shopEntity
+        ? {
+            name: shopEntity.name,
+            slug: shopEntity.slug,
+            logoUrl: shopEntity.logoUrl ?? null,
+          }
+        : null;
+
+      const buyerEntity = !isBuyer ? buyerMap.get(c.buyerId) : null;
+      const buyer: ChatBuyerSummary | null = buyerEntity
+        ? {
+            fullName: buyerEntity.fullName,
+            avatarUrl: buyerEntity.avatarUrl ?? null,
+          }
+        : null;
+
+      return {
+        id: c.id,
+        shopId: c.shopId,
+        shop,
+        buyer,
+        lastMessagePreview: c.lastMessagePreview ?? null,
+        lastMessageAt: c.lastMessageAt ?? null,
+        myUnreadCount: myUnreadCount ?? 0,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      };
+    });
+
+    return {
+      items: responseItems,
+      meta: {
+        page,
+        limit,
+        totalItems,
+        totalPages: Math.max(1, Math.ceil(totalItems / limit)),
+      },
+    };
   }
 
   async history(
@@ -254,11 +386,18 @@ export class ChatService {
           Buffer.from(query.cursor, 'base64url').toString(),
         ) as typeof parsed;
       } catch {
-        throw new BadRequestException('Invalid cursor');
+        throw new BadRequestException({
+          errorCode: 'CHAT_INVALID_CURSOR',
+          message: 'Invalid cursor',
+        });
       }
       const date = new Date(parsed.createdAt);
-      if (!isUUID(parsed.id) || Number.isNaN(date.valueOf()))
-        throw new BadRequestException('Invalid cursor');
+      if (!isUUID(parsed.id) || Number.isNaN(date.valueOf())) {
+        throw new BadRequestException({
+          errorCode: 'CHAT_INVALID_CURSOR',
+          message: 'Invalid cursor',
+        });
+      }
       qb.andWhere(
         new Brackets((x) =>
           x
@@ -297,15 +436,23 @@ export class ChatService {
       !image ||
       image.size > MAX_IMAGE_FILE_SIZE ||
       !ALLOWED_IMAGE_MIME_TYPES.includes(image.mimeType as never)
-    )
-      throw new BadRequestException('Invalid image');
+    ) {
+      throw new BadRequestException({
+        errorCode: 'CHAT_IMAGE_INVALID',
+        message: 'Invalid image',
+      });
+    }
     if (
       !this.storagePrefix.startsWith('http') ||
       !image.url.startsWith(this.storagePrefix) ||
       image.url !== `${this.storagePrefix}${image.key}` ||
       !image.key.startsWith('chat/')
-    )
-      throw new BadRequestException('Image is not from Nexus chat storage');
+    ) {
+      throw new BadRequestException({
+        errorCode: 'CHAT_IMAGE_INVALID',
+        message: 'Image is not from Nexus chat storage',
+      });
+    }
   }
 
   async send(
@@ -315,15 +462,24 @@ export class ChatService {
   ): Promise<{ message: ChatMessageEntity; duplicate: boolean }> {
     if (dto.type === 'TEXT') {
       dto.text = dto.text?.trim();
-      if (!dto.text) throw new BadRequestException('Message text is required');
+      if (!dto.text) {
+        throw new BadRequestException({
+          errorCode: 'CHAT_TEXT_REQUIRED',
+          message: 'Message text is required',
+        });
+      }
     }
     if (dto.type === 'IMAGE') this.validateImage(dto);
     const existing = await this.messages.findOne({
       where: { senderId: userId, clientMessageId: dto.clientMessageId },
     });
     if (existing) {
-      if (existing.conversationId !== id)
-        throw new ConflictException('clientMessageId already used');
+      if (existing.conversationId !== id) {
+        throw new ConflictException({
+          errorCode: 'CHAT_CLIENT_ID_CONFLICT',
+          message: 'clientMessageId already used',
+        });
+      }
       return { message: existing, duplicate: true };
     }
     try {
@@ -334,8 +490,23 @@ export class ChatService {
           .setLock('pessimistic_write')
           .where('c.id = :id', { id })
           .getOne();
-        if (!c) throw new NotFoundException('Conversation not found');
+        if (!c) {
+          throw new NotFoundException({
+            errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+            message: 'Conversation not found',
+          });
+        }
         const role = this.member(c, userId);
+        const shop = await manager.getRepository(ShopEntity).findOne({
+          where: { id: c.shopId, deletedAt: IsNull() },
+          select: { id: true, status: true },
+        });
+        if (!shop || shop.status !== 'ACTIVE') {
+          throw new ForbiddenException({
+            errorCode: 'CHAT_SHOP_UNAVAILABLE',
+            message: 'Shop is currently unavailable',
+          });
+        }
         const message = await manager.getRepository(ChatMessageEntity).save({
           conversationId: id,
           senderId: userId,
@@ -363,14 +534,19 @@ export class ChatService {
         return { message, recipientId };
       });
       this.events.emit(result.recipientId, 'message:new', result.message);
+      this.events.emit(userId, 'message:new', result.message);
       return { message: result.message, duplicate: false };
     } catch (error) {
       if ((error as { code?: string }).code !== '23505') throw error;
       const message = await this.messages.findOne({
         where: { senderId: userId, clientMessageId: dto.clientMessageId },
       });
-      if (!message || message.conversationId !== id)
-        throw new ConflictException('clientMessageId already used');
+      if (!message || message.conversationId !== id) {
+        throw new ConflictException({
+          errorCode: 'CHAT_CLIENT_ID_CONFLICT',
+          message: 'clientMessageId already used',
+        });
+      }
       return { message, duplicate: true };
     }
   }
@@ -387,7 +563,12 @@ export class ChatService {
         .setLock('pessimistic_write')
         .where('conversation.id = :id', { id })
         .getOne();
-      if (!c) throw new NotFoundException('Conversation not found');
+      if (!c) {
+        throw new NotFoundException({
+          errorCode: 'CHAT_CONVERSATION_NOT_FOUND',
+          message: 'Conversation not found',
+        });
+      }
       const role = this.member(c, userId);
       const update = await manager.getRepository(ChatMessageEntity).update(
         {
@@ -409,11 +590,13 @@ export class ChatService {
         counterpart: role === 'BUYER' ? c.sellerId : c.buyerId,
       };
     });
-    this.events.emit(result.counterpart, 'message:read', {
+    const readPayload = {
       conversationId: id,
       userId,
       readAt,
-    });
+    };
+    this.events.emit(result.counterpart, 'message:read', readPayload);
+    this.events.emit(userId, 'message:read', readPayload);
     return { readAt, updated: result.updated };
   }
 
