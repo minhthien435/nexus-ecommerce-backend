@@ -135,6 +135,38 @@ describe('DefaultAiUiActionGuard', () => {
       shopSlug: 'official-tech-shop',
     });
   });
+
+  it('validates optional slugs on SHOW_PRODUCTS', async () => {
+    expect(
+      await guard.verifyAndBuildAction(
+        {
+          name: 'ui_action',
+          args: { type: 'SHOW_PRODUCTS', slugs: ['ao-hoodie-ni-xam-oversize'] },
+        },
+        observedProducts,
+      ),
+    ).toEqual({ type: 'SHOW_PRODUCTS' });
+
+    expect(
+      await guard.verifyAndBuildAction(
+        {
+          name: 'ui_action',
+          args: { type: 'SHOW_PRODUCTS', slugs: ['khong-ton-tai'] },
+        },
+        observedProducts,
+      ),
+    ).toBeNull();
+
+    expect(
+      await guard.verifyAndBuildAction(
+        {
+          name: 'ui_action',
+          args: { type: 'SHOW_PRODUCTS', slugs: [] },
+        },
+        observedProducts,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('PlaceholderAiModelClient', () => {

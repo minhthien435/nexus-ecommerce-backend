@@ -27,6 +27,7 @@ import { AiSessionService } from './ai-session.service.js';
 
 const MAX_MESSAGE_LENGTH = 1000;
 const MAX_PRODUCTS_RETURNED = 5;
+const MAX_OBSERVED_PRODUCTS = 20;
 const MAX_SUGGESTIONS_RETURNED = 3;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -136,8 +137,11 @@ export class AiAgentService {
     const allowedShopSlugs = new Set<string>();
     const toolRoundMessages: AiToolRoundMessage[] = [];
     let verifiedAction: AiUiAction | null = null;
+    let selectedProductSlugs: string[] | null = null;
+    let suppressProducts = false;
     let latestSuggestions: string[] = [];
     let finalReply = '';
+    let finalProducts: AiProductCard[] = [];
 
     try {
       for (let round = 0; round < this.maxToolRounds; round++) {
@@ -180,7 +184,14 @@ export class AiAgentService {
           const dataResults = await Promise.all(
             dataCalls.map(async (call) => {
               const execution = await this.safeExecuteTool(call, context);
-              this.mergeProducts(observedProducts, execution.products ?? []);
+              const addedCount = this.mergeProducts(
+                observedProducts,
+                execution.products ?? [],
+              );
+              if (addedCount > 0) {
+                selectedProductSlugs = null;
+                suppressProducts = false;
+              }
               for (const shopSlug of execution.observedShopSlugs ?? []) {
                 const normalizedShop = shopSlug?.trim().toLowerCase();
                 if (normalizedShop) allowedShopSlugs.add(normalizedShop);
@@ -205,8 +216,33 @@ export class AiAgentService {
               userMessage: effectiveMessage,
             },
           );
+          if (this.isEmptyShowProductsSelection(uiCall)) {
+            suppressProducts = true;
+            selectedProductSlugs = [];
+            if (verifiedAction?.type === 'SHOW_PRODUCTS') {
+              verifiedAction = null;
+            }
+            resultMap.set(uiCall, {
+              name: uiCall.name,
+              response: { accepted: true, shownCount: 0, action: null },
+            });
+            continue;
+          }
           if (action) {
             verifiedAction = action;
+            if (
+              action.type === 'SHOW_PRODUCTS' &&
+              Array.isArray(uiCall.args?.slugs)
+            ) {
+              const matchedSlugs = this.matchObservedSlugs(
+                uiCall.args.slugs,
+                observedProducts,
+              );
+              if (matchedSlugs.length > 0) {
+                selectedProductSlugs = matchedSlugs;
+                suppressProducts = false;
+              }
+            }
           }
           resultMap.set(uiCall, {
             name: uiCall.name,
@@ -242,8 +278,14 @@ export class AiAgentService {
         }
       }
 
+      finalProducts = this.resolveFinalProducts(
+        observedProducts,
+        selectedProductSlugs,
+        suppressProducts,
+      );
+
       if (!finalReply) {
-        finalReply = this.synthesizeMaxRoundReply(observedProducts);
+        finalReply = this.synthesizeMaxRoundReply(finalProducts);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -260,7 +302,6 @@ export class AiAgentService {
       });
     }
 
-    const finalProducts = observedProducts.slice(0, MAX_PRODUCTS_RETURNED);
     if (!verifiedAction && finalProducts.length > 0) {
       verifiedAction = { type: 'SHOW_PRODUCTS' };
     }
@@ -325,16 +366,69 @@ export class AiAgentService {
   private mergeProducts(
     target: AiProductCard[],
     incoming: AiProductCard[],
-  ): void {
+  ): number {
+    let added = 0;
     const seen = new Set(target.map((p) => p.slug.toLowerCase()));
     for (const product of incoming) {
       if (!product?.slug) continue;
+      if (target.length >= MAX_OBSERVED_PRODUCTS) break;
       const key = product.slug.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       target.push(this.sanitizeProductCard(product));
-      if (target.length >= MAX_PRODUCTS_RETURNED) break;
+      added++;
     }
+    return added;
+  }
+
+  private isEmptyShowProductsSelection(uiCall: AiFunctionCall): boolean {
+    const rawType =
+      typeof uiCall.args?.type === 'string'
+        ? uiCall.args.type.trim().toUpperCase()
+        : '';
+    return (
+      rawType === 'SHOW_PRODUCTS' &&
+      Array.isArray(uiCall.args?.slugs) &&
+      uiCall.args.slugs.length === 0
+    );
+  }
+
+  private matchObservedSlugs(
+    rawSlugs: unknown[],
+    observedProducts: readonly AiProductCard[],
+  ): string[] {
+    const bySlug = new Map(
+      observedProducts.map((p) => [p.slug.trim().toLowerCase(), p.slug]),
+    );
+    const matched: string[] = [];
+    const seen = new Set<string>();
+    for (const item of rawSlugs) {
+      if (typeof item !== 'string') continue;
+      const canonical = bySlug.get(item.trim().toLowerCase());
+      if (!canonical || seen.has(canonical)) continue;
+      seen.add(canonical);
+      matched.push(canonical);
+      if (matched.length >= MAX_PRODUCTS_RETURNED) break;
+    }
+    return matched;
+  }
+
+  private resolveFinalProducts(
+    observedProducts: readonly AiProductCard[],
+    selectedSlugs: readonly string[] | null,
+    suppressProducts: boolean,
+  ): AiProductCard[] {
+    if (suppressProducts) return [];
+    if (selectedSlugs && selectedSlugs.length > 0) {
+      const bySlug = new Map(
+        observedProducts.map((p) => [p.slug.toLowerCase(), p]),
+      );
+      return selectedSlugs
+        .map((slug) => bySlug.get(slug.toLowerCase()))
+        .filter((p): p is AiProductCard => Boolean(p))
+        .slice(0, MAX_PRODUCTS_RETURNED);
+    }
+    return observedProducts.slice(0, MAX_PRODUCTS_RETURNED);
   }
 
   private sanitizeProductCard(product: AiProductCard): AiProductCard {

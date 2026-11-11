@@ -40,6 +40,8 @@ export type AiProduct = {
 
 @Injectable()
 export class SearchProductsTool {
+  private unaccentSupport: Promise<boolean> | undefined;
+
   constructor(
     @Inject(ProductSearchService)
     private readonly catalog: ProductSearchService,
@@ -112,7 +114,11 @@ export class SearchProductsTool {
     }
     const page = await this.catalog.search(query, { activeShopOnly: true });
     const candidates = page.items.slice(0, query.limit);
-    if (!candidates.length) return [];
+    if (!candidates.length) {
+      const tokens = this.tokenizeKeyword(query.keyword);
+      if (tokens.length < 2) return [];
+      return this.searchByTokens(query, tokens);
+    }
     // Recheck cached catalog results against current DB state; never expose internal IDs.
     const rows = await this.dataSource.query<
       Array<AiProduct & { unitsSold: string | number }>
@@ -146,6 +152,116 @@ export class SearchProductsTool {
         query.maxPrice ?? null,
       ],
     );
+    return this.mapProductRows(rows);
+  }
+
+  private async searchByTokens(
+    query: SearchProductsQueryDto,
+    tokens: string[],
+  ): Promise<AiProduct[]> {
+    const useUnaccent = await this.hasUnaccent();
+    const searchableExpr = useUnaccent
+      ? `unaccent(lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, '')))`
+      : `lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, ''))`;
+    const nameExpr = useUnaccent ? `unaccent(lower(p.name))` : `lower(p.name)`;
+    const paramOffset = 5;
+    const tokenConditions = tokens
+      .map((_, i) => {
+        const param = `$${paramOffset + i}`;
+        const patternExpr = useUnaccent
+          ? `unaccent(lower(${param}))`
+          : `lower(${param})`;
+        return `${searchableExpr} LIKE ${patternExpr} ESCAPE '\\'`;
+      })
+      .join(' AND ');
+    const nameMatchScore = tokens
+      .map((_, i) => {
+        const param = `$${paramOffset + i}`;
+        const patternExpr = useUnaccent
+          ? `unaccent(lower(${param}))`
+          : `lower(${param})`;
+        return `CASE WHEN ${nameExpr} LIKE ${patternExpr} ESCAPE '\\' THEN 1 ELSE 0 END`;
+      })
+      .join(' + ');
+    const tieBreakSort =
+      query.sort === 'price_asc'
+        ? 'sku.price ASC, p.id ASC'
+        : query.sort === 'price_desc'
+          ? 'sku.price DESC, p.id ASC'
+          : 'p.created_at DESC, p.id ASC';
+
+    const rows = await this.dataSource.query<
+      Array<AiProduct & { unitsSold: string | number }>
+    >(
+      `WITH RECURSIVE category_tree AS (
+        SELECT id FROM catalog.categories
+         WHERE id = $1::uuid AND is_active = true AND deleted_at IS NULL
+        UNION ALL
+        SELECT child.id FROM catalog.categories child
+        JOIN category_tree parent ON child.parent_id = parent.id
+         WHERE child.is_active = true AND child.deleted_at IS NULL
+      )
+      SELECT p.slug, p.name, image.url AS "imageUrl", sku.price::text AS "minPrice",
+             sku.original_price::text AS "originalPrice",
+             COALESCE(sold.units_sold, 0)::text AS "unitsSold",
+             json_build_object('name', shop.name, 'slug', shop.slug) AS shop
+        FROM catalog.products p
+        JOIN identity.shops shop
+          ON (shop.id = p.shop_id OR (p.shop_id IS NULL AND shop.seller_id = p.seller_id))
+         AND shop.status = 'ACTIVE' AND shop.deleted_at IS NULL
+        JOIN LATERAL (
+          SELECT s.id, s.price, s.original_price
+            FROM catalog.product_skus s
+            JOIN fulfillment.inventory_items i ON i.sku_id = s.id
+            JOIN fulfillment.warehouses w
+              ON w.id = i.warehouse_id
+             AND w.is_default = true
+             AND w.is_active = true
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM fulfillment.warehouses other
+                WHERE other.is_default = true
+                  AND other.is_active = true
+                  AND other.id <> w.id
+             )
+           WHERE s.product_id = p.id
+             AND s.is_active = true
+           GROUP BY s.id
+          HAVING SUM(i.available_qty) > 0
+           ORDER BY s.price ASC, s.id ASC
+           LIMIT 1
+        ) sku ON true
+        LEFT JOIN LATERAL (
+          SELECT i.url FROM catalog.product_images i WHERE i.product_id = p.id
+          ORDER BY i.is_primary DESC, i.sort_order ASC, i.id ASC LIMIT 1
+        ) image ON true
+        LEFT JOIN LATERAL (
+          SELECT SUM(oi.quantity) AS units_sold FROM commerce.order_items oi
+          JOIN commerce.orders o ON o.id = oi.order_id
+          WHERE oi.product_id = p.id AND o.status IN ('PAID','PROCESSING','SHIPPED','DELIVERED','COMPLETED')
+        ) sold ON true
+       WHERE p.status = 'ACTIVE' AND p.deleted_at IS NULL
+         AND ($1::uuid IS NULL OR p.category_id IN (SELECT id FROM category_tree))
+         AND ($2::numeric IS NULL OR sku.price >= $2)
+         AND ($3::numeric IS NULL OR sku.price <= $3)
+         AND ${tokenConditions}
+       ORDER BY (${nameMatchScore}) DESC, ${tieBreakSort}
+       LIMIT $4`,
+      [
+        query.categoryId ?? null,
+        query.minPrice ?? null,
+        query.maxPrice ?? null,
+        query.limit,
+        ...tokens.map((token) => `%${this.escapeLike(token)}%`),
+      ],
+    );
+    return this.mapProductRows(rows);
+  }
+
+  private mapProductRows(
+    rows: Array<AiProduct & { unitsSold: string | number }> | undefined,
+  ): AiProduct[] {
+    if (!Array.isArray(rows)) return [];
     return rows.map((row) => ({
       slug: row.slug,
       name: row.name,
@@ -155,5 +271,40 @@ export class SearchProductsTool {
       unitsSold: Number(row.unitsSold),
       shop: row.shop,
     }));
+  }
+
+  private tokenizeKeyword(keyword: string): string[] {
+    const rawTokens = keyword
+      .trim()
+      .split(/[\s,.;:/\\|+-]+/)
+      .map((part) => part.trim())
+      .filter((part) => /[\p{L}\p{N}]/u.test(part));
+    const unique: string[] = [];
+    const seen = new Set<string>();
+    for (const token of rawTokens) {
+      const normalized = token.toLowerCase();
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      unique.push(token);
+      if (unique.length >= 6) break;
+    }
+    return unique;
+  }
+
+  private escapeLike(value: string): string {
+    return value
+      .replaceAll('\\', '\\\\')
+      .replaceAll('%', '\\%')
+      .replaceAll('_', '\\_');
+  }
+
+  private async hasUnaccent(): Promise<boolean> {
+    this.unaccentSupport ??= this.dataSource
+      .query<Array<{ available: boolean }>>(
+        `SELECT to_regprocedure('unaccent(text)') IS NOT NULL AS available`,
+      )
+      .then((rows) => Array.isArray(rows) && rows[0]?.available === true)
+      .catch(() => false);
+    return this.unaccentSupport;
   }
 }

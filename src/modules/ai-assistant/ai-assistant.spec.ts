@@ -144,6 +144,24 @@ describe('grounded tools', () => {
     );
     query.mockResolvedValueOnce([]); // no eligible active shop after authoritative recheck
     expect(await tool.execute({ query: 'shoe' })).toEqual([]);
+
+    // Falls back to multi-token AND search when exact multi-word phrase misses
+    search.mockResolvedValueOnce({ items: [] });
+    query
+      .mockResolvedValueOnce([{ available: true }])
+      .mockResolvedValueOnce([{ ...product, unitsSold: '2' }]);
+    expect(await tool.execute({ query: 'dice pokemon' })).toEqual([product]);
+    expect(query.mock.calls.at(-1)?.[0]).toContain(
+      "shop.status = 'ACTIVE' AND shop.deleted_at IS NULL",
+    );
+    expect(query.mock.calls.at(-1)?.[1]).toEqual([
+      null,
+      null,
+      null,
+      5,
+      '%dice%',
+      '%pokemon%',
+    ]);
     for (const args of [
       { limit: 6 },
       { userId: sessionId },
@@ -217,6 +235,19 @@ describe('grounded tools', () => {
     expect(handler.execute({ type: 'SHOW_PRODUCTS' }, [product])).toEqual({
       type: 'SHOW_PRODUCTS',
     });
+    expect(
+      handler.execute({ type: 'SHOW_PRODUCTS', slugs: [product.slug] }, [
+        product,
+      ]),
+    ).toEqual({ type: 'SHOW_PRODUCTS' });
+    expect(
+      handler.execute({ type: 'SHOW_PRODUCTS', slugs: ['hallucinated-slug'] }, [
+        product,
+      ]),
+    ).toBeNull();
+    expect(
+      handler.execute({ type: 'SHOW_PRODUCTS', slugs: [] }, [product]),
+    ).toBeNull();
     expect(handler.execute({ type: 'SHOW_PRODUCTS' }, [])).toBeNull();
     expect(
       handler.execute({ type: 'OPEN_SEARCH', searchQuery: 'shoe & bag' }, []),

@@ -423,4 +423,89 @@ describe('AiAgentService', () => {
       }),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
+
+  it('filters returned product cards using SHOW_PRODUCTS slugs and supports empty selection', async () => {
+    const diceProduct: AiProductCard = {
+      slug: 'bo-xuc-xac-pokemon',
+      name: 'Bộ xúc xắc Pokémon',
+      minPrice: '320000.00',
+      originalPrice: null,
+      imageUrl: null,
+      shop: { name: 'Shop Pokemon', slug: 'shop-pokemon' },
+    };
+    const playmatProduct: AiProductCard = {
+      slug: 'tham-dau-pokemon',
+      name: 'Thảm đấu Pokémon',
+      minPrice: '490000.00',
+      originalPrice: null,
+      imageUrl: null,
+      shop: { name: 'Shop Pokemon', slug: 'shop-pokemon' },
+    };
+
+    const { agent, modelClient, toolExecutor } = createAgentContext();
+    modelClient.generateTurn
+      .mockResolvedValueOnce({
+        text: '',
+        functionCalls: [
+          { name: 'search_products', args: { query: 'pokemon' } },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: 'Mình tìm thấy đúng bộ xúc xắc Pokémon khớp với ảnh của bạn.',
+        functionCalls: [
+          {
+            name: 'ui_action',
+            args: {
+              type: 'SHOW_PRODUCTS',
+              slugs: ['bo-xuc-xac-pokemon', 'hallucinated-slug'],
+            },
+          },
+        ],
+      });
+    toolExecutor.execute.mockResolvedValueOnce({
+      toolResult: { items: [diceProduct, playmatProduct] },
+      products: [diceProduct, playmatProduct],
+    });
+
+    const filteredResult = await agent.chat({
+      sessionId: 'sess-filter',
+      message: 'Tìm sản phẩm giống ảnh',
+      requesterKey: '127.0.0.1',
+      isAuthenticated: false,
+    });
+
+    expect(filteredResult.products).toEqual([diceProduct]);
+    expect(filteredResult.action).toEqual({ type: 'SHOW_PRODUCTS' });
+
+    modelClient.generateTurn
+      .mockResolvedValueOnce({
+        text: '',
+        functionCalls: [
+          { name: 'search_products', args: { query: 'pokemon' } },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: 'Xin lỗi, Nexus chưa có gấu bông Pokémon như trong ảnh.',
+        functionCalls: [
+          {
+            name: 'ui_action',
+            args: { type: 'SHOW_PRODUCTS', slugs: [] },
+          },
+        ],
+      });
+    toolExecutor.execute.mockResolvedValueOnce({
+      toolResult: { items: [diceProduct, playmatProduct] },
+      products: [diceProduct, playmatProduct],
+    });
+
+    const emptySelectionResult = await agent.chat({
+      sessionId: 'sess-empty-filter',
+      message: 'Tìm gấu bông giống ảnh',
+      requesterKey: '127.0.0.1',
+      isAuthenticated: false,
+    });
+
+    expect(emptySelectionResult.products).toEqual([]);
+    expect(emptySelectionResult.action).toBeNull();
+  });
 });

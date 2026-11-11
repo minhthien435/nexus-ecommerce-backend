@@ -16,6 +16,13 @@ export const UI_ACTION_DECLARATION: FunctionDeclaration = {
         enum: ['SHOW_PRODUCTS', 'NAVIGATE', 'OPEN_SEARCH', 'HANDOFF_TO_SHOP'],
       },
       slug: { type: 'string' },
+      slugs: {
+        type: 'array',
+        maxItems: 5,
+        items: { type: 'string', maxLength: 200 },
+        description:
+          'For SHOW_PRODUCTS: optional list of exact product slugs from tool results that truly match the user request or image (pass [] if none match).',
+      },
       searchQuery: { type: 'string', maxLength: 200 },
       shopSlug: { type: 'string' },
       productSlug: { type: 'string' },
@@ -48,16 +55,34 @@ export class UiActionHandler {
       const args = strictObject(value, [
         'type',
         'slug',
+        'slugs',
         'searchQuery',
         'shopSlug',
         'productSlug',
       ]);
-      if (
-        args.type === 'SHOW_PRODUCTS' &&
-        Object.keys(args).length === 1 &&
-        products.length
-      )
-        return { type: 'SHOW_PRODUCTS' };
+      if (args.type === 'SHOW_PRODUCTS') {
+        if (args.slugs === undefined) {
+          return Object.keys(args).length === 1 && products.length
+            ? { type: 'SHOW_PRODUCTS' }
+            : null;
+        }
+        if (
+          !Object.keys(args).every((key) => ['type', 'slugs'].includes(key)) ||
+          !Array.isArray(args.slugs) ||
+          args.slugs.length > 5 ||
+          !args.slugs.every(
+            (slug) =>
+              typeof slug === 'string' &&
+              /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug),
+          )
+        ) {
+          return null;
+        }
+        const validSlugs = new Set(products.map((product) => product.slug));
+        return args.slugs.some((slug) => validSlugs.has(slug))
+          ? { type: 'SHOW_PRODUCTS' }
+          : null;
+      }
       if (
         args.type === 'OPEN_SEARCH' &&
         Object.keys(args).every((key) => ['type', 'searchQuery'].includes(key))
