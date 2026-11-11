@@ -140,7 +140,10 @@ export class ProductSearchService {
     private readonly cache: CatalogCacheService,
   ) {}
 
-  async search(query: SearchProductsQueryDto): Promise<ProductSearchPage> {
+  async search(
+    query: SearchProductsQueryDto,
+    options: { activeShopOnly?: boolean } = {},
+  ): Promise<ProductSearchPage> {
     if (
       query.minPrice !== undefined &&
       query.maxPrice !== undefined &&
@@ -151,15 +154,21 @@ export class ProductSearchService {
       );
     }
 
-    const normalized = this.normalizeQuery(query);
+    const normalized = this.normalizeQuery(
+      query,
+      options.activeShopOnly === true,
+    );
     const cacheKey = this.cache.searchKey(normalized);
-    const cached = await this.cache.get<ProductSearchPage>(cacheKey);
+    // AI needs current shop eligibility before pagination, even after a shop closes.
+    const cached = options.activeShopOnly
+      ? null
+      : await this.cache.get<ProductSearchPage>(cacheKey);
     if (cached) return cached;
 
     const useUnaccent =
       Boolean(normalized.keyword) && (await this.hasUnaccent());
     const result = await this.runSearch(normalized, useUnaccent);
-    await this.cache.set(cacheKey, result);
+    if (!options.activeShopOnly) await this.cache.set(cacheKey, result);
     return result;
   }
 
@@ -360,7 +369,15 @@ export class ProductSearchService {
     const textExpression = useUnaccent
       ? `unaccent(lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, ''))) LIKE unaccent(lower($2)) ESCAPE '\\'`
       : `lower(p.name || ' ' || COALESCE(p.brand, '') || ' ' || COALESCE(p.description, '')) LIKE lower($2) ESCAPE '\\'`;
+    const activeShopFilter = query.activeShopOnly
+      ? `AND EXISTS (
+        SELECT 1 FROM identity.shops ai_shop
+        WHERE (ai_shop.id = p.shop_id OR (p.shop_id IS NULL AND ai_shop.seller_id = p.seller_id))
+          AND ai_shop.status = 'ACTIVE' AND ai_shop.deleted_at IS NULL
+      )`
+      : '';
     const where = `p.status = 'ACTIVE'
+      ${activeShopFilter}
       AND p.deleted_at IS NULL
       AND ($1::uuid IS NULL OR p.category_id IN (SELECT id FROM category_tree))
       AND ($2::text IS NULL OR ${textExpression})
@@ -499,8 +516,12 @@ export class ProductSearchService {
     };
   }
 
-  private normalizeQuery(query: SearchProductsQueryDto) {
+  private normalizeQuery(
+    query: SearchProductsQueryDto,
+    activeShopOnly = false,
+  ) {
     return {
+      ...(activeShopOnly ? { activeShopOnly: true } : {}),
       keyword: query.keyword || null,
       categoryId: query.categoryId || null,
       minPrice: query.minPrice ?? null,
