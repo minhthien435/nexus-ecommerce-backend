@@ -37,6 +37,7 @@ import {
   ToolExecutorService,
   type AiToolTurn,
 } from '../tools/tool-executor.service.js';
+import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 import { TRACK_MY_ORDER_DECLARATION } from '../tools/track-my-order.tool.js';
 import {
   UI_ACTION_DECLARATION,
@@ -286,6 +287,9 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
     ];
     if (options.isAuthenticated) {
       declarations.push(TRACK_MY_ORDER_DECLARATION);
+    }
+    if (this.readTools) {
+      declarations.push(...AI_READ_DECLARATIONS);
     }
     return declarations
       .filter((decl) => Boolean(decl.name))

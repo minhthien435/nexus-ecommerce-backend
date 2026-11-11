@@ -204,12 +204,19 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
       expect(geminiGenerate.mock.calls[1][0].contents).toEqual(
         expect.arrayContaining([round1Content]),
       );
-      // Guest declarations must NOT include track_my_order or unimplemented read tools
+      // Guest declarations omit track_my_order but include the registered read tools.
       const declaredNames =
         geminiGenerate.mock.calls[0][0].config.tools[0].functionDeclarations.map(
           (d: { name: string }) => d.name,
         );
-      expect(declaredNames).toEqual(['search_products', 'ui_action']);
+      expect(declaredNames).toEqual([
+        'search_products',
+        'ui_action',
+        'get_product_detail',
+        'get_trending_products',
+        'compare_products',
+        'get_price_insight',
+      ]);
 
       // 2) User explicitly asks to open product -> NAVIGATE allowed
       geminiGenerate
@@ -319,6 +326,10 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'search_products',
         'ui_action',
         'track_my_order',
+        'get_product_detail',
+        'get_trending_products',
+        'compare_products',
+        'get_price_insight',
       ]);
 
       // Missing API key degrades cleanly to 503 AI_UNAVAILABLE
@@ -403,6 +414,11 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         .mockResolvedValueOnce(null),
     };
     const adapter = new ToolExecutorAdapter(toolExecutor as never);
+
+    expect(adapter.getDeclarations({ isAuthenticated: false })).toEqual([
+      expect.objectContaining({ name: 'search_products' }),
+      expect.objectContaining({ name: 'ui_action' }),
+    ]);
 
     const searchOut = await adapter.execute(
       { name: 'search_products', args: { query: 'polo' } },
