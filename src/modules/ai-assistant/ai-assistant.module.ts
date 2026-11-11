@@ -24,6 +24,10 @@ import {
 } from './services/gemini-client.service.js';
 import { SearchProductsTool } from './tools/search-products.tool.js';
 import { UiActionHandler } from './tools/ui-action.handler.js';
+import { AiReadTools } from './tools/tool-executor.service.js';
+import { AiReadToolsService } from './tools/ai-read-tools.service.js';
+import { TrendingProductsQuery } from './queries/trending-products.query.js';
+import { AiCacheService } from './services/ai-cache.service.js';
 
 export interface AiAssistantRegistration {
   orchestrator: Provider<AiOrchestrator>;
@@ -73,6 +77,10 @@ export class AiAssistantModule {
         { provide: GeminiTransport, useClass: GoogleGeminiTransport },
         SearchProductsTool,
         UiActionHandler,
+        TrendingProductsQuery,
+        AiCacheService,
+        AiReadToolsService,
+        { provide: AiReadTools, useExisting: AiReadToolsService },
         ...(options.providers ?? []),
         options.orchestrator,
         options.accessPolicy,
@@ -84,6 +92,7 @@ export class AiAssistantModule {
         AiImageService,
         SearchProductsTool,
         UiActionHandler,
+        AiReadTools,
       ],
     };
   }
