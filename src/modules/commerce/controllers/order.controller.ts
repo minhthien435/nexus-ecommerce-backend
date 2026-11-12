@@ -81,11 +81,14 @@ export class OrderController {
     @Param('id') orderReference: string,
   ) {
     const result = await this.orderService.getOrderById(userId, orderReference);
+    const refund = this.refundService
+      ? await this.refundService.getBuyerRefundForOrder(result.id)
+      : null;
     return {
       success: true as const,
       statusCode: HttpStatus.OK,
       message: 'Lấy chi tiết đơn hàng thành công',
-      data: result,
+      data: { ...result, refund },
     };
   }
 

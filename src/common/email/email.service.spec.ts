@@ -97,6 +97,56 @@ describe('EmailService', () => {
     );
   });
 
+  it('sends refund completion details without exposing the full account number', async () => {
+    mailMocks.sendMail.mockResolvedValue({ messageId: 'message-3' });
+    const service = createService();
+
+    await service.sendRefundCompleted({
+      recipient: 'buyer@example.com',
+      refundCode: 'REF-ORD-1',
+      amount: '150000.00',
+      currency: 'VND',
+      buyerBankName: 'Vietcombank',
+      accountLastFour: '6789',
+      bankReferenceCode: 'BANK-REF-1',
+      processedAt: new Date('2026-11-12T02:00:00.000Z'),
+    });
+
+    const mail = mailMocks.sendMail.mock.calls[0][0];
+    expect(mail).toEqual(
+      expect.objectContaining({
+        to: 'buyer@example.com',
+        subject: expect.stringContaining('REF-ORD-1'),
+        text: expect.stringMatching(
+          /150000\.00 VND[\s\S]*Vietcombank[\s\S]*\*\*\*\*6789[\s\S]*BANK-REF-1[\s\S]*2026-11-12T02:00:00.000Z/,
+        ),
+      }),
+    );
+    expect(JSON.stringify(mail)).not.toContain('0123456789');
+  });
+
+  it('returns a sanitized service-unavailable error when refund email fails', async () => {
+    mailMocks.sendMail.mockRejectedValue(new Error('SMTP credential leaked'));
+    const service = createService();
+
+    await expect(
+      service.sendRefundCompleted({
+        recipient: 'buyer@example.com',
+        refundCode: 'REF-ORD-1',
+        amount: '150000.00',
+        currency: 'VND',
+        buyerBankName: 'Vietcombank',
+        accountLastFour: '6789',
+        bankReferenceCode: 'BANK-REF-1',
+        processedAt: new Date('2026-11-12T02:00:00.000Z'),
+      }),
+    ).rejects.toEqual(
+      new ServiceUnavailableException(
+        'Đã hoàn tất chuyển khoản nhưng không thể gửi email thông báo.',
+      ),
+    );
+  });
+
   it.each([
     ['SMTP_PORT', 'invalid', 'SMTP_PORT must be a valid TCP port'],
     ['SMTP_SECURE', 'sometimes', 'SMTP_SECURE must be true or false'],

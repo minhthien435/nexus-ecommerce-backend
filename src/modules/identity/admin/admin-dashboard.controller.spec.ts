@@ -8,6 +8,7 @@ import { ProductSkuEntity } from '../../catalog/domain/entities/product-sku.enti
 import { CategoryEntity } from '../../catalog/domain/entities/category.entity.js';
 import { InventoryItemEntity } from '../../fulfillment/domain/entities/inventory-item.entity.js';
 import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
+import { OrderRefundEntity } from '../../commerce/domain/entities/order-refund.entity.js';
 
 describe('AdminDashboardController (TypeORM)', () => {
   let controller: AdminDashboardController;
@@ -19,6 +20,7 @@ describe('AdminDashboardController (TypeORM)', () => {
   let mockCategoryRepo: Record<string, any>;
   let mockInventoryRepo: Record<string, any>;
   let mockOrderRepo: Record<string, any>;
+  let mockRefundRepo: Record<string, any>;
   let mockUserRoleRepo: Record<string, any>;
 
   beforeEach(() => {
@@ -45,6 +47,9 @@ describe('AdminDashboardController (TypeORM)', () => {
       count: vi.fn(),
       createQueryBuilder: vi.fn(),
     };
+    mockRefundRepo = {
+      createQueryBuilder: vi.fn(),
+    };
     mockUserRoleRepo = {
       createQueryBuilder: vi.fn(),
     };
@@ -57,6 +62,7 @@ describe('AdminDashboardController (TypeORM)', () => {
         if (entity === CategoryEntity) return mockCategoryRepo;
         if (entity === InventoryItemEntity) return mockInventoryRepo;
         if (entity === OrderEntity) return mockOrderRepo;
+        if (entity === OrderRefundEntity) return mockRefundRepo;
         if (entity === UserRoleEntity) return mockUserRoleRepo;
         return {};
       }),
@@ -137,7 +143,8 @@ describe('AdminDashboardController (TypeORM)', () => {
       .mockResolvedValueOnce(40) // total
       .mockResolvedValueOnce(25) // successful
       .mockResolvedValueOnce(5) // pending
-      .mockResolvedValueOnce(10); // cancelled
+      .mockResolvedValueOnce(10) // cancelled
+      .mockResolvedValueOnce(3); // refunded
 
     const orderRevenueQb = {
       select: vi.fn().mockReturnThis(),
@@ -155,6 +162,15 @@ describe('AdminDashboardController (TypeORM)', () => {
         { method: 'STRIPE', count: 10, totalAmount: '7000000.00' },
       ]),
     };
+    const refundSummaryQb = {
+      select: vi.fn().mockReturnThis(),
+      addSelect: vi.fn().mockReturnThis(),
+      getRawOne: vi.fn().mockResolvedValueOnce({
+        refundedAmount: '1200000.00',
+        pendingRefundAmount: '350000.00',
+      }),
+    };
+    mockRefundRepo.createQueryBuilder.mockReturnValue(refundSummaryQb);
     const orderRecentOrdersQb = {
       leftJoin: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
@@ -200,6 +216,9 @@ describe('AdminDashboardController (TypeORM)', () => {
     expect(stats.overview.totalOrders).toBe(40);
     expect(stats.overview.successfulOrders).toBe(25);
     expect(stats.overview.totalRevenue).toBe('15000000.00');
+    expect(stats.overview.refundedAmount).toBe('1200000.00');
+    expect(stats.overview.pendingRefundAmount).toBe('350000.00');
+    expect(stats.overview.refundedOrders).toBe(3);
 
     expect(stats.paymentBreakdown).toHaveLength(2);
     expect(stats.paymentBreakdown[0]).toEqual({
@@ -226,6 +245,11 @@ describe('AdminDashboardController (TypeORM)', () => {
     mockCategoryRepo.count.mockResolvedValue(0);
     mockInventoryRepo.count.mockResolvedValue(0);
     mockOrderRepo.count.mockResolvedValue(0);
+    mockRefundRepo.createQueryBuilder.mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      addSelect: vi.fn().mockReturnThis(),
+      getRawOne: vi.fn().mockResolvedValue(null),
+    });
 
     const emptyQb = {
       leftJoin: vi.fn().mockReturnThis(),
@@ -252,6 +276,9 @@ describe('AdminDashboardController (TypeORM)', () => {
     expect(stats.overview.totalProducts).toBe(0);
     expect(stats.overview.totalOrders).toBe(0);
     expect(stats.overview.totalRevenue).toBe('0.00');
+    expect(stats.overview.refundedAmount).toBe('0.00');
+    expect(stats.overview.pendingRefundAmount).toBe('0.00');
+    expect(stats.overview.refundedOrders).toBe(0);
     expect(stats.paymentBreakdown).toEqual([]);
     expect(stats.recentUsers).toEqual([]);
     expect(stats.recentProducts).toEqual([]);

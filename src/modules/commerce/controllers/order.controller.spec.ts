@@ -2,6 +2,38 @@ import { describe, expect, it, vi } from 'vitest';
 import { OrderController } from './order.controller.js';
 
 describe('OrderController', () => {
+  it('adds a masked refund projection to buyer order detail', async () => {
+    const orderService = {
+      getOrderById: vi
+        .fn()
+        .mockResolvedValue({ id: 'order-1', status: 'REFUNDED' }),
+    };
+    const refundService = {
+      getBuyerRefundForOrder: vi.fn().mockResolvedValue({
+        refundCode: 'REF-ORD-1',
+        buyerAccountNumber: '******6789',
+      }),
+    };
+    const controller = new OrderController(
+      orderService as never,
+      refundService as never,
+    );
+
+    const result = await controller.getOrderById('buyer-1', 'order-1');
+
+    expect(refundService.getBuyerRefundForOrder).toHaveBeenCalledWith(
+      'order-1',
+    );
+    expect(result.data).toEqual({
+      id: 'order-1',
+      status: 'REFUNDED',
+      refund: {
+        refundCode: 'REF-ORD-1',
+        buyerAccountNumber: '******6789',
+      },
+    });
+  });
+
   it('calls orderService.confirmOrderDeliveryByBuyer on completeOrder and returns envelope', async () => {
     const orderService = {
       checkout: vi.fn(),

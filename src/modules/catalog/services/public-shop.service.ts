@@ -117,7 +117,7 @@ export class PublicShopService {
       LEFT JOIN LATERAL (
         SELECT COALESCE(SUM(oi.quantity), 0)::int AS sold_count
         FROM commerce.order_items oi JOIN commerce.orders o ON o.id = oi.order_id
-        WHERE oi.product_id = p.id AND o.status IN ('PAID','PROCESSING','SHIPPED','DELIVERED','COMPLETED','REFUND_REQUESTED','REFUNDED')
+        WHERE oi.product_id = p.id AND o.status IN ('PAID','PROCESSING','SHIPPED','DELIVERED','COMPLETED')
       ) sold ON true WHERE ${where}`;
     const [rows, countRows] = await Promise.all([
       this.dataSource.query(
