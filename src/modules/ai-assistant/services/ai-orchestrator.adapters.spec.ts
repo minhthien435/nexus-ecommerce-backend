@@ -464,4 +464,71 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
       'sys',
     );
   });
+
+  it('switches to GEMINI_FALLBACK_MODELS seamlessly during live multi-round tool calls', async () => {
+    const fallbackUserId = '22222222-2222-4222-8222-222222222222';
+    settings.GEMINI_MODEL = 'gemini-3.5-flash-lite';
+    settings.GEMINI_FALLBACK_MODELS = 'gemini-3.1-flash-lite,gemini-3.8-flash';
+    settings.GEMINI_FALLBACK_COOLDOWN_MS = '30000';
+
+    jwtVerifyAsync.mockResolvedValue({ sub: fallbackUserId, tokenVersion: 1 });
+    userFindOne.mockResolvedValue({ id: fallbackUserId, tokenVersion: 1 });
+    catalogSearch.mockResolvedValue({
+      items: [{ id: 'prod-1', defaultSkuId: 'sku-1' }],
+    });
+    dbQuery.mockResolvedValue([{ ...sampleProduct, unitsSold: '12' }]);
+
+    const round1Content = {
+      role: 'model',
+      parts: [
+        {
+          functionCall: {
+            id: 'fc-fb-1',
+            name: 'search_products',
+            args: { query: 'áo polo' },
+          },
+          thoughtSignature: 'sig-fb-1',
+        },
+      ],
+    };
+
+    geminiGenerate
+      // Round 1: primary fails 503, immediately switches to fallback #1
+      .mockRejectedValueOnce({ status: 503, message: 'model overloaded' })
+      .mockResolvedValueOnce({ candidates: [{ content: round1Content }] })
+      // Round 2: stays on healthy fallback #1 directly (primary in cooldown)
+      .mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  text: 'Mình tìm thấy Áo Polo Nexus giá 199.000đ cho bạn nhé!',
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+    const app = await createTestApp();
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/ai/chat')
+        .set('Authorization', 'Bearer fallback-user-token')
+        .send({ sessionId, message: 'Tìm áo polo giúp mình' })
+        .expect(200);
+
+      expect(res.body.data.products).toEqual([sampleProduct]);
+      expect(res.body.data.reply).toContain('Áo Polo Nexus');
+      expect(geminiGenerate.mock.calls.map((c) => c[0].model)).toEqual([
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+        'gemini-3.1-flash-lite',
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
 });

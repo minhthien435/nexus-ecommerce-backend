@@ -18,7 +18,10 @@ import { ProductSearchService } from '../catalog/services/product-search.service
 import { AiAssistantModule } from './ai-assistant.module.js';
 import { parseAiChat } from './dtos/ai-chat.dto.js';
 import { AiImageService, isPublicV4 } from './services/ai-image.service.js';
-import { GeminiClientService } from './services/gemini-client.service.js';
+import {
+  GeminiClientService,
+  resolveGeminiModels,
+} from './services/gemini-client.service.js';
 import {
   AiSampleOrchestrator,
   AI_DEMO_RESULT,
@@ -353,6 +356,176 @@ describe('Gemini', () => {
     await vi.runAllTimersAsync();
     await assertion;
     expect(generate).toHaveBeenCalledTimes(3);
+  });
+  it('resolves unique primary and fallback Gemini models cleanly', () => {
+    expect(
+      resolveGeminiModels(
+        new ConfigService({
+          GEMINI_MODEL: ' gemini-3.5-flash-lite ',
+          GEMINI_FALLBACK_MODELS:
+            'gemini-3.5-flash-lite, gemini-3.1-flash-lite, , gemini-3.8-flash, gemini-3.1-flash-lite',
+        }),
+      ),
+    ).toEqual([
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-3.8-flash',
+    ]);
+    expect(resolveGeminiModels(new ConfigService({}))).toEqual([]);
+  });
+  it('immediately switches across fallback models on 503/429/404/network without backoff delay', async () => {
+    const fallbackConfig = new ConfigService({
+      GEMINI_MODEL: 'primary-model',
+      GEMINI_FALLBACK_MODELS: 'fallback-1, fallback-2',
+      GEMINI_API_KEY: 'fake',
+      GEMINI_TIMEOUT_MS: '5000',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_STORAGE_BUCKET: 'media',
+    });
+    const generate = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 503, message: 'SECRET_OVERLOAD' })
+      .mockRejectedValueOnce({ status: 429, message: 'SECRET_QUOTA' })
+      .mockResolvedValueOnce({ text: 'fallback ok' });
+
+    const client = new GeminiClientService(
+      fallbackConfig,
+      { generate },
+      new AiImageService(fallbackConfig),
+    );
+    const result = await client.generate([]);
+
+    expect(result).toEqual({ text: 'fallback ok' });
+    expect(generate.mock.calls.map((c) => c[0].model)).toEqual([
+      'primary-model',
+      'fallback-1',
+      'fallback-2',
+    ]);
+
+    const networkGenerate = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 404 })
+      .mockRejectedValueOnce({ code: 'ECONNRESET' })
+      .mockResolvedValueOnce({ text: 'recovered' });
+    const client2 = new GeminiClientService(
+      fallbackConfig,
+      { generate: networkGenerate },
+      new AiImageService(fallbackConfig),
+    );
+    expect(await client2.generate([])).toEqual({ text: 'recovered' });
+    expect(networkGenerate.mock.calls.map((c) => c[0].model)).toEqual([
+      'primary-model',
+      'fallback-1',
+      'fallback-2',
+    ]);
+  });
+  it('prioritizes healthy fallback models during cooldown and recovers after expiry', async () => {
+    vi.useFakeTimers();
+    const fallbackConfig = new ConfigService({
+      GEMINI_MODEL: 'primary-model',
+      GEMINI_FALLBACK_MODELS: 'fallback-1',
+      GEMINI_FALLBACK_COOLDOWN_MS: '5000',
+      GEMINI_API_KEY: 'fake',
+      GEMINI_TIMEOUT_MS: '5000',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_STORAGE_BUCKET: 'media',
+    });
+    const generate = vi
+      .fn()
+      // Request 1: primary hits 429 -> fallback-1 succeeds
+      .mockRejectedValueOnce({ status: 429 })
+      .mockResolvedValueOnce({ text: 'r1-fallback' })
+      // Request 2 (in cooldown): directly tries fallback-1 first
+      .mockResolvedValueOnce({ text: 'r2-fallback' })
+      // Request 3 (after cooldown): retries primary first
+      .mockResolvedValueOnce({ text: 'r3-primary' })
+      // Request 4: primary fails -> enters cooldown; then both fail cleanly
+      .mockRejectedValue({ status: 503, message: 'SECRET_PROVIDER_MSG' });
+
+    const client = new GeminiClientService(
+      fallbackConfig,
+      { generate },
+      new AiImageService(fallbackConfig),
+    );
+
+    expect(await client.generate([])).toEqual({ text: 'r1-fallback' });
+    expect(await client.generate([])).toEqual({ text: 'r2-fallback' });
+
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await client.generate([])).toEqual({ text: 'r3-primary' });
+
+    await expect(client.generate([])).rejects.toMatchObject({
+      response: expect.objectContaining({ errorCode: 'AI_UNAVAILABLE' }),
+    });
+    await expect(client.generate([])).rejects.not.toThrow(
+      'SECRET_PROVIDER_MSG',
+    );
+
+    // Verify call order: r1(primary->fallback), r2(fallback), r3(primary), r4(primary->fallback), r5(primary->fallback all-cooled still attempted)
+    expect(generate.mock.calls.map((c) => c[0].model)).toEqual([
+      'primary-model',
+      'fallback-1',
+      'fallback-1',
+      'primary-model',
+      'primary-model',
+      'fallback-1',
+      'primary-model',
+      'fallback-1',
+    ]);
+  });
+  it('switches to fallback if primary stalls until per-attempt timeout before total deadline', async () => {
+    vi.useFakeTimers();
+    const fallbackConfig = new ConfigService({
+      GEMINI_MODEL: 'primary-model',
+      GEMINI_FALLBACK_MODELS: 'fallback-1',
+      GEMINI_API_KEY: 'fake',
+      GEMINI_TIMEOUT_MS: '1000',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_STORAGE_BUCKET: 'media',
+    });
+    const generate = vi.fn().mockImplementation(({ model }) => {
+      if (model === 'primary-model') return new Promise(() => {});
+      return Promise.resolve({ text: 'fallback-after-stall' });
+    });
+
+    const client = new GeminiClientService(
+      fallbackConfig,
+      { generate },
+      new AiImageService(fallbackConfig),
+    );
+    const pending = client.generate([]);
+
+    await vi.advanceTimersByTimeAsync(650);
+    await expect(pending).resolves.toEqual({ text: 'fallback-after-stall' });
+    expect(generate.mock.calls.map((c) => c[0].model)).toEqual([
+      'primary-model',
+      'fallback-1',
+    ]);
+    expect(generate.mock.calls[0][0].config.abortSignal.aborted).toBe(true);
+  });
+  it('fails closed without falling back on non-recoverable 400/401/403 client or auth errors', async () => {
+    const fallbackConfig = new ConfigService({
+      GEMINI_MODEL: 'primary-model',
+      GEMINI_FALLBACK_MODELS: 'fallback-1, fallback-2',
+      GEMINI_API_KEY: 'fake',
+      GEMINI_TIMEOUT_MS: '5000',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_STORAGE_BUCKET: 'media',
+    });
+    for (const status of [400, 401, 403]) {
+      const generate = vi
+        .fn()
+        .mockRejectedValue({ status, message: 'SECRET_AUTH_OR_SCHEMA' });
+      const client = new GeminiClientService(
+        fallbackConfig,
+        { generate },
+        new AiImageService(fallbackConfig),
+      );
+      await expect(client.generate([])).rejects.toMatchObject({
+        response: expect.objectContaining({ errorCode: 'AI_UNAVAILABLE' }),
+      });
+      expect(generate).toHaveBeenCalledTimes(1);
+    }
   });
 });
 
