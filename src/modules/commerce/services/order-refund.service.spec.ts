@@ -329,6 +329,75 @@ describe('OrderRefundService', () => {
     expect(events).toEqual(['transaction-committed', 'email-sent']);
   });
 
+  it('keeps the completed response when the refund email fails after commit', async () => {
+    const { service, emailService, events } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    emailService.sendRefundCompleted.mockRejectedValueOnce(
+      new Error('smtp unavailable'),
+    );
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(events).toEqual(['transaction-committed']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('buyer notification failed: smtp unavailable'),
+    );
+  });
+
+  it('keeps the completed response when post-commit notification data is missing', async () => {
+    const { service, orderRepo, identity, emailService } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    orderRepo.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(identity.getUsersByIds).not.toHaveBeenCalled();
+    expect(emailService.sendRefundCompleted).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('related order could not be loaded'),
+    );
+  });
+
+  it('keeps the completed response when the buyer cannot be loaded', async () => {
+    const { service, identity, emailService } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    identity.getUsersByIds.mockResolvedValueOnce([]);
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(emailService.sendRefundCompleted).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('buyer could not be loaded'),
+    );
+  });
+
   it('returns a masked refund projection for buyer order detail', async () => {
     const { service, refundRepo } = setup({
       existing: {

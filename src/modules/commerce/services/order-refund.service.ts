@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -24,6 +25,8 @@ import { EmailService } from '../../../common/email/email.service.js';
 
 @Injectable()
 export class OrderRefundService extends OrderRefundRequestApi {
+  private readonly logger = new Logger(OrderRefundService.name);
+
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(OrderRefundEntity)
@@ -245,30 +248,31 @@ export class OrderRefundService extends OrderRefundRequestApi {
       return saved;
     });
 
-    const order = await this.orderRepository.findOne({
-      where: { id: saved.orderId },
-    });
-    if (!order) {
-      throw new InternalServerErrorException(
-        'Refund completed but the related order could not be loaded',
+    try {
+      const order = await this.orderRepository.findOne({
+        where: { id: saved.orderId },
+      });
+      if (!order) throw new Error('related order could not be loaded');
+
+      const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
+      if (!buyer) throw new Error('buyer could not be loaded');
+
+      await this.emailService.sendRefundCompleted({
+        recipient: buyer.email,
+        refundCode: saved.refundCode,
+        amount: saved.amount,
+        currency: saved.currency,
+        buyerBankName: saved.buyerBankName,
+        accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
+        bankReferenceCode: saved.bankReferenceCode!,
+        processedAt: saved.processedAt!,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Refund ${saved.id} completed but buyer notification failed: ${reason}`,
       );
     }
-    const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
-    if (!buyer) {
-      throw new InternalServerErrorException(
-        'Refund completed but the buyer could not be loaded',
-      );
-    }
-    await this.emailService.sendRefundCompleted({
-      recipient: buyer.email,
-      refundCode: saved.refundCode,
-      amount: saved.amount,
-      currency: saved.currency,
-      buyerBankName: saved.buyerBankName,
-      accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
-      bankReferenceCode: saved.bankReferenceCode!,
-      processedAt: saved.processedAt!,
-    });
     return saved;
   }
 
