@@ -76,7 +76,9 @@ export class AiImageService {
   private storageUrl(input: string, key: string): URL {
     const url = new URL(input);
     const origin = new URL(this.config.get<string>('SUPABASE_URL') ?? '');
-    const bucket = this.config.get<string>('SUPABASE_STORAGE_BUCKET') ?? '';
+    const bucket =
+      (this.config.get<string>('SUPABASE_STORAGE_BUCKET') ?? '').trim() ||
+      'nexus-media';
     if (
       !/^ai\/[a-zA-Z0-9_-]+\.(?:jpg|jpeg|png|webp)$/.test(key) ||
       input !== `${origin.origin}/storage/v1/object/public/${bucket}/${key}` ||

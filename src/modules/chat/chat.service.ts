@@ -58,7 +58,8 @@ export class ChatService {
   ) {
     const base = (config.get<string>('SUPABASE_URL') ?? '').replace(/\/+$/, '');
     const bucket =
-      config.get<string>('SUPABASE_STORAGE_BUCKET') ?? 'nexus-media';
+      (config.get<string>('SUPABASE_STORAGE_BUCKET') ?? '').trim() ||
+      'nexus-media';
     this.storagePrefix = `${base}/storage/v1/object/public/${bucket}/`;
   }
 

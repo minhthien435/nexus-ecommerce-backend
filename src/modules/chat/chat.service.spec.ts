@@ -1270,6 +1270,65 @@ describe('ChatService', () => {
       });
     });
 
+    it('defaults chat image bucket to nexus-media when SUPABASE_STORAGE_BUCKET is empty', async () => {
+      const saved = {
+        id: 'm-img',
+        createdAt: new Date(),
+        conversationId,
+        senderId: buyerId,
+      };
+      const conversationRepo = {
+        createQueryBuilder: vi.fn(() => ({
+          setLock: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          getOne: vi.fn().mockResolvedValue(conversation),
+        })),
+        increment: vi.fn(),
+        update: vi.fn(),
+      };
+      const shopRepo = {
+        findOne: vi
+          .fn()
+          .mockResolvedValue({ id: conversation.shopId, status: 'ACTIVE' }),
+      };
+      const messageRepo = { save: vi.fn().mockResolvedValue(saved) };
+      const manager = {
+        getRepository: vi.fn((entity: any) => {
+          if (entity.name?.includes('Conversation')) return conversationRepo;
+          if (entity.name?.includes('Shop') || entity === ShopEntity)
+            return shopRepo;
+          return messageRepo;
+        }),
+      };
+      const s = new ChatService(
+        { transaction: vi.fn(async (fn: any) => fn(manager)) } as any,
+        {} as any,
+        { findOne: vi.fn().mockResolvedValue(null) } as any,
+        {
+          get: vi.fn((key: string) =>
+            key === 'SUPABASE_URL'
+              ? 'https://nexus.supabase.co'
+              : key === 'SUPABASE_STORAGE_BUCKET'
+                ? '   '
+                : undefined,
+          ),
+        } as any,
+        { emit: vi.fn() } as any,
+      );
+
+      const res = await s.send(buyerId, conversationId, {
+        clientMessageId,
+        type: 'IMAGE',
+        image: {
+          url: 'https://nexus.supabase.co/storage/v1/object/public/nexus-media/chat/prod.jpg',
+          key: 'chat/prod.jpg',
+          size: 2000,
+          mimeType: 'image/jpeg',
+        },
+      });
+      expect(res.message).toEqual(saved);
+    });
+
     it('C6: history() remains accessible and succeeds even if shop is CLOSED or SUSPENDED', async () => {
       const messages = [
         { id: 'm1', text: 'Old message', createdAt: new Date() },
