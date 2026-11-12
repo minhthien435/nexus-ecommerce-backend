@@ -70,6 +70,35 @@ it('downloads approved storage bytes with pinned public DNS and preserves MIME',
   expect(mocks.lookup).toHaveBeenCalledTimes(1);
 });
 
+it.each([undefined, '', '   '])(
+  'defaults to nexus-media bucket when SUPABASE_STORAGE_BUCKET is %j',
+  async (bucket) => {
+    const png = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: 'red' },
+    })
+      .png()
+      .toBuffer();
+    response(200, [png]);
+    const fallbackConfig = new ConfigService({
+      SUPABASE_URL: 'https://project.supabase.co',
+      ...(bucket === undefined ? {} : { SUPABASE_STORAGE_BUCKET: bucket }),
+    });
+    expect(
+      await new AiImageService(fallbackConfig).prepare({
+        sessionId: '4f9b8c5a-1122-482a-9e58-69ebf4249a11',
+        message: '',
+        image: {
+          url: 'https://project.supabase.co/storage/v1/object/public/nexus-media/ai/a.png',
+          key: 'ai/a.png',
+        },
+      }),
+    ).toEqual({
+      mimeType: 'image/png',
+      data: png.toString('base64'),
+    });
+  },
+);
+
 it('rejects mixed DNS answers before opening a socket', async () => {
   mocks.lookup.mockResolvedValue([
     { address: '8.8.8.8', family: 4 },

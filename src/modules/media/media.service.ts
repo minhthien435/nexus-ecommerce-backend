@@ -43,8 +43,9 @@ export class MediaService {
       this.configService.get<string>('SUPABASE_ANON_KEY') ||
       '';
     this.bucket =
-      this.configService.get<string>('SUPABASE_STORAGE_BUCKET') ||
-      'nexus-media';
+      (
+        this.configService.get<string>('SUPABASE_STORAGE_BUCKET') ?? ''
+      ).trim() || 'nexus-media';
   }
 
   /**
