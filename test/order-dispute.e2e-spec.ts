@@ -40,7 +40,10 @@ describe('POST /api/v1/commerce/orders/:id/disputes (HTTP E2E)', () => {
 
   const usersRepo = { findOne: vi.fn() };
   const rbacService = { hasAnyRole: vi.fn() };
-  const disputeService = { createDispute: vi.fn() };
+  const disputeService = {
+    createDispute: vi.fn(),
+    getOrderDisputeByBuyer: vi.fn(),
+  };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -333,5 +336,46 @@ describe('POST /api/v1/commerce/orders/:id/disputes (HTTP E2E)', () => {
     expect(res.status).toBe(404);
     expect(res.body.success).toBe(false);
     expect(res.body.errorCode).toBe('ORDER_NOT_FOUND');
+  });
+
+  it('12. Hỗ trợ đường dẫn chuẩn hóa số ít POST & GET /api/v1/commerce/orders/:id/dispute', async () => {
+    const mockDispute = {
+      id: 'dispute-singular-1',
+      orderId,
+      orderNumber,
+      buyerId,
+      sellerId,
+      reasonCategory: 'DAMAGED',
+      evidenceDescription: 'Sản phẩm bị bể góc hộp và thiếu phụ kiện kèm theo.',
+      evidenceImages: [],
+      status: 'PENDING_STAFF_REVIEW',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    disputeService.createDispute.mockResolvedValueOnce(mockDispute);
+    disputeService.getOrderDisputeByBuyer.mockResolvedValueOnce(mockDispute);
+
+    const postRes = await request(app.getHttpServer())
+      .post(`/api/v1/commerce/orders/${orderId}/dispute`)
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({
+        reasonCategory: 'DAMAGED',
+        evidenceDescription:
+          'Sản phẩm bị bể góc hộp và thiếu phụ kiện kèm theo.',
+      });
+
+    expect(postRes.status).toBe(201);
+    expect(postRes.body.data.id).toBe('dispute-singular-1');
+
+    const getRes = await request(app.getHttpServer())
+      .get(`/api/v1/commerce/orders/${orderNumber}/dispute`)
+      .set('Authorization', `Bearer ${buyerToken}`);
+
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.data.id).toBe('dispute-singular-1');
+    expect(disputeService.getOrderDisputeByBuyer).toHaveBeenCalledWith(
+      buyerId,
+      orderNumber,
+    );
   });
 });

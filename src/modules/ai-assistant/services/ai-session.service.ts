@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
+import { readRedisBaseOptions } from '../../../config/redis.config.js';
 import type { AiConversationTurn } from '../contracts/ai-assistant.types.js';
 
 // Lưu trữ tối đa 10 lượt hội thoại gần nhất (TTL 30 phút) và lấy 6 lượt gần nhất cho mỗi prompt
@@ -24,11 +25,7 @@ export class AiSessionService implements OnModuleDestroy {
 
   constructor(config: ConfigService) {
     this.redis = new Redis({
-      host: config.get<string>('REDIS_HOST', 'localhost'),
-      port: config.get<number>('REDIS_PORT', 6379),
-      password: config.get<string>('REDIS_PASSWORD') || undefined,
-      db: config.get<number>('REDIS_DB', 0),
-      connectTimeout: config.get<number>('REDIS_CONNECT_TIMEOUT_MS', 500),
+      ...readRedisBaseOptions(config),
       lazyConnect: true,
       enableOfflineQueue: false,
       maxRetriesPerRequest: 1,

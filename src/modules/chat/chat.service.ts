@@ -350,6 +350,7 @@ export class ChatService {
       return {
         id: c.id,
         shopId: c.shopId,
+        myRole: isBuyer ? ('BUYER' as const) : ('SELLER' as const),
         shop,
         buyer,
         lastMessagePreview: c.lastMessagePreview ?? null,

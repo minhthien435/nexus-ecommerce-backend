@@ -50,8 +50,10 @@ export class IdentitySupportLookupService extends IdentitySupportLookupApi {
     if (ids.length === 0) return [];
     return this.shops.find({
       select: {
+        id: true,
         sellerId: true,
         name: true,
+        slug: true,
         status: true,
         logoUrl: true,
       },

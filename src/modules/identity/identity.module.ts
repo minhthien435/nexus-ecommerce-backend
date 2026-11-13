@@ -12,6 +12,7 @@ import { IdentityOutboxEntity } from './domain/identity-outbox.entity.js';
 
 import { AuthService } from './auth/services/auth.service.js';
 import { TokenService } from './auth/services/token.service.js';
+import { resolveJwtAccessExpiry } from './auth/jwt-expiry.util.js';
 import { AccessTokenGuard } from './auth/guards/access-token.guard.js';
 import { ProfileUserEntity } from './users/entities/profile-user.entity.js';
 import { ProfileController } from './users/profile/profile.controller.js';
@@ -66,7 +67,7 @@ import { AddressModule } from './users/addresses/address.module.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET', 'super-secret-key-15m'),
-        signOptions: { expiresIn: '8h' },
+        signOptions: { expiresIn: resolveJwtAccessExpiry(config).signOption },
       }),
     }),
   ],

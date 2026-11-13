@@ -19,6 +19,7 @@ import type { QuerySupportDisputesDto } from '../dtos/query-support-disputes.dto
 import type { ResolveOrderDisputeDto } from '../dtos/resolve-order-dispute.dto.js';
 import { OrderRefundService } from './order-refund.service.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
+import { loadBuyerOrderDispute } from './order-dispute-lookup.helper.js';
 
 export interface CreatedDisputeResponse {
   id: string;
@@ -535,6 +536,19 @@ export class OrderDisputeService {
           resolvedAt: saved.resolvedAt!,
         };
       }
+    });
+  }
+
+  /**
+   * Lấy thông tin khiếu nại của đơn hàng cho Người mua (Buyer)
+   */
+  async getOrderDisputeByBuyer(buyerId: string, orderReference: string) {
+    return loadBuyerOrderDispute({
+      orderRepo: this.orderRepo,
+      findDisputeByOrderId: (orderId) =>
+        this.disputeRepo.findOne({ where: { orderId } }),
+      userId: buyerId,
+      orderReference,
     });
   }
 }
