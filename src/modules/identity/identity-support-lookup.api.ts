@@ -10,8 +10,10 @@ export type SupportIdentityUser = {
 };
 
 export type SupportIdentityShop = {
+  id?: string;
   sellerId: string;
   name: string;
+  slug?: string;
   status: ShopStatus;
   logoUrl: string | null;
 };

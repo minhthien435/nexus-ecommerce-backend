@@ -498,6 +498,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(1);
       const item = result.items[0];
       expect(item.id).toBe('c-1');
+      expect(item.myRole).toBe('BUYER');
       expect(item.shop).toEqual({
         name: 'Nexus Fashion',
         slug: 'nexus-fashion',
@@ -542,6 +543,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(1);
       const item = result.items[0];
       expect(item.id).toBe('c-2');
+      expect(item.myRole).toBe('SELLER');
       expect(item.buyer).toEqual({
         fullName: 'Nguyễn Văn A',
         avatarUrl: 'https://cdn/avatar.png',
@@ -605,12 +607,14 @@ describe('ChatService', () => {
 
       const itemBuyer = result.items[0];
       expect(itemBuyer.id).toBe('conv-buyer');
+      expect(itemBuyer.myRole).toBe('BUYER');
       expect(itemBuyer.myUnreadCount).toBe(4); // Buyer unread, NOT 99
       expect(itemBuyer.buyer).toBeNull();
       expect(itemBuyer.shop?.name).toBe('Shop A');
 
       const itemSeller = result.items[1];
       expect(itemSeller.id).toBe('conv-seller');
+      expect(itemSeller.myRole).toBe('SELLER');
       expect(itemSeller.myUnreadCount).toBe(2); // Seller unread, NOT 88
       expect(itemSeller.buyer?.fullName).toBe('Khách Hàng B');
       expect(itemSeller.shop?.name).toBe('Shop B');

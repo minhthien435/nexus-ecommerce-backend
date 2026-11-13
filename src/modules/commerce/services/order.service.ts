@@ -34,7 +34,12 @@ import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { GhnClientService } from '../../fulfillment/services/ghn-client.service.js';
 import { ShippingQuoteService } from '../../fulfillment/services/shipping-quote.service.js';
+import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import type { CartSku } from '../../catalog/catalog-cart.api.js';
+import {
+  loadBuyerOrderDispute,
+  resolveOrderReferenceField,
+} from './order-dispute-lookup.helper.js';
 
 @Injectable()
 export class OrderService {
@@ -68,6 +73,8 @@ export class OrderService {
     private readonly shippingQuotes?: ShippingQuoteService,
     @Optional()
     private readonly inventoryRead?: InventoryReadApi,
+    @Optional()
+    private readonly identityLookup?: IdentitySupportLookupApi,
   ) {}
 
   async quoteCart(userId: string, dto: CreateCheckoutDto) {
@@ -746,7 +753,10 @@ export class OrderService {
     qb.orderBy('order.createdAt', 'DESC').skip(skip).take(limit);
 
     const [orders, totalItems] = await qb.getManyAndCount();
-    await this.enrichOrdersWithImages(orders);
+    await Promise.all([
+      this.enrichOrdersWithImages(orders),
+      this.attachShopInfo(orders),
+    ]);
     for (const order of orders) {
       if (order.checkoutSession) {
         order.paymentMethod = order.checkoutSession.paymentMethod;
@@ -908,7 +918,10 @@ export class OrderService {
       throw new NotFoundException('Không tìm thấy đơn hàng yêu cầu');
     }
 
-    await this.enrichOrdersWithImages([order]);
+    await Promise.all([
+      this.enrichOrdersWithImages([order]),
+      this.attachShopInfo([order]),
+    ]);
     if (order.checkoutSession) {
       order.paymentMethod = order.checkoutSession.paymentMethod;
     }
@@ -998,11 +1011,7 @@ export class OrderService {
   }
 
   private orderReferenceField(reference: string): 'id' | 'orderNumber' {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      reference,
-    )
-      ? 'id'
-      : 'orderNumber';
+    return resolveOrderReferenceField(reference);
   }
 
   async cancelOrder(userId: string, orderId: string) {
@@ -1169,6 +1178,36 @@ export class OrderService {
           item.primaryImageUrl = url;
         }
       }
+    }
+  }
+
+  /**
+   * Đính kèm shopId và shopSlug của người bán vào đơn hàng cho Buyer (ví dụ nút Chat with shop)
+   */
+  private async attachShopInfo(orders: OrderEntity[]): Promise<void> {
+    if (!this.identityLookup || orders.length === 0) return;
+
+    const sellerIds = Array.from(
+      new Set(orders.map((order) => order.sellerId).filter(Boolean)),
+    );
+    const shops =
+      sellerIds.length > 0
+        ? await this.identityLookup.getShopsBySellerIds(sellerIds)
+        : [];
+    const shopMap = new Map(
+      shops.map((shop) => [shop.sellerId.toLowerCase(), shop]),
+    );
+
+    for (const order of orders) {
+      const shop = order.sellerId
+        ? shopMap.get(order.sellerId.toLowerCase())
+        : undefined;
+      const target = order as OrderEntity & {
+        shopId?: string | null;
+        shopSlug?: string | null;
+      };
+      target.shopId = shop?.id ?? null;
+      target.shopSlug = shop?.slug ?? null;
     }
   }
 
@@ -1615,45 +1654,16 @@ export class OrderService {
    * Lấy thông tin khiếu nại của đơn hàng cho Người mua
    */
   async getOrderDisputeByBuyer(userId: string, orderReference: string) {
-    const buyerId = userId.toLowerCase();
-    const field = this.orderReferenceField(orderReference);
-    const order = await this.orderRepo.findOne({
-      where: {
-        [field]: orderReference,
-        buyerId,
-      },
+    return loadBuyerOrderDispute({
+      orderRepo: this.orderRepo,
+      findDisputeByOrderId: async (orderId) =>
+        typeof this.dataSource?.getRepository === 'function'
+          ? this.dataSource
+              .getRepository(OrderDisputeEntity)
+              .findOne({ where: { orderId } })
+          : null,
+      userId,
+      orderReference,
     });
-
-    if (!order) {
-      throw new NotFoundException({
-        errorCode: 'ORDER_NOT_FOUND',
-        message: 'Không tìm thấy đơn hàng yêu cầu',
-      });
-    }
-
-    const dispute =
-      typeof this.dataSource?.getRepository === 'function'
-        ? await this.dataSource.getRepository(OrderDisputeEntity).findOne({
-            where: { orderId: order.id },
-          })
-        : null;
-
-    if (!dispute) {
-      return null;
-    }
-
-    return {
-      id: dispute.id,
-      orderId: dispute.orderId,
-      orderNumber: order.orderNumber,
-      status: dispute.status,
-      reasonCategory: dispute.reasonCategory,
-      evidenceDescription: dispute.evidenceDescription,
-      evidenceImages: dispute.evidenceImages,
-      staffDecisionNote: dispute.staffDecisionNote,
-      resolvedAt: dispute.resolvedAt,
-      createdAt: dispute.createdAt,
-      updatedAt: dispute.updatedAt,
-    };
   }
 }

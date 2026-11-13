@@ -126,26 +126,6 @@ export class OrderController {
     };
   }
 
-  @Get(':id/dispute')
-  @Permissions('ORDER.VIEW')
-  async getOrderDispute(
-    @CurrentUserId() userId: string,
-    @Param('id') orderReference: string,
-  ) {
-    const result = await this.orderService.getOrderDisputeByBuyer(
-      userId,
-      orderReference,
-    );
-    return {
-      success: true as const,
-      statusCode: HttpStatus.OK,
-      message: result
-        ? 'Lấy thông tin khiếu nại của đơn hàng thành công'
-        : 'Đơn hàng chưa có khiếu nại nào',
-      data: result,
-    };
-  }
-
   @Patch(':id/refund-account')
   @Permissions('ORDER.VIEW')
   async updateRefundAccount(

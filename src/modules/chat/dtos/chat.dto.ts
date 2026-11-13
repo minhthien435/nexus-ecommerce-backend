@@ -80,6 +80,7 @@ export interface ChatBuyerSummary {
 export interface ChatConversationItemResponse {
   id: string;
   shopId: string;
+  myRole: 'BUYER' | 'SELLER';
   shop: ChatShopSummary | null;
   buyer: ChatBuyerSummary | null;
   lastMessagePreview: string | null;

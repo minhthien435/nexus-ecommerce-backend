@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { Redis } from 'ioredis';
+import { readRedisBaseOptions } from '../../../config/redis.config.js';
 
 const PREFIX = 'ai:read:v1:';
 const TTL_SECONDS = 300;
@@ -13,11 +14,7 @@ export class AiCacheService implements OnModuleDestroy {
 
   constructor(config: ConfigService) {
     this.redis = new Redis({
-      host: config.get<string>('REDIS_HOST', 'localhost'),
-      port: config.get<number>('REDIS_PORT', 6379),
-      password: config.get<string>('REDIS_PASSWORD') || undefined,
-      db: config.get<number>('REDIS_DB', 0),
-      connectTimeout: config.get<number>('REDIS_CONNECT_TIMEOUT_MS', 500),
+      ...readRedisBaseOptions(config),
       lazyConnect: true,
       enableOfflineQueue: false,
       maxRetriesPerRequest: 1,

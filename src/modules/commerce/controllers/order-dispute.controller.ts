@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
@@ -22,14 +23,57 @@ export class OrderDisputeController {
   constructor(private readonly disputeService: OrderDisputeService) {}
 
   /**
-   * Endpoint cho Người mua (Buyer) tạo hồ sơ khiếu nại cho đơn hàng đã nhận
+   * Lấy thông tin khiếu nại của đơn hàng cho Người mua (Buyer)
    */
-  @Post(':id/disputes')
+  @Get(':id/dispute')
+  async getOrderDispute(
+    @CurrentUserId() buyerId: string,
+    @Param('id') orderReference: string,
+  ) {
+    const result = await this.disputeService.getOrderDisputeByBuyer(
+      buyerId,
+      orderReference,
+    );
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: result
+        ? 'Lấy thông tin khiếu nại của đơn hàng thành công'
+        : 'Đơn hàng chưa có khiếu nại nào',
+      data: result,
+    };
+  }
+
+  /**
+   * Endpoint chuẩn hóa số ít: tạo hồ sơ khiếu nại cho đơn hàng
+   */
+  @Post(':id/dispute')
   @HttpCode(HttpStatus.CREATED)
   async createDispute(
     @CurrentUserId() buyerId: string,
     @Param('id', new ParseUUIDPipe()) orderId: string,
     @Body() dto: CreateOrderDisputeDto,
+  ) {
+    return this.handleCreateDispute(buyerId, orderId, dto);
+  }
+
+  /**
+   * Giữ route `/disputes` cũ tạm thời để FE chuyển đổi dần sang `/dispute`
+   */
+  @Post(':id/disputes')
+  @HttpCode(HttpStatus.CREATED)
+  async createDisputeLegacyAlias(
+    @CurrentUserId() buyerId: string,
+    @Param('id', new ParseUUIDPipe()) orderId: string,
+    @Body() dto: CreateOrderDisputeDto,
+  ) {
+    return this.handleCreateDispute(buyerId, orderId, dto);
+  }
+
+  private async handleCreateDispute(
+    buyerId: string,
+    orderId: string,
+    dto: CreateOrderDisputeDto,
   ) {
     const result = await this.disputeService.createDispute(
       buyerId,

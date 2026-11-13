@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UserEntity } from '../../domain/user.entity.js';
 import { TokenService } from './token.service.js';
@@ -53,6 +54,22 @@ describe('TokenService', () => {
       { sub: user.id, email: user.email, tokenVersion: 6 },
       { expiresIn: '8h' },
     );
+  });
+
+  it('reads JWT_ACCESS_EXPIRES_IN from ConfigService for signing and expiresIn seconds', async () => {
+    const configuredService = new TokenService(
+      tokenRepo,
+      jwt,
+      { transaction: vi.fn() } as never,
+      new ConfigService({ JWT_ACCESS_EXPIRES_IN: '15m' }),
+    );
+
+    await configuredService.generateAccessToken(user);
+    expect(jwt.signAsync).toHaveBeenCalledWith(
+      { sub: user.id, email: user.email, tokenVersion: 6 },
+      { expiresIn: '15m' },
+    );
+    expect(configuredService.getAccessTokenExpiresInSeconds()).toBe(900);
   });
 
   it('uses a provided transaction repository for refresh creation', async () => {

@@ -292,4 +292,38 @@ describe('AuthController', () => {
       newPassword: 'NewPassword123@',
     });
   });
+
+  it('uses TokenService.getAccessTokenExpiresInSeconds when returning login expiresIn', async () => {
+    const auth = {
+      login: vi.fn().mockResolvedValue({
+        user: { id: 'u1' },
+        accessToken: 'jwt',
+        rawRefreshToken: 'ref',
+      }),
+    };
+    const tokens = {
+      setRefreshTokenCookie: vi.fn(),
+      getAccessTokenExpiresInSeconds: vi.fn().mockReturnValue(900),
+    };
+    const controller = new AuthController(
+      auth as never,
+      tokens as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      controller.login(
+        { email: 'a@b.com', password: 'pw', captchaToken: 'cap' },
+        { ip: '127.0.0.1', headers: {} } as never,
+        {} as never,
+      ),
+    ).resolves.toEqual({
+      accessToken: 'jwt',
+      expiresIn: 900,
+      user: { id: 'u1' },
+    });
+  });
 });
