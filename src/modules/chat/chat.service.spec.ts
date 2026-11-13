@@ -498,6 +498,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(1);
       const item = result.items[0];
       expect(item.id).toBe('c-1');
+      expect(item.myRole).toBe('BUYER');
       expect(item.shop).toEqual({
         name: 'Nexus Fashion',
         slug: 'nexus-fashion',
@@ -542,6 +543,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(1);
       const item = result.items[0];
       expect(item.id).toBe('c-2');
+      expect(item.myRole).toBe('SELLER');
       expect(item.buyer).toEqual({
         fullName: 'Nguyễn Văn A',
         avatarUrl: 'https://cdn/avatar.png',
@@ -605,12 +607,14 @@ describe('ChatService', () => {
 
       const itemBuyer = result.items[0];
       expect(itemBuyer.id).toBe('conv-buyer');
+      expect(itemBuyer.myRole).toBe('BUYER');
       expect(itemBuyer.myUnreadCount).toBe(4); // Buyer unread, NOT 99
       expect(itemBuyer.buyer).toBeNull();
       expect(itemBuyer.shop?.name).toBe('Shop A');
 
       const itemSeller = result.items[1];
       expect(itemSeller.id).toBe('conv-seller');
+      expect(itemSeller.myRole).toBe('SELLER');
       expect(itemSeller.myUnreadCount).toBe(2); // Seller unread, NOT 88
       expect(itemSeller.buyer?.fullName).toBe('Khách Hàng B');
       expect(itemSeller.shop?.name).toBe('Shop B');
@@ -1268,6 +1272,65 @@ describe('ChatService', () => {
           message: 'Shop is currently unavailable',
         });
       });
+    });
+
+    it('defaults chat image bucket to nexus-media when SUPABASE_STORAGE_BUCKET is empty', async () => {
+      const saved = {
+        id: 'm-img',
+        createdAt: new Date(),
+        conversationId,
+        senderId: buyerId,
+      };
+      const conversationRepo = {
+        createQueryBuilder: vi.fn(() => ({
+          setLock: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          getOne: vi.fn().mockResolvedValue(conversation),
+        })),
+        increment: vi.fn(),
+        update: vi.fn(),
+      };
+      const shopRepo = {
+        findOne: vi
+          .fn()
+          .mockResolvedValue({ id: conversation.shopId, status: 'ACTIVE' }),
+      };
+      const messageRepo = { save: vi.fn().mockResolvedValue(saved) };
+      const manager = {
+        getRepository: vi.fn((entity: any) => {
+          if (entity.name?.includes('Conversation')) return conversationRepo;
+          if (entity.name?.includes('Shop') || entity === ShopEntity)
+            return shopRepo;
+          return messageRepo;
+        }),
+      };
+      const s = new ChatService(
+        { transaction: vi.fn(async (fn: any) => fn(manager)) } as any,
+        {} as any,
+        { findOne: vi.fn().mockResolvedValue(null) } as any,
+        {
+          get: vi.fn((key: string) =>
+            key === 'SUPABASE_URL'
+              ? 'https://nexus.supabase.co'
+              : key === 'SUPABASE_STORAGE_BUCKET'
+                ? '   '
+                : undefined,
+          ),
+        } as any,
+        { emit: vi.fn() } as any,
+      );
+
+      const res = await s.send(buyerId, conversationId, {
+        clientMessageId,
+        type: 'IMAGE',
+        image: {
+          url: 'https://nexus.supabase.co/storage/v1/object/public/nexus-media/chat/prod.jpg',
+          key: 'chat/prod.jpg',
+          size: 2000,
+          mimeType: 'image/jpeg',
+        },
+      });
+      expect(res.message).toEqual(saved);
     });
 
     it('C6: history() remains accessible and succeeds even if shop is CLOSED or SUSPENDED', async () => {

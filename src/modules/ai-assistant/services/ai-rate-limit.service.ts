@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
+import { readRedisBaseOptions } from '../../../config/redis.config.js';
 
 const RATE_LIMIT_KEY_PREFIX = 'ai:rate-limit:v1:';
 const WINDOW_SECONDS = 60;
@@ -51,11 +52,7 @@ export class AiRateLimitService implements OnModuleDestroy {
     );
 
     this.redis = new Redis({
-      host: config.get<string>('REDIS_HOST', 'localhost'),
-      port: config.get<number>('REDIS_PORT', 6379),
-      password: config.get<string>('REDIS_PASSWORD') || undefined,
-      db: config.get<number>('REDIS_DB', 0),
-      connectTimeout: config.get<number>('REDIS_CONNECT_TIMEOUT_MS', 500),
+      ...readRedisBaseOptions(config),
       lazyConnect: true,
       enableOfflineQueue: false,
       maxRetriesPerRequest: 1,

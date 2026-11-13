@@ -10,12 +10,13 @@ import {
 import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 
 export type AuctionStatus =
+  | 'DRAFT'
   | 'SCHEDULED'
   | 'ACTIVE'
   | 'ENDED'
   | 'PENDING_SETTLEMENT'
-  | 'FAILED'
   | 'SETTLED'
+  | 'FAILED'
   | 'CANCELLED';
 
 @Entity({ name: 'auctions', schema: 'auction' })
@@ -49,6 +50,11 @@ export class AuctionEntity {
   @Column({ name: 'bid_count', type: 'integer', default: 0 }) bidCount: number;
   @Column({ type: 'varchar', length: 20, default: 'PUBLIC' })
   visibility: string;
+  @Column({ type: 'varchar', length: 3 }) currency: string;
+  @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
+  @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
+  @Column({ name: 'original_end_at', type: 'timestamptz' })
+  originalEndsAt: Date;
   @Column({ name: 'extension_count', type: 'integer', default: 0 })
   extensionCount: number;
   @Column({ name: 'max_extensions', type: 'integer', default: 10 })
@@ -68,21 +74,16 @@ export class AuctionEntity {
   @Column({
     name: 'cancel_actor_type',
     type: 'varchar',
-    length: 20,
+    length: 30,
     nullable: true,
   })
-  cancelActorType?: string | null;
+  cancelActorType?: 'SELLER' | 'ADMIN' | null;
   @Column({ name: 'cancel_reason', type: 'text', nullable: true })
   cancelReason?: string | null;
   @VersionColumn({ type: 'integer', default: 1 }) version: number;
   @Column({ name: 'reservation_receipt', type: 'jsonb', nullable: true })
   reservationReceipt?: InventoryReservationReceipt[] | null;
-  @Column({ type: 'varchar', length: 3 }) currency: string;
-  @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
-  @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
-  @Column({ name: 'original_end_at', type: 'timestamptz' })
-  originalEndsAt: Date;
-  @Column({ type: 'varchar', length: 20 }) status: AuctionStatus;
+  @Column({ type: 'varchar', length: 30 }) status: AuctionStatus;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })

@@ -66,6 +66,50 @@ describe('OrderDisputeController', () => {
         message: 'Tạo hồ sơ khiếu nại đơn hàng thành công',
         data: mockResult,
       });
+
+      const aliasResponse = await controller.createDisputeLegacyAlias(
+        'buyer-123',
+        'order-123',
+        dto,
+      );
+      expect(aliasResponse).toEqual(response);
+    });
+  });
+
+  describe('getOrderDispute', () => {
+    it('trả về chi tiết khiếu nại và data null khi đơn chưa có khiếu nại', async () => {
+      const mockDispute = {
+        id: 'dispute-1',
+        orderId: 'order-1',
+        orderNumber: '#ORD-1',
+        status: 'PENDING_STAFF_REVIEW',
+      };
+      const mockDisputeService = {
+        getOrderDisputeByBuyer: vi
+          .fn()
+          .mockResolvedValueOnce(mockDispute)
+          .mockResolvedValueOnce(null),
+      } as unknown as OrderDisputeService;
+
+      const controller = new OrderDisputeController(mockDisputeService);
+
+      await expect(
+        controller.getOrderDispute('buyer-1', '#ORD-1'),
+      ).resolves.toEqual({
+        success: true,
+        statusCode: HttpStatus.OK,
+        message: 'Lấy thông tin khiếu nại của đơn hàng thành công',
+        data: mockDispute,
+      });
+
+      await expect(
+        controller.getOrderDispute('buyer-1', '#ORD-2'),
+      ).resolves.toEqual({
+        success: true,
+        statusCode: HttpStatus.OK,
+        message: 'Đơn hàng chưa có khiếu nại nào',
+        data: null,
+      });
     });
   });
 });

@@ -25,7 +25,10 @@ function candidateQueryBuilder(orderIds: string[] = []) {
   };
 }
 
-function setup(ghn?: { createNewAddressOrder: ReturnType<typeof vi.fn> }) {
+function setup(
+  ghn?: { createNewAddressOrder: ReturnType<typeof vi.fn> },
+  identityLookup?: { getShopsBySellerIds: ReturnType<typeof vi.fn> },
+) {
   const cartRepo = {
     findOne: vi.fn().mockResolvedValue({
       id: cartId,
@@ -218,6 +221,7 @@ function setup(ghn?: { createNewAddressOrder: ReturnType<typeof vi.fn> }) {
     ghn as never,
     shippingQuotes as never,
     inventoryRead as never,
+    identityLookup as never,
   );
 
   return {
@@ -862,6 +866,76 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       'order.orderNumber = :orderReference',
       { orderReference: 'order-not-found' },
     );
+  });
+
+  it('attaches shopId and shopSlug to buyer order list and detail via batched lookup', async () => {
+    const identityLookup = {
+      getShopsBySellerIds: vi.fn().mockResolvedValue([
+        {
+          id: 'shop-1',
+          sellerId: seller1,
+          name: 'Nexus Audio',
+          slug: 'nexus-audio',
+          status: 'ACTIVE',
+          logoUrl: null,
+        },
+      ]),
+    };
+    const s = setup(undefined, identityLookup);
+
+    const listCandidatesQb = candidateQueryBuilder();
+    const listQb = {
+      leftJoinAndSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      skip: vi.fn().mockReturnThis(),
+      take: vi.fn().mockReturnThis(),
+      getManyAndCount: vi.fn().mockResolvedValue([
+        [
+          { id: 'order-1', sellerId: seller1, items: [] },
+          { id: 'order-2', sellerId: seller2, items: [] },
+        ],
+        2,
+      ]),
+    };
+    s.orderRepo.createQueryBuilder
+      .mockReturnValueOnce(listCandidatesQb as never)
+      .mockReturnValueOnce(listQb as never);
+
+    const listResult = await s.service.getBuyerOrders(userId, {});
+    expect(identityLookup.getShopsBySellerIds).toHaveBeenCalledWith([
+      seller1,
+      seller2,
+    ]);
+    expect(listResult.data[0]).toMatchObject({
+      id: 'order-1',
+      shopId: 'shop-1',
+      shopSlug: 'nexus-audio',
+    });
+    expect(listResult.data[1]).toMatchObject({
+      id: 'order-2',
+      shopId: null,
+      shopSlug: null,
+    });
+
+    const detailCandidatesQb = candidateQueryBuilder();
+    s.orderRepo.createQueryBuilder.mockReturnValueOnce(
+      detailCandidatesQb as never,
+    );
+    s.orderRepo.findOne.mockResolvedValueOnce({
+      id: 'order-1',
+      buyerId: userId,
+      sellerId: seller1,
+      items: [],
+    });
+
+    const detail = await s.service.getOrderById(userId, 'ORD-1');
+    expect(detail).toMatchObject({
+      id: 'order-1',
+      shopId: 'shop-1',
+      shopSlug: 'nexus-audio',
+    });
   });
 
   it('reconciles overdue PayOS orders before applying the buyer list status filter', async () => {

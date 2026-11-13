@@ -1,5 +1,5 @@
 // src/modules/identity/identity.module.ts
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -12,6 +12,7 @@ import { IdentityOutboxEntity } from './domain/identity-outbox.entity.js';
 
 import { AuthService } from './auth/services/auth.service.js';
 import { TokenService } from './auth/services/token.service.js';
+import { resolveJwtAccessExpiry } from './auth/jwt-expiry.util.js';
 import { AccessTokenGuard } from './auth/guards/access-token.guard.js';
 import { ProfileUserEntity } from './users/entities/profile-user.entity.js';
 import { ProfileController } from './users/profile/profile.controller.js';
@@ -43,10 +44,12 @@ import { AdminShopService } from './admin/admin-shop.service.js';
 import { IdentitySupportLookupApi } from './identity-support-lookup.api.js';
 import { IdentitySupportLookupService } from './identity-support-lookup.service.js';
 import { AddressModule } from './users/addresses/address.module.js';
+import { NotificationModule } from '../notification/notification.module.js';
 
 @Module({
   imports: [
     AddressModule,
+    forwardRef(() => NotificationModule),
     EmailModule,
     TypeOrmModule.forFeature([
       UserEntity,
@@ -66,7 +69,7 @@ import { AddressModule } from './users/addresses/address.module.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET', 'super-secret-key-15m'),
-        signOptions: { expiresIn: '8h' },
+        signOptions: { expiresIn: resolveJwtAccessExpiry(config).signOption },
       }),
     }),
   ],

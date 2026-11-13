@@ -180,17 +180,21 @@ describe('OrderDisputeService', () => {
       }),
     };
 
+    const mockOrderRepo = {
+      findOne: vi.fn().mockResolvedValue(params.order ?? null),
+    };
+
     service = new OrderDisputeService(
       mockDataSource as DataSource,
       mockDisputeRepo as Repository<OrderDisputeEntity>,
-      {} as any,
+      mockOrderRepo as any,
       {} as any,
       mockIdentityLookup as IdentitySupportLookupApi,
       mockOrderStateMachine as OrderStateMachineService,
       mockOrderRefundService as OrderRefundService,
     );
 
-    return { disputeQueryBuilder };
+    return { disputeQueryBuilder, mockOrderRepo };
   }
 
   describe('createDispute (Buyer)', () => {

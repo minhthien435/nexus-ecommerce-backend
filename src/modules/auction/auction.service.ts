@@ -3,17 +3,22 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { ProductSkuEntity } from '../catalog/domain/entities/product-sku.entity.js';
 import { ProductEntity } from '../catalog/domain/entities/product.entity.js';
 import { ShopEntity } from '../identity/domain/shop.entity.js';
 import { QueryAuctionsDto } from './dtos/query-auctions.dto.js';
+import { QueryParticipationsDto } from './dtos/query-participations.dto.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { CreateAuctionDto } from './dtos/create-auction.dto.js';
+import { AuctionEventsService } from './ws/auction-events.service.js';
+import { NotificationDispatchApi } from '../notification/notification-dispatch.api.js';
 import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 import { InventoryReservationApi } from '../fulfillment/inventory-reservation.api.js';
 
@@ -40,6 +45,7 @@ export interface AuctionSellerView {
 
 export interface AuctionView {
   id: string;
+  auctionId: string;
   code?: string | null;
   status: string;
   product: AuctionProductView;
@@ -57,6 +63,47 @@ export interface AuctionView {
   endTime: string;
 }
 
+export interface AuctionMedia360View {
+  model3dUrl: string | null;
+  spinImages: string[];
+}
+
+export interface AuctionBidHistoryItem {
+  id: string;
+  bidderMaskedName: string;
+  amount: number;
+  status: string;
+  bidTime: string;
+}
+
+export interface PaginatedAuctionBids {
+  auctionId: string;
+  items: AuctionBidHistoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface BuyerParticipationItem {
+  auction: AuctionView;
+  myHighestBid: number | null;
+  isLeading: boolean;
+  isWinner: boolean;
+  settlementStatus: string | null;
+  orderId: string | null;
+  paymentDeadlineAt: string | null;
+  finalPrice: number | null;
+}
+
+export interface PaginatedBuyerParticipations {
+  items: BuyerParticipationItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export interface AuctionDetailView extends AuctionView {
   recentBids: Array<{
     id?: string;
@@ -66,6 +113,7 @@ export interface AuctionDetailView extends AuctionView {
   }>;
   description: string;
   images: string[];
+  media360: AuctionMedia360View;
   specs: Array<{ name: string; value: string }>;
 }
 
@@ -84,6 +132,8 @@ interface BidSummary {
 
 @Injectable()
 export class AuctionService {
+  private readonly logger = new Logger(AuctionService.name);
+
   constructor(
     @InjectRepository(AuctionEntity)
     private readonly auctions: Repository<AuctionEntity>,
@@ -93,8 +143,12 @@ export class AuctionService {
     private readonly skus: Repository<ProductSkuEntity>,
     @InjectRepository(ShopEntity)
     private readonly shops: Repository<ShopEntity>,
-    private readonly dataSource: DataSource,
-    private readonly inventoryReservation: InventoryReservationApi,
+    @Optional()
+    private readonly auctionEvents?: AuctionEventsService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
+    @Optional()
+    private readonly inventoryReservation?: InventoryReservationApi,
   ) {}
 
   calculateDemoPrices(price: number): {
@@ -179,7 +233,7 @@ export class AuctionService {
     }
 
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      return await this.auctions.manager.transaction(async (manager) => {
         const skuRepo = manager.getRepository(ProductSkuEntity);
         const productRepo = manager.getRepository(ProductEntity);
         const auctionRepo = manager.getRepository(AuctionEntity);
@@ -209,6 +263,9 @@ export class AuctionService {
             errorCode: 'AUCTION_ALREADY_OPEN',
             message: 'SKU đã có phiên đấu giá đang mở',
           });
+        }
+        if (!this.inventoryReservation) {
+          throw new Error('InventoryReservationApi is not configured');
         }
         const receipt = await this.inventoryReservation.reserve(
           [{ skuId: sku.id, quantity: 1 }],
@@ -265,8 +322,8 @@ export class AuctionService {
     idempotencyKey?: string,
   ): Promise<{ bid: BidEntity; minNextBid: number }> {
     const normalizedKey = idempotencyKey?.trim() || null;
-    try {
-      return await this.dataSource.transaction(async (manager) => {
+    const txResult = await this.auctions.manager.transaction(
+      async (manager) => {
         const auctionRepo = manager.getRepository(AuctionEntity);
         const bidRepo = manager.getRepository(BidEntity);
         const auction = await auctionRepo
@@ -313,6 +370,11 @@ export class AuctionService {
                 (Math.round(Number(auction.currentPrice) * 100) +
                   Math.round(Number(auction.bidIncrement) * 100)) /
                 100,
+              auctionId: auction.id,
+              auctionCode: auction.code ?? null,
+              bidCount: auction.bidCount,
+              previousHighestBidderId: null,
+              wasReplay: true,
             };
           }
         }
@@ -332,23 +394,18 @@ export class AuctionService {
                 await manager.query<
                   Array<{ score: number; trust_level: string }>
                 >(
-                  `SELECT score, trust_level FROM identity.reputation_scores WHERE user_id = $1 LIMIT 1`,
+                  'SELECT score, trust_level FROM identity.reputation_scores WHERE user_id = $1 LIMIT 1',
                   [bidderId],
                 )
               )[0];
         if (
           eligibility?.restricted ||
-          reputation?.trust_level === 'RESTRICTED'
+          reputation?.trust_level === 'RESTRICTED' ||
+          Number(reputation?.score ?? 50) < 50
         ) {
           throw new ForbiddenException({
             errorCode: 'REPUTATION_TOO_LOW',
-            message: 'Tài khoản không đủ điều kiện tham gia đấu giá',
-          });
-        }
-        if (Number(reputation?.score ?? 50) < 50) {
-          throw new ForbiddenException({
-            errorCode: 'REPUTATION_TOO_LOW',
-            message: 'Điểm uy tín phải đạt tối thiểu 50',
+            message: 'Điểm uy tín tối thiểu 50 để tham gia đấu giá',
           });
         }
         const now = new Date();
@@ -381,6 +438,7 @@ export class AuctionService {
           });
         }
 
+        const previousHighestBidderId = auction.highestBidderId;
         if (auction.highestBidId) {
           await bidRepo.update(
             { id: auction.highestBidId, status: 'WINNING' },
@@ -404,45 +462,61 @@ export class AuctionService {
         return {
           bid,
           minNextBid: (amountCents + incrementCents) / 100,
+          auctionId: auction.id,
+          auctionCode: auction.code ?? null,
+          bidCount: auction.bidCount,
+          previousHighestBidderId,
+          wasReplay: false,
         };
-      });
-    } catch (error: unknown) {
-      if ((error as { code?: string }).code !== '23505' || !normalizedKey) {
-        throw error;
-      }
-      const auction = await this.auctions
-        .createQueryBuilder('auction')
-        .where(
-          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-          { identifier: idOrCode.trim() },
-        )
-        .getOne();
-      const existing = auction
-        ? await this.auctions.manager.getRepository(BidEntity).findOne({
-            where: {
-              auctionId: auction.id,
-              bidderId,
-              idempotencyKey: normalizedKey,
-            },
-          })
-        : null;
-      if (
-        !existing ||
-        Math.round(Number(existing.amount) * 100) !== Math.round(amount * 100)
-      ) {
-        throw new ConflictException({
-          errorCode: 'IDEMPOTENCY_KEY_REUSED',
-          message: 'Idempotency key đã được dùng với mức giá khác',
-        });
-      }
-      return {
-        bid: existing,
-        minNextBid:
-          (Math.round(Number(auction!.currentPrice) * 100) +
-            Math.round(Number(auction!.bidIncrement) * 100)) /
-          100,
-      };
+      },
+    );
+
+    if (txResult.wasReplay) {
+      return { bid: txResult.bid, minNextBid: txResult.minNextBid };
     }
+
+    // Emit post-commit using canonical UUID sessionId; never let WS/notification failure fail the HTTP bid.
+    this.auctionEvents?.emitBidPlaced({
+      sessionId: txResult.auctionId,
+      auctionCode: txResult.auctionCode,
+      newPrice: Number(txResult.bid.amount),
+      minNextBid: txResult.minNextBid,
+      bidCount: txResult.bidCount,
+      bidderId,
+      highestBidderId: bidderId,
+      bidderMaskedName: this.maskBidder(bidderId),
+      bidTime: txResult.bid.placedAt
+        ? new Date(txResult.bid.placedAt).toISOString()
+        : new Date().toISOString(),
+    });
+
+    if (
+      txResult.previousHighestBidderId &&
+      txResult.previousHighestBidderId !== bidderId
+    ) {
+      try {
+        await this.notifications?.notify({
+          userId: txResult.previousHighestBidderId,
+          type: 'AUCTION_OUTBID',
+          title: 'Bạn đã bị vượt giá',
+          content:
+            'Một người mua khác vừa đưa ra mức giá cao hơn trong phiên đấu giá.',
+          actionUrl: `/auctions/${txResult.auctionId}`,
+          metadata: { auctionId: txResult.auctionId },
+          sourceEventId: txResult.bid.id,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Bid ${txResult.bid.id} committed but outbid notification failed`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    return {
+      bid: txResult.bid,
+      minNextBid: txResult.minNextBid,
+    };
   }
 
   computeTrustLevel(
@@ -456,6 +530,9 @@ export class AuctionService {
 
   mapStatus(auction: AuctionEntity): string {
     if (auction.status === 'CANCELLED') return 'CANCELLED';
+    if (auction.status === 'SETTLED' || auction.status === 'FAILED') {
+      return auction.status;
+    }
     const now = new Date();
     if (auction.endsAt && new Date(auction.endsAt) <= now) return 'ENDED';
     if (auction.startsAt && new Date(auction.startsAt) > now)
@@ -478,6 +555,7 @@ export class AuctionService {
 
     return {
       id: auction.code || auction.id,
+      auctionId: auction.id,
       code: auction.code ?? null,
       status: this.mapStatus(auction),
       product: {
@@ -500,7 +578,7 @@ export class AuctionService {
       minNextBid: currentPrice + bidStep,
       bidCount: summary?.bidCount ?? auction.bidCount ?? 0,
       bidderCount: summary?.bidderCount ?? 0,
-      highestBidderId: null,
+      highestBidderId: auction.highestBidderId ?? null,
       highestBidderMasked: auction.highestBidderId
         ? this.maskBidder(auction.highestBidderId)
         : null,
@@ -512,6 +590,26 @@ export class AuctionService {
         ? new Date(auction.endsAt).toISOString()
         : new Date().toISOString(),
     };
+  }
+
+  private extractMedia360(product?: ProductEntity | null): AuctionMedia360View {
+    const attrs =
+      product?.attributes && typeof product.attributes === 'object'
+        ? (product.attributes as Record<string, unknown>)
+        : null;
+    const rawModel = attrs?.model3dUrl;
+    const model3dUrl =
+      typeof rawModel === 'string' && rawModel.trim().length > 0
+        ? rawModel.trim()
+        : null;
+    const rawSpin = attrs?.spinImages;
+    const spinImages = Array.isArray(rawSpin)
+      ? rawSpin.filter(
+          (url): url is string =>
+            typeof url === 'string' && url.trim().length > 0,
+        )
+      : [];
+    return { model3dUrl, spinImages };
   }
 
   toDetailView(
@@ -536,7 +634,12 @@ export class AuctionService {
     }
     if (product?.attributes && typeof product.attributes === 'object') {
       for (const [key, val] of Object.entries(product.attributes)) {
-        if (val !== null && val !== undefined) {
+        if (
+          key !== 'model3dUrl' &&
+          key !== 'spinImages' &&
+          val !== null &&
+          val !== undefined
+        ) {
           specs.push({ name: key, value: String(val) });
         }
       }
@@ -554,6 +657,7 @@ export class AuctionService {
         product?.description ||
         'Phiên đấu giá bảo chứng chính hãng bởi Nexus Escrow. Sản phẩm nguyên bản 100%, đầy đủ giấy tờ phụ kiện kiểm định.',
       images,
+      media360: this.extractMedia360(product),
       specs,
     };
   }
@@ -593,6 +697,85 @@ export class AuctionService {
     );
   }
 
+  private async hydrateAuctionViews(
+    items: AuctionEntity[],
+  ): Promise<AuctionView[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const productIds = Array.from(
+      new Set(items.map((i) => i.productId).filter(Boolean)),
+    );
+    const products =
+      productIds.length > 0
+        ? await this.products.find({
+            where: { id: In(productIds) },
+            relations: { images: true },
+          })
+        : [];
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    const sellerIds = Array.from(
+      new Set(items.map((i) => i.sellerId).filter(Boolean)),
+    );
+    const shops =
+      sellerIds.length > 0
+        ? await this.shops.find({
+            where: { sellerId: In(sellerIds) },
+          })
+        : [];
+    const shopMap = new Map(shops.map((s) => [s.sellerId, s]));
+    const bidSummaries = await this.loadBidSummaries(
+      items.map((item) => item.id),
+    );
+
+    return items.map((auction) =>
+      this.toView(
+        auction,
+        productMap.get(auction.productId),
+        shopMap.get(auction.sellerId),
+        bidSummaries.get(auction.id),
+      ),
+    );
+  }
+
+  private async findAuctionOrNull(
+    idOrCode: string,
+  ): Promise<AuctionEntity | null> {
+    if (!idOrCode || typeof idOrCode !== 'string') {
+      return null;
+    }
+
+    const trimmed = idOrCode.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        trimmed,
+      );
+
+    const qb = this.auctions.createQueryBuilder('auction');
+    if (isUuid) {
+      qb.where('auction.id = :id OR LOWER(auction.code) = LOWER(:code)', {
+        id: trimmed,
+        code: trimmed,
+      });
+    } else {
+      qb.where('LOWER(auction.code) = LOWER(:code)', { code: trimmed });
+    }
+
+    return qb.getOne();
+  }
+
+  async resolveAuctionIdentity(
+    idOrCode: string,
+  ): Promise<AuctionEntity | null> {
+    return this.findAuctionOrNull(idOrCode);
+  }
+
   async list(query: QueryAuctionsDto): Promise<PaginatedAuctions> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 12;
@@ -608,6 +791,12 @@ export class AuctionService {
           categoryId: query.categoryId,
         },
       );
+    }
+
+    if (query.sellerId) {
+      qb.andWhere('auction.sellerId = :sellerId', {
+        sellerId: query.sellerId,
+      });
     }
 
     if (query.status) {
@@ -680,41 +869,7 @@ export class AuctionService {
     qb.skip((page - 1) * limit).take(limit);
 
     const [items, total] = await qb.getManyAndCount();
-
-    const productIds = Array.from(
-      new Set(items.map((i) => i.productId).filter(Boolean)),
-    );
-    const products =
-      productIds.length > 0
-        ? await this.products.find({
-            where: { id: In(productIds) },
-            relations: { images: true },
-          })
-        : [];
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    const sellerIds = Array.from(
-      new Set(items.map((i) => i.sellerId).filter(Boolean)),
-    );
-    const shops =
-      sellerIds.length > 0
-        ? await this.shops.find({
-            where: { sellerId: In(sellerIds) },
-          })
-        : [];
-    const shopMap = new Map(shops.map((s) => [s.sellerId, s]));
-    const bidSummaries = await this.loadBidSummaries(
-      items.map((item) => item.id),
-    );
-
-    const viewItems = items.map((auction) =>
-      this.toView(
-        auction,
-        productMap.get(auction.productId),
-        shopMap.get(auction.sellerId),
-        bidSummaries.get(auction.id),
-      ),
-    );
+    const viewItems = await this.hydrateAuctionViews(items);
 
     return {
       items: viewItems,
@@ -726,31 +881,7 @@ export class AuctionService {
   }
 
   async findByIdOrCode(idOrCode: string): Promise<AuctionDetailView> {
-    if (!idOrCode || typeof idOrCode !== 'string') {
-      throw new NotFoundException({
-        statusCode: 404,
-        errorCode: 'AUCTION_NOT_FOUND',
-        message: 'Không tìm thấy phiên đấu giá',
-      });
-    }
-
-    const trimmed = idOrCode.trim();
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        trimmed,
-      );
-
-    const qb = this.auctions.createQueryBuilder('auction');
-    if (isUuid) {
-      qb.where('auction.id = :id OR LOWER(auction.code) = LOWER(:code)', {
-        id: trimmed,
-        code: trimmed,
-      });
-    } else {
-      qb.where('LOWER(auction.code) = LOWER(:code)', { code: trimmed });
-    }
-
-    const auction = await qb.getOne();
+    const auction = await this.findAuctionOrNull(idOrCode);
 
     if (!auction) {
       throw new NotFoundException({
@@ -790,6 +921,407 @@ export class AuctionService {
       shop,
       summaries.get(auction.id),
       recentBids,
+    );
+  }
+
+  async listBids(
+    idOrCode: string,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginatedAuctionBids> {
+    const auction = await this.findAuctionOrNull(idOrCode);
+    if (!auction) {
+      throw new NotFoundException({
+        statusCode: 404,
+        errorCode: 'AUCTION_NOT_FOUND',
+        message: 'Không tìm thấy phiên đấu giá',
+      });
+    }
+
+    const bidRepo = this.auctions.manager.getRepository(BidEntity);
+    const [bids, total] = await bidRepo.findAndCount({
+      where: {
+        auctionId: auction.id,
+        status: In(['WINNING', 'OUTBID']),
+      },
+      order: { placedAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      auctionId: auction.id,
+      items: bids.map((bid) => ({
+        id: bid.id,
+        bidderMaskedName: this.maskBidder(bid.bidderId),
+        amount: Number(bid.amount),
+        status: bid.status,
+        bidTime: new Date(bid.placedAt).toISOString(),
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  async getMyParticipations(
+    buyerId: string,
+    query: QueryParticipationsDto,
+  ): Promise<PaginatedBuyerParticipations> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 12;
+    const tab = query.tab ?? 'ALL';
+
+    const bidStats = await this.auctions.manager
+      .getRepository(BidEntity)
+      .createQueryBuilder('bid')
+      .select('bid.auctionId', 'auctionId')
+      .addSelect('MAX(bid.amount)', 'myHighestBid')
+      .addSelect('MAX(bid.placedAt)', 'lastBidAt')
+      .where('bid.bidderId = :buyerId', { buyerId })
+      .andWhere('bid.status IN (:...acceptedStatuses)', {
+        acceptedStatuses: ['WINNING', 'OUTBID'],
+      })
+      .groupBy('bid.auctionId')
+      .getRawMany<{
+        auctionId: string;
+        myHighestBid: string;
+        lastBidAt: string;
+      }>();
+
+    const bidStatMap = new Map(
+      bidStats.map((row) => [
+        row.auctionId,
+        {
+          myHighestBid: Number(row.myHighestBid),
+          lastBidAt: new Date(row.lastBidAt).getTime(),
+        },
+      ]),
+    );
+    const biddedAuctionIds = Array.from(bidStatMap.keys());
+
+    const qb = this.auctions.createQueryBuilder('auction');
+    if (biddedAuctionIds.length > 0) {
+      qb.where(
+        '(auction.id IN (:...biddedAuctionIds) OR auction.winnerId = :buyerId)',
+        { biddedAuctionIds, buyerId },
+      );
+    } else {
+      qb.where('auction.winnerId = :buyerId', { buyerId });
+    }
+
+    const now = new Date();
+    if (tab === 'BIDDING') {
+      qb.andWhere(
+        'auction.status IN (:...liveStatuses) AND auction.endsAt > :now',
+        { liveStatuses: ['SCHEDULED', 'ACTIVE'], now },
+      );
+    } else if (tab === 'WON') {
+      qb.andWhere(
+        '(auction.winnerId = :buyerId OR (auction.highestBidderId = :buyerId AND auction.status IN (:...closedStatuses) AND auction.endsAt <= :now))',
+        { buyerId, closedStatuses: ['ENDED', 'SETTLED'], now },
+      );
+    }
+
+    qb.orderBy('auction.endsAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [auctions, total] = await qb.getManyAndCount();
+    const viewItems = await this.hydrateAuctionViews(auctions);
+    const viewById = new Map(viewItems.map((view) => [view.auctionId, view]));
+
+    const settlementMap = await this.loadSettlementMap(
+      auctions.map((item) => item.id),
+    );
+
+    const items: BuyerParticipationItem[] = auctions.map((auction) => {
+      const settlement = settlementMap.get(auction.id);
+      const stat = bidStatMap.get(auction.id);
+      const isWinner =
+        auction.winnerId === buyerId ||
+        settlement?.winnerId === buyerId ||
+        (auction.highestBidderId === buyerId &&
+          ['ENDED', 'SETTLED'].includes(auction.status));
+
+      return {
+        auction: viewById.get(auction.id) ?? this.toView(auction),
+        myHighestBid: stat?.myHighestBid ?? null,
+        isLeading: auction.highestBidderId === buyerId,
+        isWinner,
+        settlementStatus: settlement?.status ?? null,
+        orderId: settlement?.orderId ?? null,
+        paymentDeadlineAt: settlement?.paymentDeadlineAt ?? null,
+        finalPrice:
+          settlement?.finalPrice ??
+          (auction.finalPrice !== null && auction.finalPrice !== undefined
+            ? Number(auction.finalPrice)
+            : null),
+      };
+    });
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  async endEarly(idOrCode: string, sellerId: string): Promise<AuctionView> {
+    const trimmed = idOrCode?.trim();
+    if (!trimmed) {
+      throw new NotFoundException({
+        errorCode: 'AUCTION_NOT_FOUND',
+        message: 'Không tìm thấy phiên đấu giá',
+      });
+    }
+
+    const endedAuction = await this.auctions.manager.transaction(
+      async (manager) => {
+        const auctionRepo = manager.getRepository(AuctionEntity);
+        const auction = await auctionRepo
+          .createQueryBuilder('auction')
+          .setLock('pessimistic_write')
+          .where(
+            'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+            { identifier: trimmed },
+          )
+          .getOne();
+
+        if (!auction) {
+          throw new NotFoundException({
+            errorCode: 'AUCTION_NOT_FOUND',
+            message: 'Không tìm thấy phiên đấu giá',
+          });
+        }
+        if (auction.sellerId !== sellerId) {
+          throw new ForbiddenException({
+            errorCode: 'AUCTION_NOT_OWNED',
+            message: 'Bạn không sở hữu phiên đấu giá này',
+          });
+        }
+
+        const now = new Date();
+        if (
+          auction.status !== 'ACTIVE' ||
+          auction.startsAt > now ||
+          auction.endsAt <= now
+        ) {
+          throw new ConflictException({
+            errorCode: 'AUCTION_NOT_ACTIVE',
+            message: 'Chỉ có thể kết thúc sớm phiên đấu giá đang diễn ra',
+          });
+        }
+
+        const previousStatus = auction.status;
+        auction.status = 'ENDED';
+        auction.endsAt = now;
+        const saved = await auctionRepo.save(auction);
+
+        await this.recordStatusHistory(
+          manager,
+          saved.id,
+          previousStatus,
+          'ENDED',
+          sellerId,
+          'SELLER',
+          'Seller ended auction early',
+        );
+
+        return saved;
+      },
+    );
+
+    // TODO(Dev 3/Dev 4): Trigger AuctionSettlementService.settleAuction(endedAuction.id) post-commit when implemented.
+    this.auctionEvents?.emitAuctionEnded({
+      sessionId: endedAuction.id,
+      auctionCode: endedAuction.code ?? null,
+      winnerId: endedAuction.highestBidderId ?? null,
+      finalPrice: endedAuction.highestBidderId
+        ? Number(endedAuction.currentPrice)
+        : null,
+      status: 'ENDED',
+    });
+
+    const [view] = await this.hydrateAuctionViews([endedAuction]);
+    return view;
+  }
+
+  async cancelAuction(
+    idOrCode: string,
+    actorId: string,
+    actorType: 'SELLER' | 'ADMIN',
+    reason?: string,
+  ): Promise<AuctionView> {
+    const trimmed = idOrCode?.trim();
+    if (!trimmed) {
+      throw new NotFoundException({
+        errorCode: 'AUCTION_NOT_FOUND',
+        message: 'Không tìm thấy phiên đấu giá',
+      });
+    }
+
+    const cancelledAuction = await this.auctions.manager.transaction(
+      async (manager) => {
+        const auctionRepo = manager.getRepository(AuctionEntity);
+        const auction = await auctionRepo
+          .createQueryBuilder('auction')
+          .setLock('pessimistic_write')
+          .where(
+            'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+            { identifier: trimmed },
+          )
+          .getOne();
+
+        if (!auction) {
+          throw new NotFoundException({
+            errorCode: 'AUCTION_NOT_FOUND',
+            message: 'Không tìm thấy phiên đấu giá',
+          });
+        }
+
+        if (actorType === 'SELLER') {
+          if (auction.sellerId !== actorId) {
+            throw new ForbiddenException({
+              errorCode: 'AUCTION_NOT_OWNED',
+              message: 'Bạn không sở hữu phiên đấu giá này',
+            });
+          }
+          if (
+            ['CANCELLED', 'ENDED', 'SETTLED', 'FAILED'].includes(auction.status)
+          ) {
+            throw new ConflictException({
+              errorCode: 'AUCTION_ALREADY_CLOSED',
+              message: 'Không thể hủy phiên đấu giá đã kết thúc hoặc đã hủy',
+            });
+          }
+          if (auction.bidCount > 0 || auction.highestBidId) {
+            throw new ConflictException({
+              errorCode: 'AUCTION_CANCEL_HAS_BIDS',
+              message: 'Không thể hủy phiên đấu giá đã có người đặt giá',
+            });
+          }
+        } else if (['SETTLED', 'CANCELLED'].includes(auction.status)) {
+          throw new ConflictException({
+            errorCode: 'AUCTION_CANNOT_CANCEL',
+            message: 'Phiên đấu giá đã được quyết toán hoặc đã hủy trước đó',
+          });
+        }
+
+        const previousStatus = auction.status;
+        auction.status = 'CANCELLED';
+        auction.cancelledBy = actorId;
+        auction.cancelActorType = actorType;
+        auction.cancelReason = reason?.trim() || null;
+        const saved = await auctionRepo.save(auction);
+
+        await this.recordStatusHistory(
+          manager,
+          saved.id,
+          previousStatus,
+          'CANCELLED',
+          actorId,
+          actorType,
+          auction.cancelReason ?? `${actorType} cancelled auction`,
+        );
+
+        return saved;
+      },
+    );
+
+    // TODO(Dev 2/Dev 3): Release reserved SKU inventory & decrement seller_auction_counters after cancel.
+    this.auctionEvents?.emitAuctionEnded({
+      sessionId: cancelledAuction.id,
+      auctionCode: cancelledAuction.code ?? null,
+      winnerId: null,
+      finalPrice: null,
+      status: 'CANCELLED',
+    });
+
+    const [view] = await this.hydrateAuctionViews([cancelledAuction]);
+    return view;
+  }
+
+  private async loadSettlementMap(auctionIds: string[]): Promise<
+    Map<
+      string,
+      {
+        winnerId: string;
+        status: string;
+        orderId: string | null;
+        paymentDeadlineAt: string | null;
+        finalPrice: number | null;
+      }
+    >
+  > {
+    const map = new Map<
+      string,
+      {
+        winnerId: string;
+        status: string;
+        orderId: string | null;
+        paymentDeadlineAt: string | null;
+        finalPrice: number | null;
+      }
+    >();
+    if (
+      auctionIds.length === 0 ||
+      typeof this.auctions.manager.query !== 'function'
+    ) {
+      return map;
+    }
+
+    const rows = (await this.auctions.manager.query(
+      `SELECT auction_id, winner_id, status, order_id, payment_deadline_at, final_price
+       FROM auction.auction_settlements
+       WHERE auction_id = ANY($1::uuid[])`,
+      [auctionIds],
+    )) as Array<{
+      auction_id: string;
+      winner_id: string;
+      status: string;
+      order_id: string | null;
+      payment_deadline_at: Date | string | null;
+      final_price: string | number | null;
+    }>;
+
+    for (const row of rows) {
+      map.set(row.auction_id, {
+        winnerId: row.winner_id,
+        status: row.status,
+        orderId: row.order_id ?? null,
+        paymentDeadlineAt: row.payment_deadline_at
+          ? new Date(row.payment_deadline_at).toISOString()
+          : null,
+        finalPrice:
+          row.final_price !== null && row.final_price !== undefined
+            ? Number(row.final_price)
+            : null,
+      });
+    }
+    return map;
+  }
+
+  private async recordStatusHistory(
+    manager: EntityManager,
+    auctionId: string,
+    fromStatus: string,
+    toStatus: string,
+    actorId: string,
+    actorType: string,
+    reason: string,
+  ): Promise<void> {
+    if (typeof manager.query !== 'function') {
+      return;
+    }
+    await manager.query(
+      `INSERT INTO auction.auction_status_history
+         (auction_id, from_status, to_status, actor_id, actor_type, reason)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [auctionId, fromStatus, toStatus, actorId, actorType, reason],
     );
   }
 }

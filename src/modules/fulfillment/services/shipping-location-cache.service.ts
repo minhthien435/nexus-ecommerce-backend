@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
+import { readRedisBaseOptions } from '../../../config/redis.config.js';
 
 const CACHE_TTL_SECONDS = 86400;
 
@@ -11,11 +12,7 @@ export class ShippingLocationCacheService implements OnModuleDestroy {
 
   constructor(config: ConfigService) {
     this.redis = new Redis({
-      host: config.get<string>('REDIS_HOST', 'localhost'),
-      port: config.get<number>('REDIS_PORT', 6379),
-      password: config.get<string>('REDIS_PASSWORD') || undefined,
-      db: config.get<number>('REDIS_DB', 0),
-      connectTimeout: config.get<number>('REDIS_CONNECT_TIMEOUT_MS', 500),
+      ...readRedisBaseOptions(config),
       lazyConnect: true,
       commandTimeout: 500,
       enableOfflineQueue: false,

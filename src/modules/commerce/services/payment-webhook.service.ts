@@ -20,6 +20,7 @@ import {
   type OrderExpiryJobPayload,
 } from '../order-expiry.constants.js';
 import { PayosClientService } from './payos-client.service.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 export interface WebhookProcessingResult {
   received: boolean;
@@ -36,6 +37,8 @@ export class PaymentWebhookService {
     @Optional()
     @InjectQueue(ORDER_EXPIRY_QUEUE)
     private readonly expiryQueue?: Queue<OrderExpiryJobPayload>,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   async handlePayosWebhook(body: Webhook): Promise<WebhookProcessingResult> {
@@ -218,6 +221,7 @@ export class PaymentWebhookService {
       // 4. Post-commit side effects: Cancel BullMQ order expiry job if order transitioned to PAID
       if (orderIdToCancelExpiry) {
         await this.cancelOrderExpiryJob(orderIdToCancelExpiry);
+        await this.notifyPaidOrder(orderIdToCancelExpiry);
       }
 
       return result;
@@ -270,6 +274,46 @@ export class PaymentWebhookService {
     } catch (jobError) {
       this.logger.warn(
         `Failed to cancel order expiry job '${jobId}' for order ${orderId}: ${(jobError as Error).message}. Order status is already committed as PAID; OrderExpiryProcessor will safely skip expiry.`,
+      );
+    }
+  }
+
+  private async notifyPaidOrder(orderId: string): Promise<void> {
+    try {
+      const order = await this.dataSource.getRepository(OrderEntity).findOne({
+        where: { id: orderId },
+        select: {
+          id: true,
+          orderNumber: true,
+          buyerId: true,
+          sellerId: true,
+        },
+      });
+      if (!order) return;
+      await this.notifications?.notifyMany([
+        {
+          userId: order.buyerId,
+          type: 'ORDER_PAID',
+          title: 'Thanh toán thành công',
+          content: `Đơn hàng ${order.orderNumber} đã được thanh toán thành công.`,
+          actionUrl: `/orders/${order.id}`,
+          metadata: { orderId: order.id, orderNumber: order.orderNumber },
+          sourceEventId: order.id,
+        },
+        {
+          userId: order.sellerId,
+          type: 'ORDER_PAID',
+          title: 'Đơn hàng mới đã thanh toán',
+          content: `Đơn hàng ${order.orderNumber} đã được người mua thanh toán.`,
+          actionUrl: `/seller/orders/${order.id}`,
+          metadata: { orderId: order.id, orderNumber: order.orderNumber },
+          sourceEventId: order.id,
+        },
+      ]);
+    } catch (error) {
+      this.logger.error(
+        `Order ${orderId} was paid but notification dispatch failed`,
+        error instanceof Error ? error.stack : undefined,
       );
     }
   }

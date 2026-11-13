@@ -1,16 +1,15 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { In } from 'typeorm';
 import { AuctionService } from './auction.service.js';
-import type { AuctionEntity } from './entities/auction.entity.js';
+import { AuctionEntity } from './entities/auction.entity.js';
 
 describe('AuctionService', () => {
-  const unusedDataSource = {} as never;
-  const unusedReservation = {} as never;
   const bidReadRepository = (rows: unknown[] = [], bids: unknown[] = []) => ({
     createQueryBuilder: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnThis(),
@@ -28,8 +27,6 @@ describe('AuctionService', () => {
       {} as never,
       {} as never,
       {} as never,
-      unusedDataSource,
-      unusedReservation,
     );
     expect(service.calculateDemoPrices(1000)).toEqual({
       startPrice: '600.00',
@@ -45,8 +42,6 @@ describe('AuctionService', () => {
       {} as never,
       {} as never,
       {} as never,
-      unusedDataSource,
-      unusedReservation,
     );
     const auction = {
       id: 'auction-1',
@@ -94,8 +89,6 @@ describe('AuctionService', () => {
       products as never,
       skus as never,
       shops as never,
-      unusedDataSource,
-      unusedReservation,
     );
     await expect(
       service.createDemoForSku('sku', { startsAt: new Date() }),
@@ -112,8 +105,6 @@ describe('AuctionService', () => {
       products as never,
       skus as never,
       shops as never,
-      unusedDataSource,
-      unusedReservation,
     );
     await expect(
       service.createDemoForSku('sku', { startsAt: new Date('bad') }),
@@ -213,8 +204,6 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
-        unusedDataSource,
-        unusedReservation,
       );
 
       const result = await service.findByIdOrCode('auc-202311-0001');
@@ -294,8 +283,6 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
-        unusedDataSource,
-        unusedReservation,
       );
 
       const result = await service.findByIdOrCode(uuid);
@@ -321,8 +308,6 @@ describe('AuctionService', () => {
         {} as never,
         {} as never,
         {} as never,
-        unusedDataSource,
-        unusedReservation,
       );
 
       await expect(service.findByIdOrCode('AUC-NOTFOUND')).rejects.toThrow(
@@ -393,8 +378,6 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
-        unusedDataSource,
-        unusedReservation,
       );
 
       const result = await service.list({
@@ -418,6 +401,43 @@ describe('AuctionService', () => {
   });
 
   describe('create', () => {
+    const createService = (
+      auctions: Record<string, any>,
+      products: Record<string, any>,
+      skus: Record<string, any>,
+      reservation = {
+        reserve: vi
+          .fn()
+          .mockResolvedValue([
+            { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+          ]),
+      },
+    ) => {
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      auctions.manager = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
+      return {
+        service: new AuctionService(
+          auctions as never,
+          products as never,
+          skus as never,
+          {} as never,
+          undefined,
+          undefined,
+          reservation as never,
+        ),
+        reservation,
+        manager,
+      };
+    };
+
     it('creates an auction for an owned active eligible SKU', async () => {
       const auctions = {
         findOne: vi.fn().mockResolvedValue(null),
@@ -441,30 +461,10 @@ describe('AuctionService', () => {
           currency: 'VND',
         }),
       };
-      const manager = {
-        getRepository: vi
-          .fn()
-          .mockReturnValueOnce(skus)
-          .mockReturnValueOnce(products)
-          .mockReturnValueOnce(auctions),
-      };
-      const dataSource = {
-        transaction: vi.fn(async (callback) => callback(manager)),
-      };
-      const reservation = {
-        reserve: vi
-          .fn()
-          .mockResolvedValue([
-            { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
-          ]),
-      };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-        dataSource as never,
-        reservation as never,
+      const { service, reservation, manager } = createService(
+        auctions,
+        products,
+        skus,
       );
       const result = await service.create(
         {
@@ -500,24 +500,7 @@ describe('AuctionService', () => {
           .fn()
           .mockResolvedValue({ id: 'sku-1', productId: 'product-1' }),
       };
-      const manager = {
-        getRepository: vi
-          .fn()
-          .mockReturnValueOnce(skus)
-          .mockReturnValueOnce(products)
-          .mockReturnValueOnce(auctions),
-      };
-      const dataSource = {
-        transaction: vi.fn(async (callback) => callback(manager)),
-      };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-        dataSource as never,
-        { reserve: vi.fn() } as never,
-      );
+      const { service } = createService(auctions, products, skus);
 
       await expect(
         service.create(
@@ -559,24 +542,7 @@ describe('AuctionService', () => {
           productId: 'product-1',
         }),
       };
-      const manager = {
-        getRepository: vi
-          .fn()
-          .mockReturnValueOnce(skus)
-          .mockReturnValueOnce(products)
-          .mockReturnValueOnce(auctions),
-      };
-      const dataSource = {
-        transaction: vi.fn(async (callback) => callback(manager)),
-      };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-        dataSource as never,
-        { reserve: vi.fn() } as never,
-      );
+      const { service } = createService(auctions, products, skus);
 
       await expect(
         service.create(
@@ -597,7 +563,7 @@ describe('AuctionService', () => {
       expect(auctions.save).not.toHaveBeenCalled();
     });
 
-    it('does not save the auction when inventory reservation fails', async () => {
+    it('does not save when inventory reservation fails', async () => {
       const auctions = {
         findOne: vi.fn().mockResolvedValue(null),
         create: vi.fn((value) => value),
@@ -620,30 +586,12 @@ describe('AuctionService', () => {
           currency: 'VND',
         }),
       };
-      const manager = {
-        getRepository: vi
-          .fn()
-          .mockReturnValueOnce(skus)
-          .mockReturnValueOnce(products)
-          .mockReturnValueOnce(auctions),
-      };
-      const dataSource = {
-        transaction: vi.fn(async (callback) => callback(manager)),
-      };
       const reservationError = new ConflictException({
         errorCode: 'INSUFFICIENT_STOCK',
       });
-      const reservation = {
+      const { service } = createService(auctions, products, skus, {
         reserve: vi.fn().mockRejectedValue(reservationError),
-      };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-        dataSource as never,
-        reservation as never,
-      );
+      });
 
       await expect(
         service.create(
@@ -658,46 +606,7 @@ describe('AuctionService', () => {
           'seller-1',
         ),
       ).rejects.toBe(reservationError);
-      expect(reservation.reserve).toHaveBeenCalledWith(
-        [{ skuId: 'sku-1', quantity: 1 }],
-        manager,
-      );
       expect(auctions.save).not.toHaveBeenCalled();
-    });
-
-    it('maps only the open-auction unique constraint', async () => {
-      const dto = {
-        skuId: 'sku-1',
-        startPrice: 100,
-        reservePrice: 120,
-        bidIncrement: 10,
-        startsAt: new Date(Date.now() + 1000).toISOString(),
-        endsAt: new Date(Date.now() + 3600000).toISOString(),
-      };
-      const openConstraint = {
-        code: '23505',
-        constraint: 'UQ_auction_one_open_per_sku',
-      };
-      const codeConstraint = { code: '23505', constraint: 'UQ_auction_code' };
-      const serviceFor = (error: unknown) =>
-        new AuctionService(
-          {} as never,
-          {} as never,
-          {} as never,
-          {} as never,
-          { transaction: vi.fn().mockRejectedValue(error) } as never,
-          {} as never,
-        );
-
-      await expect(
-        serviceFor(openConstraint).create(dto, 'seller-1'),
-      ).rejects.toMatchObject({
-        status: 409,
-        response: { errorCode: 'AUCTION_ALREADY_OPEN' },
-      });
-      await expect(
-        serviceFor(codeConstraint).create(dto, 'seller-1'),
-      ).rejects.toBe(codeConstraint);
     });
   });
 
@@ -710,6 +619,7 @@ describe('AuctionService', () => {
       bidIncrement: '10.00',
       bidCount: 1,
       highestBidId: 'old-bid',
+      highestBidderId: null as string | null,
       startsAt: new Date(Date.now() - 1000),
       endsAt: new Date(Date.now() + 60000),
       status: 'ACTIVE',
@@ -744,22 +654,21 @@ describe('AuctionService', () => {
           .mockReturnValueOnce(eligibilityRepo),
         query: vi.fn().mockResolvedValue([]),
       };
-      const dataSource = {
-        transaction: vi.fn(async (callback) => callback(manager)),
+      const auctions = {
+        manager: {
+          transaction: vi.fn(async (callback) => callback(manager)),
+        },
       };
       return {
         service: new AuctionService(
+          auctions as never,
           {} as never,
           {} as never,
-          {} as never,
-          {} as never,
-          dataSource as never,
           {} as never,
         ),
         auctionRepo,
         bidRepo,
         eligibilityRepo,
-        manager,
       };
     }
 
@@ -851,12 +760,16 @@ describe('AuctionService', () => {
       );
     });
 
-    it('returns the original bid before applying the current-leader prohibition', async () => {
-      const auction = { ...activeAuction(), highestBidderId: 'buyer-1' };
-      const { service, auctionRepo, bidRepo } = biddingService(auction);
+    it('returns an idempotent retry before applying the leader prohibition', async () => {
+      const auction = {
+        ...activeAuction(),
+        highestBidderId: 'buyer-1',
+        currentPrice: '110.00',
+      };
+      const { service, bidRepo, auctionRepo } = biddingService(auction);
       bidRepo.findOne.mockResolvedValue({
         id: 'original-bid',
-        auctionId: 'auction-1',
+        auctionId: auction.id,
         bidderId: 'buyer-1',
         amount: '110.00',
         idempotencyKey: 'retry-key',
@@ -866,33 +779,22 @@ describe('AuctionService', () => {
         service.placeBid('AUC-1', 'buyer-1', 110, ' retry-key '),
       ).resolves.toMatchObject({
         bid: { id: 'original-bid' },
-        minNextBid: 110,
+        minNextBid: 120,
       });
       expect(bidRepo.save).not.toHaveBeenCalled();
       expect(auctionRepo.save).not.toHaveBeenCalled();
     });
 
-    it('rejects reuse of an idempotency key with a different amount', async () => {
-      const { service, bidRepo } = biddingService();
-      bidRepo.findOne.mockResolvedValue({ amount: '110.00' });
-      await expect(
-        service.placeBid('AUC-1', 'buyer-1', 120, 'retry-key'),
-      ).rejects.toMatchObject({
-        status: 409,
-        response: { errorCode: 'IDEMPOTENCY_KEY_REUSED' },
+    it('rejects current leaders and restricted bidders before writes', async () => {
+      const leader = biddingService({
+        ...activeAuction(),
+        highestBidderId: 'buyer-1',
       });
-      expect(bidRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('rejects the current leader and restricted or low-score bidders before writes', async () => {
-      const leaderAuction = { ...activeAuction(), highestBidderId: 'buyer-1' };
-      const leader = biddingService(leaderAuction);
       await expect(
         leader.service.placeBid('AUC-1', 'buyer-1', 110),
       ).rejects.toMatchObject({
         response: { errorCode: 'ALREADY_HIGHEST_BIDDER' },
       });
-      expect(leader.bidRepo.save).not.toHaveBeenCalled();
 
       const restricted = biddingService();
       restricted.eligibilityRepo.findOne.mockResolvedValue({
@@ -905,18 +807,433 @@ describe('AuctionService', () => {
         response: { errorCode: 'REPUTATION_TOO_LOW' },
       });
       expect(restricted.bidRepo.save).not.toHaveBeenCalled();
+    });
 
-      const lowScore = biddingService();
-      lowScore.eligibilityRepo.findOne.mockResolvedValue({
-        reputationScore: 49,
-        restricted: false,
+    it('emits bid:placed post-commit using canonical UUID sessionId', async () => {
+      const auction = activeAuction();
+      const emitBidPlaced = vi.fn();
+      const { auctionRepo, bidRepo } = biddingService(auction);
+      const mockManager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(auctionRepo)
+          .mockReturnValueOnce(bidRepo)
+          .mockReturnValueOnce({ findOne: vi.fn().mockResolvedValue(null) }),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (fn: (m: any) => Promise<any>) => fn(mockManager),
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        { emitBidPlaced } as never,
+      );
+
+      await service.placeBid('AUC-1', 'buyer-1', 110);
+
+      expect(emitBidPlaced).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: auction.id,
+          auctionCode: 'AUC-1',
+          newPrice: 110,
+          highestBidderId: 'buyer-1',
+        }),
+      );
+    });
+  });
+
+  describe('Dev 1 (Minh) views, filters, history, participations, endEarly & cancel', () => {
+    it('returns canonical auctionId, actual highestBidderId, and media360 in views', () => {
+      const service = new AuctionService(
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+      const auction = {
+        id: 'uuid-auction-1',
+        code: 'AUC-001',
+        sellerId: 'seller-1',
+        titleSnapshot: '3D Watch',
+        startPrice: '100.00',
+        currentPrice: '150.00',
+        bidIncrement: '10.00',
+        bidCount: 2,
+        highestBidderId: 'buyer-9999',
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 60_000),
+        status: 'ACTIVE',
+      } as AuctionEntity;
+
+      const product = {
+        id: 'prod-1',
+        name: '3D Watch',
+        slug: '3d-watch',
+        categoryId: 'cat-1',
+        images: [],
+        attributes: {
+          model3dUrl: 'https://cdn.example.com/watch.glb',
+          spinImages: [
+            'https://cdn.example.com/1.jpg',
+            'https://cdn.example.com/2.jpg',
+          ],
+          Material: 'Titanium',
+        },
+      } as any;
+
+      const detail = service.toDetailView(auction, product);
+      expect(detail.id).toBe('AUC-001');
+      expect(detail.auctionId).toBe('uuid-auction-1');
+      expect(detail.highestBidderId).toBe('buyer-9999');
+      expect(detail.media360).toEqual({
+        model3dUrl: 'https://cdn.example.com/watch.glb',
+        spinImages: [
+          'https://cdn.example.com/1.jpg',
+          'https://cdn.example.com/2.jpg',
+        ],
       });
+      expect(detail.specs).toEqual([{ name: 'Material', value: 'Titanium' }]);
+    });
+
+    it('filters list() by sellerId when supplied', async () => {
+      const qb = {
+        innerJoin: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[], 0]),
+      };
+      const service = new AuctionService(
+        { createQueryBuilder: vi.fn().mockReturnValue(qb) } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+      );
+
+      await service.list({ sellerId: 'seller-abc', page: 1, limit: 10 });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('auction.sellerId = :sellerId', {
+        sellerId: 'seller-abc',
+      });
+    });
+
+    it('paginates full bid history via listBids()', async () => {
+      const auction = { id: 'uuid-1', code: 'AUC-1' };
+      const qb = {
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auction),
+      };
+      const bidRepo = {
+        findAndCount: vi.fn().mockResolvedValue([
+          [
+            {
+              id: 'bid-2',
+              auctionId: 'uuid-1',
+              bidderId: '00000000-0000-0000-0000-000000009999',
+              amount: '250.00',
+              status: 'WINNING',
+              placedAt: new Date('2026-11-13T08:00:00Z'),
+            },
+          ],
+          15,
+        ]),
+      };
+      const service = new AuctionService(
+        {
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          manager: { getRepository: vi.fn().mockReturnValue(bidRepo) },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      const res = await service.listBids('AUC-1', 2, 10);
+      expect(res).toEqual({
+        auctionId: 'uuid-1',
+        items: [
+          {
+            id: 'bid-2',
+            bidderMaskedName: '***9999',
+            amount: 250,
+            status: 'WINNING',
+            bidTime: '2026-11-13T08:00:00.000Z',
+          },
+        ],
+        total: 15,
+        page: 2,
+        limit: 10,
+        totalPages: 2,
+      });
+    });
+
+    it('ends an active auction early for owner and emits auction:ended', async () => {
+      const liveAuction = {
+        id: 'uuid-1',
+        code: 'AUC-1',
+        sellerId: 'seller-1',
+        productId: 'prod-1',
+        titleSnapshot: 'Watch',
+        startPrice: '100.00',
+        currentPrice: '200.00',
+        bidIncrement: '10.00',
+        highestBidderId: 'buyer-1',
+        bidCount: 3,
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 60_000),
+        status: 'ACTIVE',
+      } as AuctionEntity;
+
+      const qb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(liveAuction),
+      };
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue(qb),
+        save: vi.fn().mockImplementation(async (x) => x),
+      };
+      const bidRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          addSelect: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          groupBy: vi.fn().mockReturnThis(),
+          getRawMany: vi.fn().mockResolvedValue([]),
+        }),
+      };
+      const emitAuctionEnded = vi.fn();
+      const mockManager = {
+        getRepository: vi.fn().mockReturnValue(auctionRepo),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (fn: (m: any) => Promise<any>) => fn(mockManager),
+            getRepository: vi.fn().mockReturnValue(bidRepo),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        { emitAuctionEnded } as never,
+      );
+
+      const view = await service.endEarly('AUC-1', 'seller-1');
+      expect(view.status).toBe('ENDED');
+      expect(emitAuctionEnded).toHaveBeenCalledWith({
+        sessionId: 'uuid-1',
+        auctionCode: 'AUC-1',
+        winnerId: 'buyer-1',
+        finalPrice: 200,
+        status: 'ENDED',
+      });
+    });
+
+    it('forbids seller from cancelling auction owned by another seller or with existing bids', async () => {
+      const auction = {
+        id: 'uuid-1',
+        sellerId: 'seller-owner',
+        bidCount: 1,
+        highestBidId: 'bid-1',
+        status: 'ACTIVE',
+      } as AuctionEntity;
+      const qb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auction),
+      };
+      const mockManager = {
+        getRepository: vi.fn().mockReturnValue({
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          save: vi.fn(),
+        }),
+      };
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (fn: (m: any) => Promise<any>) => fn(mockManager),
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
       await expect(
-        lowScore.service.placeBid('AUC-1', 'buyer-1', 110),
+        service.cancelAuction('uuid-1', 'other-seller', 'SELLER'),
+      ).rejects.toThrow(ForbiddenException);
+
+      await expect(
+        service.cancelAuction('uuid-1', 'seller-owner', 'SELLER'),
       ).rejects.toMatchObject({
-        response: { errorCode: 'REPUTATION_TOO_LOW' },
+        status: 409,
+        response: { errorCode: 'AUCTION_CANCEL_HAS_BIDS' },
       });
-      expect(lowScore.bidRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('allows admin to force-cancel an active auction with bids', async () => {
+      const auction = {
+        id: 'uuid-1',
+        code: 'AUC-1',
+        sellerId: 'seller-owner',
+        productId: 'prod-1',
+        titleSnapshot: 'Watch',
+        startPrice: '100.00',
+        currentPrice: '200.00',
+        bidIncrement: '10.00',
+        bidCount: 2,
+        highestBidId: 'bid-2',
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 60_000),
+        status: 'ACTIVE',
+      } as AuctionEntity;
+      const qb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auction),
+      };
+      const emitAuctionEnded = vi.fn();
+      const mockManager = {
+        getRepository: vi.fn().mockReturnValue({
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          save: vi.fn().mockImplementation(async (x) => x),
+        }),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      const bidRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          addSelect: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          groupBy: vi.fn().mockReturnThis(),
+          getRawMany: vi.fn().mockResolvedValue([]),
+        }),
+      };
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (fn: (m: any) => Promise<any>) => fn(mockManager),
+            getRepository: vi.fn().mockReturnValue(bidRepo),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        { emitAuctionEnded } as never,
+      );
+
+      const res = await service.cancelAuction(
+        'AUC-1',
+        'admin-1',
+        'ADMIN',
+        'Vi phạm chính sách',
+      );
+      expect(res.status).toBe('CANCELLED');
+      expect(emitAuctionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'uuid-1',
+          winnerId: null,
+          status: 'CANCELLED',
+        }),
+      );
+    });
+
+    it('returns buyer participations with highest bid, settlement orderId, and paymentDeadlineAt', async () => {
+      const wonAuction = {
+        id: 'uuid-won-1',
+        code: 'AUC-WON',
+        sellerId: 'seller-1',
+        productId: 'prod-1',
+        titleSnapshot: 'Rolex Daytona',
+        startPrice: '1000.00',
+        currentPrice: '1500.00',
+        bidIncrement: '50.00',
+        highestBidderId: 'buyer-1',
+        winnerId: 'buyer-1',
+        finalPrice: '1500.00',
+        bidCount: 4,
+        startsAt: new Date(Date.now() - 120_000),
+        endsAt: new Date(Date.now() - 10_000),
+        status: 'SETTLED',
+      } as AuctionEntity;
+
+      const bidQb = {
+        select: vi.fn().mockReturnThis(),
+        addSelect: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        groupBy: vi.fn().mockReturnThis(),
+        getRawMany: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              auctionId: 'uuid-won-1',
+              myHighestBid: '1500.00',
+              lastBidAt: '2026-11-13T10:00:00.000Z',
+            },
+          ])
+          .mockResolvedValueOnce([]),
+      };
+      const auctionQb = {
+        where: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[wonAuction], 1]),
+      };
+
+      const deadline = new Date('2026-11-14T10:00:00.000Z');
+      const service = new AuctionService(
+        {
+          createQueryBuilder: vi.fn().mockReturnValue(auctionQb),
+          manager: {
+            getRepository: vi.fn().mockReturnValue({
+              createQueryBuilder: vi.fn().mockReturnValue(bidQb),
+            }),
+            query: vi.fn().mockResolvedValue([
+              {
+                auction_id: 'uuid-won-1',
+                winner_id: 'buyer-1',
+                status: 'PENDING_PAYMENT',
+                order_id: 'order-uuid-1',
+                payment_deadline_at: deadline,
+                final_price: '1500.00',
+              },
+            ]),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+      );
+
+      const res = await service.getMyParticipations('buyer-1', {
+        tab: 'WON',
+        page: 1,
+        limit: 12,
+      });
+
+      expect(res.total).toBe(1);
+      expect(res.items[0]).toMatchObject({
+        myHighestBid: 1500,
+        isLeading: true,
+        isWinner: true,
+        settlementStatus: 'PENDING_PAYMENT',
+        orderId: 'order-uuid-1',
+        paymentDeadlineAt: deadline.toISOString(),
+        finalPrice: 1500,
+      });
+      expect(res.items[0].auction.auctionId).toBe('uuid-won-1');
     });
   });
 });

@@ -1,5 +1,6 @@
 // src/modules/identity/auth/services/token.service.ts
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -7,6 +8,7 @@ import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
 import { UserEntity } from '../../domain/user.entity.js';
+import { resolveJwtAccessExpiry } from '../jwt-expiry.util.js';
 
 @Injectable()
 export class TokenService {
@@ -15,10 +17,16 @@ export class TokenService {
     private readonly tokenRepo: Repository<RefreshTokenEntity>,
     private readonly jwtService: JwtService,
     private readonly dataSource: DataSource,
+    @Optional()
+    private readonly configService?: ConfigService,
   ) {}
 
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  getAccessTokenExpiresInSeconds(): number {
+    return resolveJwtAccessExpiry(this.configService).seconds;
   }
 
   async generateAccessToken(user: UserEntity): Promise<string> {
@@ -27,7 +35,8 @@ export class TokenService {
       email: user.email,
       tokenVersion: user.tokenVersion,
     };
-    return this.jwtService.signAsync(payload, { expiresIn: '8h' });
+    const { signOption } = resolveJwtAccessExpiry(this.configService);
+    return this.jwtService.signAsync(payload, { expiresIn: signOption });
   }
 
   async createRefreshToken(

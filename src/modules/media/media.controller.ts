@@ -70,4 +70,31 @@ export class MediaController {
       data,
     };
   }
+
+  /**
+   * Tải lên 1 file mô hình 3D (.glb) dùng cho Auction 360/3D viewer.
+   * Multipart field: 'file'
+   */
+  @Post('upload-3d')
+  @UseGuards(AccessTokenGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadModel3d(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('folder') folder?: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException(
+        'Vui lòng chọn file mô hình 3D .glb (field: file)',
+      );
+    }
+
+    const data = await this.mediaService.uploadModel3d(file, folder);
+
+    return {
+      success: true,
+      statusCode: HttpStatus.CREATED,
+      message: 'Tải mô hình 3D lên thành công',
+      data,
+    };
+  }
 }

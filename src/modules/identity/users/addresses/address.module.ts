@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccessTokenGuard } from '../../auth/guards/access-token.guard.js';
+import { resolveJwtAccessExpiry } from '../../auth/jwt-expiry.util.js';
 import { UserEntity } from '../../domain/user.entity.js';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressController } from './address.controller.js';
@@ -19,7 +20,7 @@ import { ShippingLocationCacheService } from '../../../fulfillment/services/ship
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_ACCESS_SECRET', 'super-secret-key-15m'),
-        signOptions: { expiresIn: '8h' },
+        signOptions: { expiresIn: resolveJwtAccessExpiry(config).signOption },
       }),
     }),
   ],

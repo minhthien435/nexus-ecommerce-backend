@@ -50,12 +50,16 @@ describe('IdentitySupportLookupService', () => {
     expect(users.find).not.toHaveBeenCalled();
     expect(shops.find).not.toHaveBeenCalled();
 
-    shops.find.mockResolvedValue([{ sellerId: 'seller-1', name: 'Shop' }]);
+    shops.find.mockResolvedValue([
+      { id: 'shop-1', sellerId: 'seller-1', name: 'Shop', slug: 'shop' },
+    ]);
     await service.getShopsBySellerIds(['SELLER-1']);
     expect(shops.find).toHaveBeenCalledWith({
       select: {
+        id: true,
         sellerId: true,
         name: true,
+        slug: true,
         status: true,
         logoUrl: true,
       },
