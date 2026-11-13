@@ -9,10 +9,13 @@ import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { IdentityModule } from '../identity/identity.module.js';
+import { FulfillmentModule } from '../fulfillment/fulfillment.module.js';
+import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 
 @Module({
   imports: [
     IdentityModule,
+    FulfillmentModule,
     TypeOrmModule.forFeature([
       AuctionEntity,
       BidEntity,
@@ -20,6 +23,7 @@ import { IdentityModule } from '../identity/identity.module.js';
       ProductSkuEntity,
       ProductImageEntity,
       ShopEntity,
+      BidderEligibilityEntity,
     ]),
   ],
   controllers: [AuctionController],

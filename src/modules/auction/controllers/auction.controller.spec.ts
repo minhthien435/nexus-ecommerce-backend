@@ -1,4 +1,9 @@
-import { HttpStatus, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AuctionController } from './auction.controller.js';
 import type { AuctionService } from '../auction.service.js';
@@ -134,6 +139,52 @@ describe('AuctionController', () => {
       data: bidResult,
     });
     expect(mockService.create).toHaveBeenCalledWith(createDto, 'seller-1');
-    expect(mockService.placeBid).toHaveBeenCalledWith('AUC-1', 'buyer-1', 110);
+    expect(mockService.placeBid).toHaveBeenCalledWith(
+      'AUC-1',
+      'buyer-1',
+      110,
+      undefined,
+    );
+  });
+
+  it('passes one normalized idempotency key and rejects conflicting sources', async () => {
+    const mockService = {
+      placeBid: vi.fn().mockResolvedValue({ bid: { id: 'bid-1' } }),
+    } as unknown as AuctionService;
+    const controller = new AuctionController(mockService);
+
+    await controller.placeBid(
+      'AUC-1',
+      { amount: 110, idempotencyKey: 'same-key' },
+      'buyer-1',
+      ' same-key ',
+    );
+    expect(mockService.placeBid).toHaveBeenCalledWith(
+      'AUC-1',
+      'buyer-1',
+      110,
+      'same-key',
+    );
+    await expect(
+      controller.placeBid(
+        'AUC-1',
+        { amount: 110, idempotencyKey: 'body-key' },
+        'buyer-1',
+        'header-key',
+      ),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('rejects empty or oversized idempotency headers before calling the service', async () => {
+    const mockService = { placeBid: vi.fn() } as unknown as AuctionService;
+    const controller = new AuctionController(mockService);
+
+    await expect(
+      controller.placeBid('AUC-1', { amount: 110 }, 'buyer-1', '   '),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      controller.placeBid('AUC-1', { amount: 110 }, 'buyer-1', 'x'.repeat(201)),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockService.placeBid).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,8 @@ import { AuctionService } from './auction.service.js';
 import type { AuctionEntity } from './entities/auction.entity.js';
 
 describe('AuctionService', () => {
+  const unusedDataSource = {} as never;
+  const unusedReservation = {} as never;
   const bidReadRepository = (rows: unknown[] = [], bids: unknown[] = []) => ({
     createQueryBuilder: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnThis(),
@@ -26,6 +28,8 @@ describe('AuctionService', () => {
       {} as never,
       {} as never,
       {} as never,
+      unusedDataSource,
+      unusedReservation,
     );
     expect(service.calculateDemoPrices(1000)).toEqual({
       startPrice: '600.00',
@@ -41,6 +45,8 @@ describe('AuctionService', () => {
       {} as never,
       {} as never,
       {} as never,
+      unusedDataSource,
+      unusedReservation,
     );
     const auction = {
       id: 'auction-1',
@@ -88,6 +94,8 @@ describe('AuctionService', () => {
       products as never,
       skus as never,
       shops as never,
+      unusedDataSource,
+      unusedReservation,
     );
     await expect(
       service.createDemoForSku('sku', { startsAt: new Date() }),
@@ -104,6 +112,8 @@ describe('AuctionService', () => {
       products as never,
       skus as never,
       shops as never,
+      unusedDataSource,
+      unusedReservation,
     );
     await expect(
       service.createDemoForSku('sku', { startsAt: new Date('bad') }),
@@ -203,6 +213,8 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
+        unusedDataSource,
+        unusedReservation,
       );
 
       const result = await service.findByIdOrCode('auc-202311-0001');
@@ -282,6 +294,8 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
+        unusedDataSource,
+        unusedReservation,
       );
 
       const result = await service.findByIdOrCode(uuid);
@@ -307,6 +321,8 @@ describe('AuctionService', () => {
         {} as never,
         {} as never,
         {} as never,
+        unusedDataSource,
+        unusedReservation,
       );
 
       await expect(service.findByIdOrCode('AUC-NOTFOUND')).rejects.toThrow(
@@ -377,6 +393,8 @@ describe('AuctionService', () => {
         products as never,
         {} as never,
         shops as never,
+        unusedDataSource,
+        unusedReservation,
       );
 
       const result = await service.list({
@@ -423,11 +441,30 @@ describe('AuctionService', () => {
           currency: 'VND',
         }),
       };
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      const dataSource = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
+      const reservation = {
+        reserve: vi
+          .fn()
+          .mockResolvedValue([
+            { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+          ]),
+      };
       const service = new AuctionService(
         auctions as never,
         products as never,
         skus as never,
         {} as never,
+        dataSource as never,
+        reservation as never,
       );
       const result = await service.create(
         {
@@ -445,7 +482,14 @@ describe('AuctionService', () => {
         sellerId: 'seller-1',
         currentPrice: '100.00',
         bidCount: 0,
+        reservationReceipt: [
+          { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+        ],
       });
+      expect(reservation.reserve).toHaveBeenCalledWith(
+        [{ skuId: 'sku-1', quantity: 1 }],
+        manager,
+      );
     });
 
     it('rejects an unowned SKU without creating an auction', async () => {
@@ -456,11 +500,23 @@ describe('AuctionService', () => {
           .fn()
           .mockResolvedValue({ id: 'sku-1', productId: 'product-1' }),
       };
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      const dataSource = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
       const service = new AuctionService(
         auctions as never,
         products as never,
         skus as never,
         {} as never,
+        dataSource as never,
+        { reserve: vi.fn() } as never,
       );
 
       await expect(
@@ -503,11 +559,23 @@ describe('AuctionService', () => {
           productId: 'product-1',
         }),
       };
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      const dataSource = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
       const service = new AuctionService(
         auctions as never,
         products as never,
         skus as never,
         {} as never,
+        dataSource as never,
+        { reserve: vi.fn() } as never,
       );
 
       await expect(
@@ -527,6 +595,109 @@ describe('AuctionService', () => {
         response: { errorCode: 'AUCTION_ALREADY_OPEN' },
       });
       expect(auctions.save).not.toHaveBeenCalled();
+    });
+
+    it('does not save the auction when inventory reservation fails', async () => {
+      const auctions = {
+        findOne: vi.fn().mockResolvedValue(null),
+        create: vi.fn((value) => value),
+        save: vi.fn(),
+      };
+      const products = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'product-1',
+          sellerId: 'seller-1',
+          name: 'Product',
+          status: 'ACTIVE',
+          isAuctionEligible: true,
+          deletedAt: null,
+        }),
+      };
+      const skus = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          productId: 'product-1',
+          currency: 'VND',
+        }),
+      };
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      const dataSource = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
+      const reservationError = new ConflictException({
+        errorCode: 'INSUFFICIENT_STOCK',
+      });
+      const reservation = {
+        reserve: vi.fn().mockRejectedValue(reservationError),
+      };
+      const service = new AuctionService(
+        auctions as never,
+        products as never,
+        skus as never,
+        {} as never,
+        dataSource as never,
+        reservation as never,
+      );
+
+      await expect(
+        service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() + 1000).toISOString(),
+            endsAt: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'seller-1',
+        ),
+      ).rejects.toBe(reservationError);
+      expect(reservation.reserve).toHaveBeenCalledWith(
+        [{ skuId: 'sku-1', quantity: 1 }],
+        manager,
+      );
+      expect(auctions.save).not.toHaveBeenCalled();
+    });
+
+    it('maps only the open-auction unique constraint', async () => {
+      const dto = {
+        skuId: 'sku-1',
+        startPrice: 100,
+        reservePrice: 120,
+        bidIncrement: 10,
+        startsAt: new Date(Date.now() + 1000).toISOString(),
+        endsAt: new Date(Date.now() + 3600000).toISOString(),
+      };
+      const openConstraint = {
+        code: '23505',
+        constraint: 'UQ_auction_one_open_per_sku',
+      };
+      const codeConstraint = { code: '23505', constraint: 'UQ_auction_code' };
+      const serviceFor = (error: unknown) =>
+        new AuctionService(
+          {} as never,
+          {} as never,
+          {} as never,
+          {} as never,
+          { transaction: vi.fn().mockRejectedValue(error) } as never,
+          {} as never,
+        );
+
+      await expect(
+        serviceFor(openConstraint).create(dto, 'seller-1'),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'AUCTION_ALREADY_OPEN' },
+      });
+      await expect(
+        serviceFor(codeConstraint).create(dto, 'seller-1'),
+      ).rejects.toBe(codeConstraint);
     });
   });
 
@@ -555,6 +726,7 @@ describe('AuctionService', () => {
         save: vi.fn().mockResolvedValue(auction),
       };
       const bidRepo = {
+        findOne: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue({ affected: 1 }),
         create: vi.fn((value) => value),
         save: vi.fn(async (value) => ({
@@ -563,26 +735,31 @@ describe('AuctionService', () => {
           ...value,
         })),
       };
+      const eligibilityRepo = { findOne: vi.fn().mockResolvedValue(null) };
       const manager = {
         getRepository: vi
           .fn()
           .mockReturnValueOnce(auctionRepo)
-          .mockReturnValueOnce(bidRepo),
+          .mockReturnValueOnce(bidRepo)
+          .mockReturnValueOnce(eligibilityRepo),
+        query: vi.fn().mockResolvedValue([]),
       };
-      const auctions = {
-        manager: {
-          transaction: vi.fn(async (callback) => callback(manager)),
-        },
+      const dataSource = {
+        transaction: vi.fn(async (callback) => callback(manager)),
       };
       return {
         service: new AuctionService(
-          auctions as never,
           {} as never,
           {} as never,
+          {} as never,
+          {} as never,
+          dataSource as never,
           {} as never,
         ),
         auctionRepo,
         bidRepo,
+        eligibilityRepo,
+        manager,
       };
     }
 
@@ -672,6 +849,74 @@ describe('AuctionService', () => {
       expect(auctionRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ currentPrice: '0.30' }),
       );
+    });
+
+    it('returns the original bid before applying the current-leader prohibition', async () => {
+      const auction = { ...activeAuction(), highestBidderId: 'buyer-1' };
+      const { service, auctionRepo, bidRepo } = biddingService(auction);
+      bidRepo.findOne.mockResolvedValue({
+        id: 'original-bid',
+        auctionId: 'auction-1',
+        bidderId: 'buyer-1',
+        amount: '110.00',
+        idempotencyKey: 'retry-key',
+      });
+
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 110, ' retry-key '),
+      ).resolves.toMatchObject({
+        bid: { id: 'original-bid' },
+        minNextBid: 110,
+      });
+      expect(bidRepo.save).not.toHaveBeenCalled();
+      expect(auctionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects reuse of an idempotency key with a different amount', async () => {
+      const { service, bidRepo } = biddingService();
+      bidRepo.findOne.mockResolvedValue({ amount: '110.00' });
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 120, 'retry-key'),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'IDEMPOTENCY_KEY_REUSED' },
+      });
+      expect(bidRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects the current leader and restricted or low-score bidders before writes', async () => {
+      const leaderAuction = { ...activeAuction(), highestBidderId: 'buyer-1' };
+      const leader = biddingService(leaderAuction);
+      await expect(
+        leader.service.placeBid('AUC-1', 'buyer-1', 110),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'ALREADY_HIGHEST_BIDDER' },
+      });
+      expect(leader.bidRepo.save).not.toHaveBeenCalled();
+
+      const restricted = biddingService();
+      restricted.eligibilityRepo.findOne.mockResolvedValue({
+        reputationScore: 90,
+        restricted: true,
+      });
+      await expect(
+        restricted.service.placeBid('AUC-1', 'buyer-1', 110),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'REPUTATION_TOO_LOW' },
+      });
+      expect(restricted.bidRepo.save).not.toHaveBeenCalled();
+
+      const lowScore = biddingService();
+      lowScore.eligibilityRepo.findOne.mockResolvedValue({
+        reputationScore: 49,
+        restricted: false,
+      });
+      await expect(
+        lowScore.service.placeBid('AUC-1', 'buyer-1', 110),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'REPUTATION_TOO_LOW' },
+      });
+      expect(lowScore.bidRepo.save).not.toHaveBeenCalled();
     });
   });
 });

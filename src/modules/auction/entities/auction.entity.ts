@@ -5,9 +5,18 @@ import {
   Index,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
+  VersionColumn,
 } from 'typeorm';
+import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 
-export type AuctionStatus = 'SCHEDULED' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+export type AuctionStatus =
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'ENDED'
+  | 'PENDING_SETTLEMENT'
+  | 'FAILED'
+  | 'SETTLED'
+  | 'CANCELLED';
 
 @Entity({ name: 'auctions', schema: 'auction' })
 @Index(['skuId', 'status'])
@@ -38,6 +47,36 @@ export class AuctionEntity {
   @Column({ name: 'highest_bidder_id', type: 'uuid', nullable: true })
   highestBidderId?: string | null;
   @Column({ name: 'bid_count', type: 'integer', default: 0 }) bidCount: number;
+  @Column({ type: 'varchar', length: 20, default: 'PUBLIC' })
+  visibility: string;
+  @Column({ name: 'extension_count', type: 'integer', default: 0 })
+  extensionCount: number;
+  @Column({ name: 'max_extensions', type: 'integer', default: 10 })
+  maxExtensions: number;
+  @Column({ name: 'winner_id', type: 'uuid', nullable: true })
+  winnerId?: string | null;
+  @Column({
+    name: 'final_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    nullable: true,
+  })
+  finalPrice?: string | null;
+  @Column({ name: 'cancelled_by', type: 'uuid', nullable: true })
+  cancelledBy?: string | null;
+  @Column({
+    name: 'cancel_actor_type',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  cancelActorType?: string | null;
+  @Column({ name: 'cancel_reason', type: 'text', nullable: true })
+  cancelReason?: string | null;
+  @VersionColumn({ type: 'integer', default: 1 }) version: number;
+  @Column({ name: 'reservation_receipt', type: 'jsonb', nullable: true })
+  reservationReceipt?: InventoryReservationReceipt[] | null;
   @Column({ type: 'varchar', length: 3 }) currency: string;
   @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
   @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
