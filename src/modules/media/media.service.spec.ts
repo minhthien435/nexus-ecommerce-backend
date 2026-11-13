@@ -176,4 +176,58 @@ describe('MediaService', () => {
       );
     });
   });
+
+  describe('uploadModel3d', () => {
+    const glbHeaderBuffer = Buffer.concat([
+      Buffer.from('glTF'),
+      Buffer.from([2, 0, 0, 0]),
+    ]);
+
+    it('rejects files larger than 15MB', async () => {
+      const tooLarge = mockFile({
+        originalname: 'watch.glb',
+        mimetype: 'model/gltf-binary',
+        size: 16 * 1024 * 1024,
+        buffer: glbHeaderBuffer,
+      });
+
+      await expect(service.uploadModel3d(tooLarge)).rejects.toThrow(
+        'Kích thước file 3D không được vượt quá 15MB',
+      );
+    });
+
+    it('rejects non-glTF binary content even if named .glb', async () => {
+      const fakeGlb = mockFile({
+        originalname: 'evil.glb',
+        mimetype: 'model/gltf-binary',
+        buffer: Buffer.from('MZ-not-glb'),
+      });
+
+      await expect(service.uploadModel3d(fakeGlb)).rejects.toThrow(
+        'Định dạng mô hình 3D không hợp lệ',
+      );
+    });
+
+    it('uploads valid .glb file into models-3d folder', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+      } as Response);
+
+      const glbFile = mockFile({
+        originalname: 'watch.glb',
+        mimetype: 'application/octet-stream',
+        size: 4096,
+        buffer: glbHeaderBuffer,
+      });
+
+      const result = await service.uploadModel3d(glbFile);
+
+      expect(result.key).toMatch(/^models-3d\/.*\.glb$/);
+      expect(result.mimetype).toBe('model/gltf-binary');
+      expect(result.url).toContain(
+        '/storage/v1/object/public/test-bucket/models-3d/',
+      );
+    });
+  });
 });

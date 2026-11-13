@@ -1,6 +1,9 @@
 import { HttpStatus, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import { AuctionController } from './auction.controller.js';
+import {
+  AdminAuctionController,
+  AuctionController,
+} from './auction.controller.js';
 import type { AuctionService } from '../auction.service.js';
 
 describe('AuctionController', () => {
@@ -135,5 +138,77 @@ describe('AuctionController', () => {
     });
     expect(mockService.create).toHaveBeenCalledWith(createDto, 'seller-1');
     expect(mockService.placeBid).toHaveBeenCalledWith('AUC-1', 'buyer-1', 110);
+  });
+
+  it('handles participations, paginated bids, endEarly, seller cancel, and admin forceCancel', async () => {
+    const mockService = {
+      getMyParticipations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            auction: mockAuctionDetail,
+            myHighestBid: 1500000,
+            isLeading: true,
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 12,
+        totalPages: 1,
+      }),
+      listBids: vi.fn().mockResolvedValue({
+        auctionId: 'uuid-1',
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      }),
+      endEarly: vi
+        .fn()
+        .mockResolvedValue({ ...mockAuctionDetail, status: 'ENDED' }),
+      cancelAuction: vi
+        .fn()
+        .mockResolvedValue({ ...mockAuctionDetail, status: 'CANCELLED' }),
+    } as unknown as AuctionService;
+
+    const controller = new AuctionController(mockService);
+    const adminController = new AdminAuctionController(mockService);
+
+    const partRes = await controller.getMyParticipations('buyer-1', {
+      tab: 'WON',
+      page: 1,
+      limit: 12,
+    });
+    expect(mockService.getMyParticipations).toHaveBeenCalledWith('buyer-1', {
+      tab: 'WON',
+      page: 1,
+      limit: 12,
+    });
+    expect(partRes.meta.totalItems).toBe(1);
+
+    const bidsRes = await controller.listBids('AUC-1', { page: 1, limit: 20 });
+    expect(mockService.listBids).toHaveBeenCalledWith('AUC-1', 1, 20);
+    expect(bidsRes.data.auctionId).toBe('uuid-1');
+
+    await controller.endEarly('AUC-1', 'seller-1');
+    expect(mockService.endEarly).toHaveBeenCalledWith('AUC-1', 'seller-1');
+
+    await controller.cancelBySeller('AUC-1', 'seller-1', {
+      reason: 'Wrong price',
+    });
+    expect(mockService.cancelAuction).toHaveBeenCalledWith(
+      'AUC-1',
+      'seller-1',
+      'SELLER',
+      'Wrong price',
+    );
+
+    await adminController.forceCancel('AUC-1', 'admin-1', { reason: 'Fraud' });
+    expect(mockService.cancelAuction).toHaveBeenCalledWith(
+      'AUC-1',
+      'admin-1',
+      'ADMIN',
+      'Fraud',
+    );
   });
 });
