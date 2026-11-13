@@ -52,6 +52,12 @@ describe('MediaController', () => {
           },
         ],
       }),
+      uploadModel3d: vi.fn().mockResolvedValue({
+        url: 'https://test-project.supabase.co/storage/v1/object/public/nexus-media/models-3d/watch.glb',
+        key: 'models-3d/watch.glb',
+        size: 4096,
+        mimetype: 'model/gltf-binary',
+      }),
     } as unknown as MediaService;
 
     controller = new MediaController(mediaService);
@@ -124,6 +130,35 @@ describe('MediaController', () => {
         controller.uploadMultiple,
       );
       expect(uploadMultipleGuards).toContain(AccessTokenGuard);
+
+      const uploadModel3dGuards = Reflect.getMetadata(
+        '__guards__',
+        controller.uploadModel3d,
+      );
+      expect(uploadModel3dGuards).toContain(AccessTokenGuard);
+    });
+  });
+
+  describe('uploadModel3d', () => {
+    it('throws BadRequestException if no file is provided', async () => {
+      await expect(
+        controller.uploadModel3d(null as unknown as Express.Multer.File),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('returns formatted 201 response with uploaded .glb model data', async () => {
+      const glbFile = mockFile({
+        originalname: 'watch.glb',
+        mimetype: 'model/gltf-binary',
+      });
+      const result = await controller.uploadModel3d(glbFile, 'models-3d');
+
+      expect(mediaService.uploadModel3d).toHaveBeenCalledWith(
+        glbFile,
+        'models-3d',
+      );
+      expect(result.statusCode).toBe(HttpStatus.CREATED);
+      expect(result.data.key).toBe('models-3d/watch.glb');
     });
   });
 });

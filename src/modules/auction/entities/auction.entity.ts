@@ -7,7 +7,14 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-export type AuctionStatus = 'SCHEDULED' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+export type AuctionStatus =
+  | 'DRAFT'
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'ENDED'
+  | 'SETTLED'
+  | 'FAILED'
+  | 'CANCELLED';
 
 @Entity({ name: 'auctions', schema: 'auction' })
 @Index(['skuId', 'status'])
@@ -43,7 +50,32 @@ export class AuctionEntity {
   @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
   @Column({ name: 'original_end_at', type: 'timestamptz' })
   originalEndsAt: Date;
-  @Column({ type: 'varchar', length: 20 }) status: AuctionStatus;
+  @Column({ name: 'extension_count', type: 'integer', default: 0 })
+  extensionCount: number;
+  @Column({ name: 'max_extensions', type: 'integer', default: 10 })
+  maxExtensions: number;
+  @Column({ name: 'winner_id', type: 'uuid', nullable: true })
+  winnerId?: string | null;
+  @Column({
+    name: 'final_price',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+    nullable: true,
+  })
+  finalPrice?: string | null;
+  @Column({ name: 'cancelled_by', type: 'uuid', nullable: true })
+  cancelledBy?: string | null;
+  @Column({
+    name: 'cancel_actor_type',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
+  cancelActorType?: 'SELLER' | 'ADMIN' | null;
+  @Column({ name: 'cancel_reason', type: 'text', nullable: true })
+  cancelReason?: string | null;
+  @Column({ type: 'varchar', length: 30 }) status: AuctionStatus;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })

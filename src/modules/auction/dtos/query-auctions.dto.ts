@@ -45,6 +45,10 @@ export class QueryAuctionsDto {
   categoryId?: string;
 
   @IsOptional()
+  @IsUUID()
+  sellerId?: string;
+
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Transform(optionalNumber)

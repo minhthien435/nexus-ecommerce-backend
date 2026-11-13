@@ -1331,51 +1331,54 @@ export class OrderService {
           'Carrier name and tracking code are required and must be at most 100 characters',
       });
     }
-    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const order = await manager.getRepository(OrderEntity).findOne({
-        where: { id: orderId, sellerId },
-      });
-      if (!order) {
-        throw new NotFoundException({
-          errorCode: 'ORDER_NOT_FOUND',
-          message:
-            'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+    const result = await this.dataSource.transaction(
+      'READ COMMITTED',
+      async (manager) => {
+        const order = await manager.getRepository(OrderEntity).findOne({
+          where: { id: orderId, sellerId },
         });
-      }
-      if (order.status !== 'PROCESSING') {
-        throw new ConflictException({
-          errorCode: 'ORDER_STATUS_INVALID',
-          message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
+        if (!order) {
+          throw new NotFoundException({
+            errorCode: 'ORDER_NOT_FOUND',
+            message:
+              'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+          });
+        }
+        if (order.status !== 'PROCESSING') {
+          throw new ConflictException({
+            errorCode: 'ORDER_STATUS_INVALID',
+            message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
+          });
+        }
+
+        const reasonDetails = [
+          `Đơn vị vận chuyển: ${carrierName}`,
+          `Mã vận đơn: ${trackingCode}`,
+          dto?.note ? `Ghi chú: ${dto.note}` : null,
+        ]
+          .filter(Boolean)
+          .join(' | ');
+
+        const shipped = await this.orderStateMachine.transition(manager, {
+          orderId: order.id,
+          toStatus: 'SHIPPED',
+          actorId: sellerId,
+          reason: reasonDetails,
         });
-      }
 
-      const reasonDetails = [
-        `Đơn vị vận chuyển: ${carrierName}`,
-        `Mã vận đơn: ${trackingCode}`,
-        dto?.note ? `Ghi chú: ${dto.note}` : null,
-      ]
-        .filter(Boolean)
-        .join(' | ');
+        shipped.trackingCode = trackingCode;
+        shipped.carrierName = carrierName;
+        const saved = await manager.getRepository(OrderEntity).save(shipped);
 
-      const shipped = await this.orderStateMachine.transition(manager, {
-        orderId: order.id,
-        toStatus: 'SHIPPED',
-        actorId: sellerId,
-        reason: reasonDetails,
-      });
-
-      shipped.trackingCode = trackingCode;
-      shipped.carrierName = carrierName;
-      const saved = await manager.getRepository(OrderEntity).save(shipped);
-
-      return {
-        orderId: order.id,
-        status: 'SHIPPED' as const,
-        trackingCode: saved.trackingCode ?? order.trackingCode,
-        carrierName: saved.carrierName,
-        updatedAt: saved.updatedAt,
-      };
-    });
+        return {
+          orderId: order.id,
+          status: 'SHIPPED' as const,
+          trackingCode: saved.trackingCode ?? order.trackingCode,
+          carrierName: saved.carrierName,
+          updatedAt: saved.updatedAt,
+        };
+      },
+    );
     await this.notifyOrderStatus(orderId, 'ORDER_SHIPPED');
     return result;
   }
@@ -1390,117 +1393,120 @@ export class OrderService {
       );
     }
 
-    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const order = await manager.getRepository(OrderEntity).findOne({
-        where: { id: orderId, sellerId: sellerId.toLowerCase() },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!order) {
-        throw new NotFoundException({
-          errorCode: 'ORDER_NOT_FOUND',
-          message:
-            'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+    const result = await this.dataSource.transaction(
+      'READ COMMITTED',
+      async (manager) => {
+        const order = await manager.getRepository(OrderEntity).findOne({
+          where: { id: orderId, sellerId: sellerId.toLowerCase() },
+          lock: { mode: 'pessimistic_write' },
         });
-      }
-      if (order.status !== 'PROCESSING') {
-        throw new ConflictException({
-          errorCode: 'ORDER_STATUS_INVALID',
-          message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
-        });
-      }
+        if (!order) {
+          throw new NotFoundException({
+            errorCode: 'ORDER_NOT_FOUND',
+            message:
+              'Không tìm thấy đơn hàng hoặc bạn không có quyền xử lý đơn này',
+          });
+        }
+        if (order.status !== 'PROCESSING') {
+          throw new ConflictException({
+            errorCode: 'ORDER_STATUS_INVALID',
+            message: `Chỉ có thể giao đơn hàng đang ở trạng thái PROCESSING (hiện tại: ${order.status})`,
+          });
+        }
 
-      order.items = await manager
-        .getRepository(OrderItemEntity)
-        .find({ where: { orderId: order.id } });
+        order.items = await manager
+          .getRepository(OrderItemEntity)
+          .find({ where: { orderId: order.id } });
 
-      // Chuẩn bị thông tin người nhận từ snapshot địa chỉ
-      const snapshot = (order.shippingAddressSnapshot || {}) as Record<
-        string,
-        unknown
-      >;
-      const toName = String(
-        snapshot.recipientName ||
-          snapshot.fullName ||
-          snapshot.name ||
-          'Khách hàng Nexus',
-      );
-      const toPhone = String(snapshot.recipientPhone || '');
-      const toAddress = String(snapshot.addressLine || '');
-      const toWardName = String(snapshot.wardName || '');
-      const toProvinceName = String(snapshot.provinceName || '');
-      if (
-        snapshot.addressScheme !== 'ghn_v3' ||
-        typeof snapshot.recipientName !== 'string' ||
-        !snapshot.recipientName.trim() ||
-        !toPhone.trim() ||
-        !toAddress.trim() ||
-        !toWardName.trim() ||
-        !toProvinceName.trim() ||
-        !order.items?.length
-      ) {
-        throw new BadRequestException(
-          'Địa chỉ giao hàng hoặc sản phẩm không hợp lệ',
+        // Chuẩn bị thông tin người nhận từ snapshot địa chỉ
+        const snapshot = (order.shippingAddressSnapshot || {}) as Record<
+          string,
+          unknown
+        >;
+        const toName = String(
+          snapshot.recipientName ||
+            snapshot.fullName ||
+            snapshot.name ||
+            'Khách hàng Nexus',
         );
-      }
-      let totalWeight = 0;
-      const names: string[] = [];
-      for (const item of order.items) {
-        const weight = item.weightGramsSnapshot;
-        const name = item.productNameSnapshot?.trim();
+        const toPhone = String(snapshot.recipientPhone || '');
+        const toAddress = String(snapshot.addressLine || '');
+        const toWardName = String(snapshot.wardName || '');
+        const toProvinceName = String(snapshot.provinceName || '');
         if (
-          !Number.isSafeInteger(weight) ||
-          weight! <= 0 ||
-          !Number.isSafeInteger(item.quantity) ||
-          item.quantity <= 0
-        )
+          snapshot.addressScheme !== 'ghn_v3' ||
+          typeof snapshot.recipientName !== 'string' ||
+          !snapshot.recipientName.trim() ||
+          !toPhone.trim() ||
+          !toAddress.trim() ||
+          !toWardName.trim() ||
+          !toProvinceName.trim() ||
+          !order.items?.length
+        ) {
           throw new BadRequestException(
-            'Order item has no valid shipping weight snapshot',
+            'Địa chỉ giao hàng hoặc sản phẩm không hợp lệ',
           );
-        if (!name)
-          throw new BadRequestException(
-            'Product name is required for shipping',
-          );
-        names.push(name);
-        totalWeight += weight! * item.quantity;
-      }
+        }
+        let totalWeight = 0;
+        const names: string[] = [];
+        for (const item of order.items) {
+          const weight = item.weightGramsSnapshot;
+          const name = item.productNameSnapshot?.trim();
+          if (
+            !Number.isSafeInteger(weight) ||
+            weight! <= 0 ||
+            !Number.isSafeInteger(item.quantity) ||
+            item.quantity <= 0
+          )
+            throw new BadRequestException(
+              'Order item has no valid shipping weight snapshot',
+            );
+          if (!name)
+            throw new BadRequestException(
+              'Product name is required for shipping',
+            );
+          names.push(name);
+          totalWeight += weight! * item.quantity;
+        }
 
-      const ghnPayload = {
-        recipientName: toName,
-        recipientPhone: toPhone,
-        addressLine: toAddress,
-        provinceName: toProvinceName,
-        wardName: toWardName,
-        weightGrams: totalWeight,
-        content: names.join(', '),
-        clientOrderCode: order.id,
-      };
+        const ghnPayload = {
+          recipientName: toName,
+          recipientPhone: toPhone,
+          addressLine: toAddress,
+          provinceName: toProvinceName,
+          wardName: toWardName,
+          weightGrams: totalWeight,
+          content: names.join(', '),
+          clientOrderCode: order.id,
+        };
 
-      const ghnResult =
-        await this.ghnClientService!.createNewAddressOrder(ghnPayload);
+        const ghnResult =
+          await this.ghnClientService!.createNewAddressOrder(ghnPayload);
 
-      const reasonDetails = `Đơn vị vận chuyển: GHN | Mã vận đơn: ${ghnResult.order_code}`;
-      const shipped = await this.orderStateMachine.transition(manager, {
-        orderId: order.id,
-        toStatus: 'SHIPPED',
-        actorId: sellerId,
-        reason: reasonDetails,
-      });
+        const reasonDetails = `Đơn vị vận chuyển: GHN | Mã vận đơn: ${ghnResult.order_code}`;
+        const shipped = await this.orderStateMachine.transition(manager, {
+          orderId: order.id,
+          toStatus: 'SHIPPED',
+          actorId: sellerId,
+          reason: reasonDetails,
+        });
 
-      shipped.trackingCode = ghnResult.order_code;
-      shipped.carrierName = 'GHN';
-      const saved = await manager.getRepository(OrderEntity).save(shipped);
+        shipped.trackingCode = ghnResult.order_code;
+        shipped.carrierName = 'GHN';
+        const saved = await manager.getRepository(OrderEntity).save(shipped);
 
-      return {
-        orderId: order.id,
-        status: 'SHIPPED' as const,
-        trackingCode: saved.trackingCode ?? order.trackingCode,
-        carrierName: saved.carrierName,
-        totalFee: ghnResult.total_fee,
-        expectedDeliveryTime: ghnResult.expected_delivery_time,
-        printUrl: ghnResult.print_url,
-        updatedAt: saved.updatedAt,
-      };
-    });
+        return {
+          orderId: order.id,
+          status: 'SHIPPED' as const,
+          trackingCode: saved.trackingCode ?? order.trackingCode,
+          carrierName: saved.carrierName,
+          totalFee: ghnResult.total_fee,
+          expectedDeliveryTime: ghnResult.expected_delivery_time,
+          printUrl: ghnResult.print_url,
+          updatedAt: saved.updatedAt,
+        };
+      },
+    );
     await this.notifyOrderStatus(orderId, 'ORDER_SHIPPED');
     return result;
   }
@@ -1516,76 +1522,81 @@ export class OrderService {
     reason: string;
     source: 'CARRIER_WEBHOOK' | 'SUPPORT_MANUAL';
   }) {
-    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const orderRepo = manager.getRepository(OrderEntity);
-      let order: OrderEntity | null = null;
+    const result = await this.dataSource.transaction(
+      'READ COMMITTED',
+      async (manager) => {
+        const orderRepo = manager.getRepository(OrderEntity);
+        let order: OrderEntity | null = null;
 
-      if (params.orderId) {
-        const field = this.orderReferenceField(params.orderId);
-        order = await orderRepo.findOne({ where: { [field]: params.orderId } });
-      } else if (params.trackingCode) {
-        order = await orderRepo.findOne({
-          where: { trackingCode: params.trackingCode },
-        });
-      }
-
-      if (!order) {
-        throw new NotFoundException({
-          errorCode: 'ORDER_NOT_FOUND',
-          message: params.orderId
-            ? `Không tìm thấy đơn hàng với mã ID ${params.orderId}`
-            : `Không tìm thấy đơn hàng với mã vận đơn ${params.trackingCode}`,
-        });
-      }
-
-      // Idempotency: nếu đơn hàng đã ở trạng thái DELIVERED
-      if (order.status === 'DELIVERED') {
-        if (params.source === 'CARRIER_WEBHOOK') {
-          return {
-            orderId: order.id,
-            orderNumber: order.orderNumber,
-            status: 'DELIVERED' as const,
-            trackingCode: order.trackingCode,
-            deliveredAt: order.deliveredAt ?? order.updatedAt,
-            alreadyDelivered: true,
-            updatedAt: order.updatedAt,
-          };
+        if (params.orderId) {
+          const field = this.orderReferenceField(params.orderId);
+          order = await orderRepo.findOne({
+            where: { [field]: params.orderId },
+          });
+        } else if (params.trackingCode) {
+          order = await orderRepo.findOne({
+            where: { trackingCode: params.trackingCode },
+          });
         }
-        throw new ConflictException({
-          errorCode: 'ORDER_STATUS_INVALID',
-          message:
-            'Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: DELIVERED)',
+
+        if (!order) {
+          throw new NotFoundException({
+            errorCode: 'ORDER_NOT_FOUND',
+            message: params.orderId
+              ? `Không tìm thấy đơn hàng với mã ID ${params.orderId}`
+              : `Không tìm thấy đơn hàng với mã vận đơn ${params.trackingCode}`,
+          });
+        }
+
+        // Idempotency: nếu đơn hàng đã ở trạng thái DELIVERED
+        if (order.status === 'DELIVERED') {
+          if (params.source === 'CARRIER_WEBHOOK') {
+            return {
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+              status: 'DELIVERED' as const,
+              trackingCode: order.trackingCode,
+              deliveredAt: order.deliveredAt ?? order.updatedAt,
+              alreadyDelivered: true,
+              updatedAt: order.updatedAt,
+            };
+          }
+          throw new ConflictException({
+            errorCode: 'ORDER_STATUS_INVALID',
+            message:
+              'Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: DELIVERED)',
+          });
+        }
+
+        if (order.status !== 'SHIPPED') {
+          throw new ConflictException({
+            errorCode: 'ORDER_STATUS_INVALID',
+            message: `Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: ${order.status})`,
+          });
+        }
+
+        const delivered = await this.orderStateMachine.transition(manager, {
+          orderId: order.id,
+          toStatus: 'DELIVERED',
+          actorId: params.actorId ?? null,
+          reason: params.reason,
         });
-      }
 
-      if (order.status !== 'SHIPPED') {
-        throw new ConflictException({
-          errorCode: 'ORDER_STATUS_INVALID',
-          message: `Chỉ có thể cập nhật DELIVERED cho đơn đang ở trạng thái SHIPPED (hiện tại: ${order.status})`,
-        });
-      }
+        delivered.deliveredAt = new Date();
+        delivered.orderNumber = delivered.orderNumber ?? order.orderNumber;
+        const saved = await orderRepo.save(delivered);
 
-      const delivered = await this.orderStateMachine.transition(manager, {
-        orderId: order.id,
-        toStatus: 'DELIVERED',
-        actorId: params.actorId ?? null,
-        reason: params.reason,
-      });
-
-      delivered.deliveredAt = new Date();
-      delivered.orderNumber = delivered.orderNumber ?? order.orderNumber;
-      const saved = await orderRepo.save(delivered);
-
-      return {
-        orderId: saved.id,
-        orderNumber: saved.orderNumber ?? order.orderNumber,
-        status: 'DELIVERED' as const,
-        trackingCode: saved.trackingCode ?? order.trackingCode,
-        deliveredAt: saved.deliveredAt,
-        alreadyDelivered: false,
-        updatedAt: saved.updatedAt,
-      };
-    });
+        return {
+          orderId: saved.id,
+          orderNumber: saved.orderNumber ?? order.orderNumber,
+          status: 'DELIVERED' as const,
+          trackingCode: saved.trackingCode ?? order.trackingCode,
+          deliveredAt: saved.deliveredAt,
+          alreadyDelivered: false,
+          updatedAt: saved.updatedAt,
+        };
+      },
+    );
     if (!result.alreadyDelivered) {
       await this.notifyOrderStatus(result.orderId, 'ORDER_DELIVERED');
     }
