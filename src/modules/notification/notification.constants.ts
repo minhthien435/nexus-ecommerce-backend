@@ -1,0 +1,46 @@
+export const NOTIFICATION_TYPES = [
+  'AUCTION_OUTBID',
+  'AUCTION_SNIPED',
+  'AUCTION_WON',
+  'AUCTION_LOST',
+  'AUCTION_PAYMENT_REMINDER',
+  'AUCTION_PAYMENT_EXPIRED',
+  'ORDER_CREATED',
+  'ORDER_PAID',
+  'ORDER_SHIPPED',
+  'ORDER_DELIVERED',
+  'ORDER_CANCELLED',
+  'DISPUTE_OPENED',
+  'DISPUTE_RESOLVED',
+  'REFUND_COMPLETED',
+  'SHOP_APPROVED',
+  'SHOP_REJECTED',
+  'SHOP_SUSPENDED',
+  'PENALTY_APPLIED',
+  'SYSTEM_ANNOUNCEMENT',
+] as const;
+
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+export const NOTIFICATION_CHANNELS = ['PUSH', 'EMAIL', 'SMS'] as const;
+export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
+
+export const NOTIFICATION_STATUSES = [
+  'PENDING',
+  'SENT',
+  'FAILED',
+  'PERMANENT_FAILED',
+] as const;
+export type NotificationStatus = (typeof NOTIFICATION_STATUSES)[number];
+
+export const USER_CONFIGURABLE_NOTIFICATION_CHANNELS = [
+  'PUSH',
+  'EMAIL',
+] as const;
+export type UserConfigurableNotificationChannel =
+  (typeof USER_CONFIGURABLE_NOTIFICATION_CHANNELS)[number];
+
+export const MANDATORY_NOTIFICATION_TYPES = new Set<string>([
+  'PENALTY_APPLIED',
+  'ORDER_CANCELLED',
+]);

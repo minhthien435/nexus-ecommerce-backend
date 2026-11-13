@@ -158,6 +158,10 @@ function setup(
       events.push('email-sent');
     }),
   };
+  const notifications = {
+    isEnabled: vi.fn(async () => true),
+    notifyMany: vi.fn(async () => undefined),
+  };
   const service = new OrderRefundService(
     dataSource as never,
     refundRepo as never,
@@ -165,6 +169,7 @@ function setup(
     identity as never,
     stateMachine as unknown as OrderStateMachineService,
     emailService as never,
+    notifications as never,
   );
   return {
     service,
@@ -175,6 +180,7 @@ function setup(
     auditRepo,
     stateMachine,
     emailService,
+    notifications,
     events,
     saved,
   };
@@ -327,6 +333,22 @@ describe('OrderRefundService', () => {
       processedAt: expect.any(Date),
     });
     expect(events).toEqual(['transaction-committed', 'email-sent']);
+  });
+
+  it('still sends in-app notifications when refund email is disabled', async () => {
+    const { service, emailService, notifications } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    notifications.isEnabled.mockResolvedValueOnce(false);
+
+    await service.confirmTransferred('refund-1', 'staff-1', 'BANK-1', 'done');
+
+    expect(emailService.sendRefundCompleted).not.toHaveBeenCalled();
+    expect(notifications.notifyMany).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'REFUND_COMPLETED' }),
+      ]),
+    );
   });
 
   it('keeps the completed response when the refund email fails after commit', async () => {

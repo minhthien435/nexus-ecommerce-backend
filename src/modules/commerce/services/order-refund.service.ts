@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
@@ -22,6 +23,7 @@ import type { QueryOrderRefundsDto } from '../dtos/order-refund.dto.js';
 import type { UpdateBuyerRefundAccountDto } from '../dtos/update-buyer-refund-account.dto.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { EmailService } from '../../../common/email/email.service.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 @Injectable()
 export class OrderRefundService extends OrderRefundRequestApi {
@@ -36,6 +38,8 @@ export class OrderRefundService extends OrderRefundRequestApi {
     private readonly identity: IdentitySupportLookupApi,
     private readonly orderStateMachine: OrderStateMachineService,
     private readonly emailService: EmailService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {
     super();
   }
@@ -254,23 +258,64 @@ export class OrderRefundService extends OrderRefundRequestApi {
       });
       if (!order) throw new Error('related order could not be loaded');
 
-      const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
-      if (!buyer) throw new Error('buyer could not be loaded');
+      const emailEnabled =
+        (await this.notifications?.isEnabled(
+          order.buyerId,
+          'REFUND_COMPLETED',
+          'EMAIL',
+        )) ?? true;
+      if (emailEnabled) {
+        const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
+        if (!buyer) throw new Error('buyer could not be loaded');
 
-      await this.emailService.sendRefundCompleted({
-        recipient: buyer.email,
-        refundCode: saved.refundCode,
-        amount: saved.amount,
-        currency: saved.currency,
-        buyerBankName: saved.buyerBankName,
-        accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
-        bankReferenceCode: saved.bankReferenceCode!,
-        processedAt: saved.processedAt!,
-      });
+        await this.emailService.sendRefundCompleted({
+          recipient: buyer.email,
+          refundCode: saved.refundCode,
+          amount: saved.amount,
+          currency: saved.currency,
+          buyerBankName: saved.buyerBankName,
+          accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
+          bankReferenceCode: saved.bankReferenceCode!,
+          processedAt: saved.processedAt!,
+        });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Refund ${saved.id} completed but buyer notification failed: ${reason}`,
+      );
+    }
+    try {
+      const order = await this.orderRepository.findOne({
+        where: { id: saved.orderId },
+      });
+      if (order) {
+        const content = `Khoản hoàn tiền ${saved.refundCode} đã được xử lý thành công.`;
+        await this.notifications?.notifyMany([
+          {
+            userId: order.buyerId,
+            type: 'REFUND_COMPLETED',
+            title: 'Hoàn tiền thành công',
+            content,
+            actionUrl: `/orders/${order.id}`,
+            metadata: { orderId: order.id, refundId: saved.id },
+            sourceEventId: saved.id,
+          },
+          {
+            userId: order.sellerId,
+            type: 'REFUND_COMPLETED',
+            title: 'Đơn hàng đã hoàn tiền',
+            content,
+            actionUrl: `/seller/orders/${order.id}`,
+            metadata: { orderId: order.id, refundId: saved.id },
+            sourceEventId: saved.id,
+          },
+        ]);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Refund ${saved.id} completed but in-app notification failed: ${reason}`,
       );
     }
     return saved;

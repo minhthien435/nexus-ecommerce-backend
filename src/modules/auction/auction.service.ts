@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { CreateAuctionDto } from './dtos/create-auction.dto.js';
 import { AuctionEventsService } from './ws/auction-events.service.js';
+import { NotificationDispatchApi } from '../notification/notification-dispatch.api.js';
 
 export interface DemoAuctionOptions {
   startsAt: Date;
@@ -128,6 +130,8 @@ interface BidSummary {
 
 @Injectable()
 export class AuctionService {
+  private readonly logger = new Logger(AuctionService.name);
+
   constructor(
     @InjectRepository(AuctionEntity)
     private readonly auctions: Repository<AuctionEntity>,
@@ -139,6 +143,8 @@ export class AuctionService {
     private readonly shops: Repository<ShopEntity>,
     @Optional()
     private readonly auctionEvents?: AuctionEventsService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   calculateDemoPrices(price: number): {
@@ -342,6 +348,7 @@ export class AuctionService {
           });
         }
 
+        const previousHighestBidderId = auction.highestBidderId;
         if (auction.highestBidId) {
           await bidRepo.update(
             { id: auction.highestBidId, status: 'WINNING' },
@@ -367,11 +374,12 @@ export class AuctionService {
           auctionId: auction.id,
           auctionCode: auction.code ?? null,
           bidCount: auction.bidCount,
+          previousHighestBidderId,
         };
       },
     );
 
-    // Emit post-commit using canonical UUID sessionId; never let WS failure fail the HTTP bid.
+    // Emit post-commit using canonical UUID sessionId; never let WS/notification failure fail the HTTP bid.
     this.auctionEvents?.emitBidPlaced({
       sessionId: txResult.auctionId,
       auctionCode: txResult.auctionCode,
@@ -385,6 +393,29 @@ export class AuctionService {
         ? new Date(txResult.bid.placedAt).toISOString()
         : new Date().toISOString(),
     });
+
+    if (
+      txResult.previousHighestBidderId &&
+      txResult.previousHighestBidderId !== bidderId
+    ) {
+      try {
+        await this.notifications?.notify({
+          userId: txResult.previousHighestBidderId,
+          type: 'AUCTION_OUTBID',
+          title: 'Bạn đã bị vượt giá',
+          content:
+            'Một người mua khác vừa đưa ra mức giá cao hơn trong phiên đấu giá.',
+          actionUrl: `/auctions/${txResult.auctionId}`,
+          metadata: { auctionId: txResult.auctionId },
+          sourceEventId: txResult.bid.id,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Bid ${txResult.bid.id} committed but outbid notification failed`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
 
     return {
       bid: txResult.bid,

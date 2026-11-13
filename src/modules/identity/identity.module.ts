@@ -1,5 +1,5 @@
 // src/modules/identity/identity.module.ts
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -44,10 +44,12 @@ import { AdminShopService } from './admin/admin-shop.service.js';
 import { IdentitySupportLookupApi } from './identity-support-lookup.api.js';
 import { IdentitySupportLookupService } from './identity-support-lookup.service.js';
 import { AddressModule } from './users/addresses/address.module.js';
+import { NotificationModule } from '../notification/notification.module.js';
 
 @Module({
   imports: [
     AddressModule,
+    forwardRef(() => NotificationModule),
     EmailModule,
     TypeOrmModule.forFeature([
       UserEntity,
