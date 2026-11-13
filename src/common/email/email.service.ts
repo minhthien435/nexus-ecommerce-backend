@@ -151,6 +151,29 @@ export class EmailService {
     }
   }
 
+  async sendNotification(input: {
+    recipient: string;
+    subject: string;
+    text: string;
+    html?: string;
+  }): Promise<void> {
+    try {
+      await this.transporter.sendMail({
+        from: this.mailFrom,
+        to: input.recipient,
+        subject: input.subject,
+        text: input.text,
+        html:
+          input.html ??
+          `<div style="font-family: Arial, sans-serif"><p>${this.escapeHtml(input.text)}</p></div>`,
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Không thể gửi email thông báo. Vui lòng thử lại sau.',
+      );
+    }
+  }
+
   private escapeHtml(value: string): string {
     return value.replace(
       /[&<>"']/g,

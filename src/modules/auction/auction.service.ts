@@ -3,7 +3,9 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -14,6 +16,7 @@ import { QueryAuctionsDto } from './dtos/query-auctions.dto.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { CreateAuctionDto } from './dtos/create-auction.dto.js';
+import { NotificationDispatchApi } from '../notification/notification-dispatch.api.js';
 
 export interface DemoAuctionOptions {
   startsAt: Date;
@@ -82,6 +85,8 @@ interface BidSummary {
 
 @Injectable()
 export class AuctionService {
+  private readonly logger = new Logger(AuctionService.name);
+
   constructor(
     @InjectRepository(AuctionEntity)
     private readonly auctions: Repository<AuctionEntity>,
@@ -91,6 +96,8 @@ export class AuctionService {
     private readonly skus: Repository<ProductSkuEntity>,
     @InjectRepository(ShopEntity)
     private readonly shops: Repository<ShopEntity>,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   calculateDemoPrices(price: number): {
@@ -240,7 +247,7 @@ export class AuctionService {
     bidderId: string,
     amount: number,
   ): Promise<{ bid: BidEntity; minNextBid: number }> {
-    return this.auctions.manager.transaction(async (manager) => {
+    const result = await this.auctions.manager.transaction(async (manager) => {
       const auctionRepo = manager.getRepository(AuctionEntity);
       const bidRepo = manager.getRepository(BidEntity);
       const auction = await auctionRepo
@@ -291,6 +298,7 @@ export class AuctionService {
         });
       }
 
+      const previousHighestBidderId = auction.highestBidderId;
       if (auction.highestBidId) {
         await bidRepo.update(
           { id: auction.highestBidId, status: 'WINNING' },
@@ -313,8 +321,33 @@ export class AuctionService {
       return {
         bid,
         minNextBid: (amountCents + incrementCents) / 100,
+        previousHighestBidderId,
+        auctionId: auction.id,
       };
     });
+    if (
+      result.previousHighestBidderId &&
+      result.previousHighestBidderId !== bidderId
+    ) {
+      try {
+        await this.notifications?.notify({
+          userId: result.previousHighestBidderId,
+          type: 'AUCTION_OUTBID',
+          title: 'Bạn đã bị vượt giá',
+          content:
+            'Một người mua khác vừa đưa ra mức giá cao hơn trong phiên đấu giá.',
+          actionUrl: `/auctions/${result.auctionId}`,
+          metadata: { auctionId: result.auctionId },
+          sourceEventId: result.bid.id,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Bid ${result.bid.id} committed but outbid notification failed`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+    return { bid: result.bid, minNextBid: result.minNextBid };
   }
 
   computeTrustLevel(
