@@ -258,19 +258,27 @@ export class OrderRefundService extends OrderRefundRequestApi {
       });
       if (!order) throw new Error('related order could not be loaded');
 
-      const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
-      if (!buyer) throw new Error('buyer could not be loaded');
+      const emailEnabled =
+        (await this.notifications?.isEnabled(
+          order.buyerId,
+          'REFUND_COMPLETED',
+          'EMAIL',
+        )) ?? true;
+      if (emailEnabled) {
+        const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
+        if (!buyer) throw new Error('buyer could not be loaded');
 
-      await this.emailService.sendRefundCompleted({
-        recipient: buyer.email,
-        refundCode: saved.refundCode,
-        amount: saved.amount,
-        currency: saved.currency,
-        buyerBankName: saved.buyerBankName,
-        accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
-        bankReferenceCode: saved.bankReferenceCode!,
-        processedAt: saved.processedAt!,
-      });
+        await this.emailService.sendRefundCompleted({
+          recipient: buyer.email,
+          refundCode: saved.refundCode,
+          amount: saved.amount,
+          currency: saved.currency,
+          buyerBankName: saved.buyerBankName,
+          accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
+          bankReferenceCode: saved.bankReferenceCode!,
+          processedAt: saved.processedAt!,
+        });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(

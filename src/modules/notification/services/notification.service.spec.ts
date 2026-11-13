@@ -104,13 +104,15 @@ describe('NotificationService', () => {
 
   it('marks only unread PUSH notifications for the current user', async () => {
     const f = fixture();
-    await f.service.markAllAsRead(userId);
+    await expect(f.service.markAllAsRead(userId)).resolves.toEqual({
+      unreadCount: 1,
+    });
 
     expect(f.notificationRepo.update).toHaveBeenCalledWith(
       expect.objectContaining({ userId, channel: 'PUSH' }),
       expect.objectContaining({ readAt: expect.any(Date) }),
     );
-    expect(f.gateway.emitUnreadCount).toHaveBeenCalledWith(userId, 0);
+    expect(f.gateway.emitUnreadCount).toHaveBeenCalledWith(userId, 1);
   });
 
   it('persists and sends an EMAIL delivery when requested', async () => {

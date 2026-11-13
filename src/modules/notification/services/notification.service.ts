@@ -110,8 +110,9 @@ export class NotificationService extends NotificationDispatchApi {
       { userId, channel: 'PUSH', readAt: IsNull() },
       { readAt: new Date() },
     );
-    this.gateway.emitUnreadCount(userId, 0);
-    return { unreadCount: 0 };
+    const unreadCount = await this.getUnreadCount(userId);
+    this.gateway.emitUnreadCount(userId, unreadCount);
+    return { unreadCount };
   }
 
   async getPreferences(userId: string) {
@@ -219,7 +220,7 @@ export class NotificationService extends NotificationDispatchApi {
     }
   }
 
-  private async isEnabled(
+  async isEnabled(
     userId: string,
     type: string,
     channel: UserConfigurableNotificationChannel,

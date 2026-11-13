@@ -109,14 +109,6 @@ export class AdminShopService {
         statusChangedAt,
       };
     });
-    try {
-      await this.emailService.sendShopStatusChanged(notification);
-    } catch (error) {
-      this.logger.error(
-        `Shop ${shopId} status changed, but seller notification failed`,
-        error instanceof Error ? error.stack : undefined,
-      );
-    }
     const type =
       notification.status === 'ACTIVE'
         ? 'SHOP_APPROVED'
@@ -125,6 +117,24 @@ export class AdminShopService {
           : notification.status === 'CLOSED'
             ? 'SHOP_REJECTED'
             : null;
+    try {
+      const emailEnabled =
+        !type ||
+        ((await this.notifications?.isEnabled(
+          notification.sellerId,
+          type,
+          'EMAIL',
+        )) ??
+          true);
+      if (emailEnabled) {
+        await this.emailService.sendShopStatusChanged(notification);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Shop ${shopId} status changed, but seller notification failed`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
     if (type) {
       try {
         await this.notifications?.notify({

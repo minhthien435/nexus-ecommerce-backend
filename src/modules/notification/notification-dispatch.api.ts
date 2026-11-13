@@ -20,6 +20,11 @@ export interface NotifyUserInput {
 }
 
 export abstract class NotificationDispatchApi {
+  abstract isEnabled(
+    userId: string,
+    type: string,
+    channel: UserConfigurableNotificationChannel,
+  ): Promise<boolean>;
   abstract notify(input: NotifyUserInput): Promise<void>;
   abstract notifyMany(inputs: NotifyUserInput[]): Promise<void>;
 }
