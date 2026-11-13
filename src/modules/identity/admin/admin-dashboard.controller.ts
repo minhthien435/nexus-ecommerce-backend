@@ -15,6 +15,7 @@ import { CategoryEntity } from '../../catalog/domain/entities/category.entity.js
 import { InventoryItemEntity } from '../../fulfillment/domain/entities/inventory-item.entity.js';
 import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
 import { CheckoutSessionEntity } from '../../commerce/domain/entities/checkout-session.entity.js';
+import { OrderRefundEntity } from '../../commerce/domain/entities/order-refund.entity.js';
 
 @Roles('ADMIN')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -30,6 +31,7 @@ export class AdminDashboardController {
     const categoryRepo = this.dataSource.getRepository(CategoryEntity);
     const inventoryRepo = this.dataSource.getRepository(InventoryItemEntity);
     const orderRepo = this.dataSource.getRepository(OrderEntity);
+    const refundRepo = this.dataSource.getRepository(OrderRefundEntity);
     const userRoleRepo = this.dataSource.getRepository(UserRoleEntity);
 
     const successfulStatuses = [
@@ -68,6 +70,8 @@ export class AdminDashboardController {
       pendingOrders,
       cancelledOrders,
       revenueResult,
+      refundSummaryResult,
+      refundedOrders,
 
       // 7. Payment method breakdown
       paymentBreakdownRaw,
@@ -133,6 +137,21 @@ export class AdminDashboardController {
           statuses: successfulStatuses,
         })
         .getRawOne<{ totalRevenue: string }>(),
+      refundRepo
+        .createQueryBuilder('refund')
+        .select(
+          "COALESCE(SUM(refund.amount) FILTER (WHERE refund.status = 'COMPLETED'), 0)",
+          'refundedAmount',
+        )
+        .addSelect(
+          "COALESCE(SUM(refund.amount) FILTER (WHERE refund.status IN ('REQUESTED', 'PROCESSING')), 0)",
+          'pendingRefundAmount',
+        )
+        .getRawOne<{
+          refundedAmount: string;
+          pendingRefundAmount: string;
+        }>(),
+      orderRepo.count({ where: { status: 'REFUNDED' } }),
 
       // Payment Breakdown
       orderRepo
@@ -259,6 +278,9 @@ export class AdminDashboardController {
     return {
       overview: {
         totalRevenue: revenueResult?.totalRevenue ?? '0.00',
+        refundedAmount: refundSummaryResult?.refundedAmount ?? '0.00',
+        pendingRefundAmount: refundSummaryResult?.pendingRefundAmount ?? '0.00',
+        refundedOrders,
         totalOrders,
         successfulOrders,
         pendingOrders,

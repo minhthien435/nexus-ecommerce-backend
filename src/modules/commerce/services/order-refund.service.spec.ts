@@ -35,6 +35,7 @@ function setup(
   } = {},
 ) {
   const saved: unknown[] = [];
+  const events: string[] = [];
   const buyerId = '11111111-1111-4111-8111-111111111111';
   let orderLookupCount = 0;
   const disputeRepo = {
@@ -65,7 +66,12 @@ function setup(
           ? {
               id: 'refund-1',
               orderId: 'order-1',
+              refundCode: 'REF-ORD-1',
               status: 'REQUESTED',
+              amount: '100.00',
+              currency: 'VND',
+              buyerBankName: 'Vietcombank',
+              buyerAccountNumber: '0123456789',
               notes: null,
               ...options.locked,
             }
@@ -127,7 +133,11 @@ function setup(
     }),
   };
   const dataSource = {
-    transaction: vi.fn(async (callback) => callback(manager)),
+    transaction: vi.fn(async (callback) => {
+      const result = await callback(manager);
+      events.push('transaction-committed');
+      return result;
+    }),
     getRepository: vi.fn((entity) => {
       if (entity === OrderDisputeEntity) return disputeRepo;
       throw new Error('unexpected repository');
@@ -136,8 +146,17 @@ function setup(
   const stateMachine = { transition: vi.fn(async () => ({})) };
   const identity = {
     getUsersByIds: vi.fn(async () => [
-      { id: buyerId, fullName: 'Nguyen Van A' },
+      {
+        id: buyerId,
+        fullName: 'Nguyen Van A',
+        email: 'buyer@example.com',
+      },
     ]),
+  };
+  const emailService = {
+    sendRefundCompleted: vi.fn(async () => {
+      events.push('email-sent');
+    }),
   };
   const service = new OrderRefundService(
     dataSource as never,
@@ -145,6 +164,7 @@ function setup(
     orderRepo as never,
     identity as never,
     stateMachine as unknown as OrderStateMachineService,
+    emailService as never,
   );
   return {
     service,
@@ -154,6 +174,8 @@ function setup(
     identity,
     auditRepo,
     stateMachine,
+    emailService,
+    events,
     saved,
   };
 }
@@ -275,7 +297,7 @@ describe('OrderRefundService', () => {
   });
 
   it('completes the refund and transitions the cancelled order atomically', async () => {
-    const { service, stateMachine } = setup({
+    const { service, stateMachine, emailService, events } = setup({
       locked: { status: 'PROCESSING' },
     });
     await expect(
@@ -294,6 +316,120 @@ describe('OrderRefundService', () => {
         actorId: 'staff-1',
       }),
     );
+    expect(emailService.sendRefundCompleted).toHaveBeenCalledWith({
+      recipient: 'buyer@example.com',
+      refundCode: 'REF-ORD-1',
+      amount: '100.00',
+      currency: 'VND',
+      buyerBankName: 'Vietcombank',
+      accountLastFour: '6789',
+      bankReferenceCode: 'BANK-1',
+      processedAt: expect.any(Date),
+    });
+    expect(events).toEqual(['transaction-committed', 'email-sent']);
+  });
+
+  it('keeps the completed response when the refund email fails after commit', async () => {
+    const { service, emailService, events } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    emailService.sendRefundCompleted.mockRejectedValueOnce(
+      new Error('smtp unavailable'),
+    );
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(events).toEqual(['transaction-committed']);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('buyer notification failed: smtp unavailable'),
+    );
+  });
+
+  it('keeps the completed response when post-commit notification data is missing', async () => {
+    const { service, orderRepo, identity, emailService } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    orderRepo.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(identity.getUsersByIds).not.toHaveBeenCalled();
+    expect(emailService.sendRefundCompleted).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('related order could not be loaded'),
+    );
+  });
+
+  it('keeps the completed response when the buyer cannot be loaded', async () => {
+    const { service, identity, emailService } = setup({
+      locked: { status: 'PROCESSING' },
+    });
+    identity.getUsersByIds.mockResolvedValueOnce([]);
+    const warn = vi
+      .spyOn(
+        (service as unknown as { logger: { warn: (message: string) => void } })
+          .logger,
+        'warn',
+      )
+      .mockImplementation(() => undefined);
+
+    await expect(
+      service.confirmTransferred('refund-1', 'staff-1', 'BANK-1'),
+    ).resolves.toEqual(expect.objectContaining({ status: 'COMPLETED' }));
+    expect(emailService.sendRefundCompleted).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('buyer could not be loaded'),
+    );
+  });
+
+  it('returns a masked refund projection for buyer order detail', async () => {
+    const { service, refundRepo } = setup({
+      existing: {
+        refundCode: 'REF-ORD-1',
+        status: 'COMPLETED',
+        amount: '100.00',
+        currency: 'VND',
+        buyerBankName: 'Vietcombank',
+        buyerAccountNumber: '0123456789',
+        buyerAccountHolderName: 'NGUYEN VAN A',
+        bankReferenceCode: 'BANK-1',
+        processedAt: new Date('2026-11-12T02:00:00Z'),
+      },
+    });
+
+    const result = await service.getBuyerRefundForOrder('order-1');
+
+    expect(refundRepo.findOne).toHaveBeenCalledWith({
+      where: { orderId: 'order-1' },
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        refundCode: 'REF-ORD-1',
+        buyerAccountNumber: '******6789',
+      }),
+    );
+    expect(JSON.stringify(result)).not.toContain('0123456789');
+  });
+
+  it('returns null when buyer order has no refund', async () => {
+    const { service } = setup({ existing: null });
+    await expect(service.getBuyerRefundForOrder('order-1')).resolves.toBeNull();
   });
 
   it('rejects duplicate bank references without transitioning the order', async () => {

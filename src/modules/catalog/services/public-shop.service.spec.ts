@@ -165,7 +165,11 @@ describe('PublicShopService', () => {
       expect(sql).toContain('lower(p.brand) = lower($4)');
       expect(sql).toContain('price.price >= $5::numeric');
       expect(sql).toContain('price.price <= $6::numeric');
-      expect(sql).toContain("'REFUND_REQUESTED','REFUNDED'");
+      expect(sql).toContain(
+        "o.status IN ('PAID','PROCESSING','SHIPPED','DELIVERED','COMPLETED')",
+      );
+      expect(sql).not.toContain('REFUND_REQUESTED');
+      expect(sql).not.toContain('REFUNDED');
       expect(sql).toContain(sortSql);
       expect(sql).toContain('p.id ASC');
       expect(sql).toContain('LIMIT $7 OFFSET $8');

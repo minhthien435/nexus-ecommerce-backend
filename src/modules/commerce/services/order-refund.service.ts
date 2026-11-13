@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -20,9 +21,12 @@ import {
 import type { QueryOrderRefundsDto } from '../dtos/order-refund.dto.js';
 import type { UpdateBuyerRefundAccountDto } from '../dtos/update-buyer-refund-account.dto.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
+import { EmailService } from '../../../common/email/email.service.js';
 
 @Injectable()
 export class OrderRefundService extends OrderRefundRequestApi {
+  private readonly logger = new Logger(OrderRefundService.name);
+
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(OrderRefundEntity)
@@ -31,6 +35,7 @@ export class OrderRefundService extends OrderRefundRequestApi {
     private readonly orderRepository: Repository<OrderEntity>,
     private readonly identity: IdentitySupportLookupApi,
     private readonly orderStateMachine: OrderStateMachineService,
+    private readonly emailService: EmailService,
   ) {
     super();
   }
@@ -201,13 +206,13 @@ export class OrderRefundService extends OrderRefundRequestApi {
     );
   }
 
-  confirmTransferred(
+  async confirmTransferred(
     refundId: string,
     actorId: string,
     bankReferenceCode: string,
     notes?: string,
   ) {
-    return this.dataSource.transaction(async (manager) => {
+    const saved = await this.dataSource.transaction(async (manager) => {
       const refund = await this.lockRefund(manager, refundId);
       if (!['REQUESTED', 'PROCESSING'].includes(refund.status)) {
         throw this.conflict(
@@ -242,6 +247,49 @@ export class OrderRefundService extends OrderRefundRequestApi {
       });
       return saved;
     });
+
+    try {
+      const order = await this.orderRepository.findOne({
+        where: { id: saved.orderId },
+      });
+      if (!order) throw new Error('related order could not be loaded');
+
+      const [buyer] = await this.identity.getUsersByIds([order.buyerId]);
+      if (!buyer) throw new Error('buyer could not be loaded');
+
+      await this.emailService.sendRefundCompleted({
+        recipient: buyer.email,
+        refundCode: saved.refundCode,
+        amount: saved.amount,
+        currency: saved.currency,
+        buyerBankName: saved.buyerBankName,
+        accountLastFour: saved.buyerAccountNumber?.slice(-4) ?? null,
+        bankReferenceCode: saved.bankReferenceCode!,
+        processedAt: saved.processedAt!,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Refund ${saved.id} completed but buyer notification failed: ${reason}`,
+      );
+    }
+    return saved;
+  }
+
+  async getBuyerRefundForOrder(orderId: string) {
+    const refund = await this.refundRepository.findOne({ where: { orderId } });
+    if (!refund) return null;
+    return {
+      refundCode: refund.refundCode,
+      status: refund.status,
+      amount: refund.amount,
+      currency: refund.currency,
+      buyerBankName: refund.buyerBankName,
+      buyerAccountNumber: this.maskAccountNumber(refund.buyerAccountNumber),
+      buyerAccountHolderName: refund.buyerAccountHolderName,
+      bankReferenceCode: refund.bankReferenceCode,
+      processedAt: refund.processedAt,
+    };
   }
 
   async updateBuyerRefundAccount(
@@ -426,6 +474,12 @@ export class OrderRefundService extends OrderRefundRequestApi {
         message: 'Refund requests require an active caller-owned transaction',
       });
     }
+  }
+
+  private maskAccountNumber(accountNumber: string | null): string | null {
+    if (!accountNumber) return null;
+    const visibleDigits = accountNumber.slice(-4);
+    return `${'*'.repeat(Math.max(4, accountNumber.length - 4))}${visibleDigits}`;
   }
 
   private conflict(errorCode: string, message: string) {

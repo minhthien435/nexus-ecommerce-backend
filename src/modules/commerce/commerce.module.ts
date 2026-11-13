@@ -50,6 +50,7 @@ import { OrderDisputeController } from './controllers/order-dispute.controller.j
 import { SupportDisputeController } from './controllers/support-dispute.controller.js';
 import { OrderDisputeService } from './services/order-dispute.service.js';
 import { OrderCancelService } from './services/order-cancel.service.js';
+import { EmailModule } from '../../common/email/email.module.js';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { OrderCancelService } from './services/order-cancel.service.js';
       UserAddressEntity,
     ]),
     IdentityModule,
+    EmailModule,
     CatalogModule,
     FulfillmentModule,
     BullModule.registerQueue({ name: ORDER_EXPIRY_QUEUE }),

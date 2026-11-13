@@ -104,6 +104,53 @@ export class EmailService {
     }
   }
 
+  async sendRefundCompleted(input: {
+    recipient: string;
+    refundCode: string;
+    amount: string;
+    currency: string;
+    buyerBankName: string | null;
+    accountLastFour: string | null;
+    bankReferenceCode: string;
+    processedAt: Date;
+  }): Promise<void> {
+    const processedAt = input.processedAt.toISOString();
+    const bankName = input.buyerBankName ?? 'Chưa cung cấp';
+    const account = input.accountLastFour
+      ? `****${input.accountLastFour}`
+      : 'Chưa cung cấp';
+    try {
+      await this.transporter.sendMail({
+        from: this.mailFrom,
+        to: input.recipient,
+        subject: `Hoàn tiền ${input.refundCode} đã được chuyển`,
+        text: [
+          `Mã hoàn tiền: ${input.refundCode}`,
+          `Số tiền: ${input.amount} ${input.currency}`,
+          `Ngân hàng: ${bankName}`,
+          `Tài khoản nhận: ${account}`,
+          `Mã giao dịch ngân hàng: ${input.bankReferenceCode}`,
+          `Thời gian xử lý: ${processedAt}`,
+        ].join('\n'),
+        html: [
+          '<div style="font-family: Arial, sans-serif">',
+          '<h2>Hoàn tiền đã được chuyển</h2>',
+          `<p><strong>Mã hoàn tiền:</strong> ${this.escapeHtml(input.refundCode)}</p>`,
+          `<p><strong>Số tiền:</strong> ${this.escapeHtml(input.amount)} ${this.escapeHtml(input.currency)}</p>`,
+          `<p><strong>Ngân hàng:</strong> ${this.escapeHtml(bankName)}</p>`,
+          `<p><strong>Tài khoản nhận:</strong> ${this.escapeHtml(account)}</p>`,
+          `<p><strong>Mã giao dịch ngân hàng:</strong> ${this.escapeHtml(input.bankReferenceCode)}</p>`,
+          `<p><strong>Thời gian xử lý:</strong> ${processedAt}</p>`,
+          '</div>',
+        ].join(''),
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Đã hoàn tất chuyển khoản nhưng không thể gửi email thông báo.',
+      );
+    }
+  }
+
   private escapeHtml(value: string): string {
     return value.replace(
       /[&<>"']/g,
