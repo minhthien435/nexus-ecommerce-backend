@@ -36,6 +36,7 @@ import { GhnClientService } from '../../fulfillment/services/ghn-client.service.
 import { ShippingQuoteService } from '../../fulfillment/services/shipping-quote.service.js';
 import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import type { CartSku } from '../../catalog/catalog-cart.api.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 import {
   loadBuyerOrderDispute,
   resolveOrderReferenceField,
@@ -75,6 +76,8 @@ export class OrderService {
     private readonly inventoryRead?: InventoryReadApi,
     @Optional()
     private readonly identityLookup?: IdentitySupportLookupApi,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   async quoteCart(userId: string, dto: CreateCheckoutDto) {
@@ -1328,7 +1331,7 @@ export class OrderService {
           'Carrier name and tracking code are required and must be at most 100 characters',
       });
     }
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, sellerId },
       });
@@ -1373,6 +1376,8 @@ export class OrderService {
         updatedAt: saved.updatedAt,
       };
     });
+    await this.notifyOrderStatus(orderId, 'ORDER_SHIPPED');
+    return result;
   }
 
   /**
@@ -1385,7 +1390,7 @@ export class OrderService {
       );
     }
 
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const order = await manager.getRepository(OrderEntity).findOne({
         where: { id: orderId, sellerId: sellerId.toLowerCase() },
         lock: { mode: 'pessimistic_write' },
@@ -1496,6 +1501,8 @@ export class OrderService {
         updatedAt: saved.updatedAt,
       };
     });
+    await this.notifyOrderStatus(orderId, 'ORDER_SHIPPED');
+    return result;
   }
 
   /**
@@ -1509,7 +1516,7 @@ export class OrderService {
     reason: string;
     source: 'CARRIER_WEBHOOK' | 'SUPPORT_MANUAL';
   }) {
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const orderRepo = manager.getRepository(OrderEntity);
       let order: OrderEntity | null = null;
 
@@ -1579,6 +1586,10 @@ export class OrderService {
         updatedAt: saved.updatedAt,
       };
     });
+    if (!result.alreadyDelivered) {
+      await this.notifyOrderStatus(result.orderId, 'ORDER_DELIVERED');
+    }
+    return result;
   }
 
   /**
@@ -1665,5 +1676,51 @@ export class OrderService {
       userId,
       orderReference,
     });
+  }
+
+  private async notifyOrderStatus(
+    orderId: string,
+    type: 'ORDER_SHIPPED' | 'ORDER_DELIVERED',
+  ): Promise<void> {
+    try {
+      const order = await this.orderRepo.findOne({ where: { id: orderId } });
+      if (!order) return;
+      const title =
+        type === 'ORDER_SHIPPED'
+          ? 'Đơn hàng đang được giao'
+          : 'Đơn hàng đã giao thành công';
+      const content =
+        type === 'ORDER_SHIPPED'
+          ? `Đơn hàng ${order.orderNumber} đã được bàn giao cho đơn vị vận chuyển.`
+          : `Đơn hàng ${order.orderNumber} đã được giao thành công.`;
+      const recipients = [
+        {
+          userId: order.buyerId,
+          type,
+          title,
+          content,
+          actionUrl: `/orders/${order.id}`,
+          metadata: { orderId: order.id, orderNumber: order.orderNumber },
+          sourceEventId: order.id,
+        },
+      ];
+      if (type === 'ORDER_DELIVERED') {
+        recipients.push({
+          userId: order.sellerId,
+          type,
+          title,
+          content,
+          actionUrl: `/seller/orders/${order.id}`,
+          metadata: { orderId: order.id, orderNumber: order.orderNumber },
+          sourceEventId: order.id,
+        });
+      }
+      await this.notifications?.notifyMany(recipients);
+    } catch (error) {
+      this.logger.error(
+        `Order ${orderId} status committed but notification dispatch failed`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 }

@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, Repository } from 'typeorm';
@@ -20,6 +22,7 @@ import type { ResolveOrderDisputeDto } from '../dtos/resolve-order-dispute.dto.j
 import { OrderRefundService } from './order-refund.service.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { loadBuyerOrderDispute } from './order-dispute-lookup.helper.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 export interface CreatedDisputeResponse {
   id: string;
@@ -98,6 +101,8 @@ export interface SupportDisputeListResult {
 
 @Injectable()
 export class OrderDisputeService {
+  private readonly logger = new Logger(OrderDisputeService.name);
+
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
@@ -110,6 +115,8 @@ export class OrderDisputeService {
     private readonly identityLookup: IdentitySupportLookupApi,
     private readonly orderStateMachine: OrderStateMachineService,
     private readonly orderRefundService: OrderRefundService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   /**
@@ -121,7 +128,7 @@ export class OrderDisputeService {
     orderId: string,
     dto: CreateOrderDisputeDto,
   ): Promise<CreatedDisputeResponse> {
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       // 1. Khóa bi quan bản ghi đơn hàng để kiểm tra tính sở hữu và ngăn chặn xung đột đồng thời
       const order = await manager
         .getRepository(OrderEntity)
@@ -225,6 +232,24 @@ export class OrderDisputeService {
         throw err;
       }
     });
+    try {
+      await this.notifications?.notify({
+        userId: result.sellerId,
+        type: 'DISPUTE_OPENED',
+        title: 'Đơn hàng có khiếu nại mới',
+        content: `Người mua đã mở khiếu nại cho đơn hàng ${result.orderNumber}.`,
+        actionUrl: `/seller/orders/${result.orderId}`,
+        metadata: {
+          disputeId: result.id,
+          orderId: result.orderId,
+          orderNumber: result.orderNumber,
+        },
+        sourceEventId: result.id,
+      });
+    } catch (error) {
+      this.logNotificationFailure(result.id, error);
+    }
+    return result;
   }
 
   /**
@@ -403,7 +428,7 @@ export class OrderDisputeService {
     actorId: string,
     dto: ResolveOrderDisputeDto,
   ): Promise<ResolveDisputeResponse> {
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+    const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       // 1. Khóa bi quan và kiểm tra hồ sơ khiếu nại
       const dispute = await manager
         .getRepository(OrderDisputeEntity)
@@ -537,6 +562,35 @@ export class OrderDisputeService {
         };
       }
     });
+    try {
+      const dispute = await this.disputeRepo.findOne({ where: { id: result.id } });
+      if (dispute) {
+        const content = `Khiếu nại cho đơn hàng ${result.orderNumber} đã được giải quyết.`;
+        await this.notifications?.notifyMany([
+          {
+            userId: dispute.buyerId,
+            type: 'DISPUTE_RESOLVED',
+            title: 'Khiếu nại đã được giải quyết',
+            content,
+            actionUrl: `/orders/${result.orderId}`,
+            metadata: { disputeId: result.id, orderId: result.orderId },
+            sourceEventId: result.id,
+          },
+          {
+            userId: dispute.sellerId,
+            type: 'DISPUTE_RESOLVED',
+            title: 'Khiếu nại đã được giải quyết',
+            content,
+            actionUrl: `/seller/orders/${result.orderId}`,
+            metadata: { disputeId: result.id, orderId: result.orderId },
+            sourceEventId: result.id,
+          },
+        ]);
+      }
+    } catch (error) {
+      this.logNotificationFailure(result.id, error);
+    }
+    return result;
   }
 
   /**
@@ -550,5 +604,12 @@ export class OrderDisputeService {
       userId: buyerId,
       orderReference,
     });
+  }
+
+  private logNotificationFailure(disputeId: string, error: unknown): void {
+    this.logger.error(
+      `Dispute ${disputeId} committed but notification dispatch failed`,
+      error instanceof Error ? error.stack : undefined,
+    );
   }
 }

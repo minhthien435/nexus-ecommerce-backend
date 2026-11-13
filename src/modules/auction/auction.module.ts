@@ -9,10 +9,12 @@ import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { IdentityModule } from '../identity/identity.module.js';
+import { NotificationModule } from '../notification/notification.module.js';
 
 @Module({
   imports: [
     IdentityModule,
+    NotificationModule,
     TypeOrmModule.forFeature([
       AuctionEntity,
       BidEntity,

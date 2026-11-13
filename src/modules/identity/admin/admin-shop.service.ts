@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
@@ -13,6 +14,7 @@ import { UserEntity } from '../domain/user.entity.js';
 import { ListShopsQueryDto } from './dtos/admin-shop.dto.js';
 import type { SellerShopView } from '../services/seller-shop.service.js';
 import { EmailService } from '../../../common/email/email.service.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 export type AdminShopDetail = SellerShopView & {
   seller: Pick<UserEntity, 'id' | 'fullName' | 'email' | 'phone' | 'status'>;
@@ -27,6 +29,8 @@ export class AdminShopService {
     private readonly shops: Repository<ShopEntity>,
     private readonly dataSource: DataSource,
     private readonly emailService: EmailService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   async list(query: ListShopsQueryDto) {
@@ -97,6 +101,7 @@ export class AdminShopService {
         reason,
       );
       return {
+        sellerId: shop.sellerId,
         recipient: shop.seller.email,
         shopName: shop.name,
         status,
@@ -111,6 +116,31 @@ export class AdminShopService {
         `Shop ${shopId} status changed, but seller notification failed`,
         error instanceof Error ? error.stack : undefined,
       );
+    }
+    const type =
+      notification.status === 'ACTIVE'
+        ? 'SHOP_APPROVED'
+        : notification.status === 'SUSPENDED'
+          ? 'SHOP_SUSPENDED'
+          : notification.status === 'CLOSED'
+            ? 'SHOP_REJECTED'
+            : null;
+    if (type) {
+      try {
+        await this.notifications?.notify({
+          userId: notification.sellerId,
+          type,
+          title: 'Trạng thái cửa hàng đã thay đổi',
+          content: `Cửa hàng ${notification.shopName} hiện có trạng thái ${notification.status}.`,
+          actionUrl: '/seller/dashboard',
+          metadata: { shopId, status: notification.status, reason },
+        });
+      } catch (error) {
+        this.logger.error(
+          `Shop ${shopId} status changed, but in-app notification failed`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
     }
     return this.getById(shopId);
   }
