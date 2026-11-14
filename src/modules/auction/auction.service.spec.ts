@@ -413,13 +413,21 @@ describe('AuctionService', () => {
           ]),
       },
     ) => {
+      const shopRepo = {
+        findOne: vi
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+      };
       const manager = {
         getRepository: vi
           .fn()
           .mockReturnValueOnce(skus)
           .mockReturnValueOnce(products)
-          .mockReturnValueOnce(auctions),
+          .mockReturnValueOnce(auctions)
+          .mockReturnValue(shopRepo),
+        query: vi.fn().mockResolvedValue([]),
       };
+      auctions.count ??= vi.fn().mockResolvedValue(0);
       auctions.manager = {
         transaction: vi.fn(async (callback) => callback(manager)),
       };
@@ -435,8 +443,64 @@ describe('AuctionService', () => {
         ),
         reservation,
         manager,
+        shopRepo,
       };
     };
+
+    it.each([
+      {
+        status: 'SUSPENDED',
+        reputationScore: 100,
+        openCount: 0,
+        errorCode: 'SELLER_AUCTION_INELIGIBLE',
+      },
+      {
+        status: 'ACTIVE',
+        reputationScore: 49,
+        openCount: 0,
+        errorCode: 'SELLER_AUCTION_INELIGIBLE',
+      },
+      {
+        status: 'ACTIVE',
+        reputationScore: 50,
+        openCount: 5,
+        errorCode: 'SELLER_AUCTION_LIMIT_REACHED',
+      },
+    ])(
+      'rejects invalid seller state before reserving inventory',
+      async ({ status, reputationScore, openCount, errorCode }) => {
+        const auctionRepo = { count: vi.fn().mockResolvedValue(openCount) };
+        const productRepo = {
+          findOne: vi.fn().mockResolvedValue({ status: 'ACTIVE' }),
+        };
+        const skuRepo = {
+          findOne: vi
+            .fn()
+            .mockResolvedValue({ id: 'sku-1', productId: 'product-1' }),
+        };
+        const { service, shopRepo, reservation } = createService(
+          auctionRepo,
+          productRepo,
+          skuRepo,
+        );
+        shopRepo.findOne.mockResolvedValue({ status, reputationScore });
+        const now = Date.now();
+        await expect(
+          service.create(
+            {
+              skuId: 'sku-1',
+              startPrice: 100,
+              reservePrice: 120,
+              bidIncrement: 10,
+              startsAt: new Date(now + 60_000).toISOString(),
+              endsAt: new Date(now + 3_660_000).toISOString(),
+            },
+            'seller-1',
+          ),
+        ).rejects.toMatchObject({ response: { errorCode } });
+        expect(reservation.reserve).not.toHaveBeenCalled();
+      },
+    );
 
     it('creates an auction for an owned active eligible SKU', async () => {
       const auctions = {
@@ -473,7 +537,7 @@ describe('AuctionService', () => {
           reservePrice: 120,
           bidIncrement: 10,
           startsAt: new Date(Date.now() + 1000).toISOString(),
-          endsAt: new Date(Date.now() + 3600000).toISOString(),
+          endsAt: new Date(Date.now() + 3605000).toISOString(),
         },
         'seller-1',
       );
@@ -510,7 +574,7 @@ describe('AuctionService', () => {
             reservePrice: 120,
             bidIncrement: 10,
             startsAt: new Date(Date.now() + 1000).toISOString(),
-            endsAt: new Date(Date.now() + 3600000).toISOString(),
+            endsAt: new Date(Date.now() + 3605000).toISOString(),
           },
           'other-seller',
         ),
@@ -552,7 +616,7 @@ describe('AuctionService', () => {
             reservePrice: 120,
             bidIncrement: 10,
             startsAt: new Date(Date.now() + 1000).toISOString(),
-            endsAt: new Date(Date.now() + 3600000).toISOString(),
+            endsAt: new Date(Date.now() + 3605000).toISOString(),
           },
           'seller-1',
         ),
@@ -601,7 +665,7 @@ describe('AuctionService', () => {
             reservePrice: 120,
             bidIncrement: 10,
             startsAt: new Date(Date.now() + 1000).toISOString(),
-            endsAt: new Date(Date.now() + 3600000).toISOString(),
+            endsAt: new Date(Date.now() + 3605000).toISOString(),
           },
           'seller-1',
         ),
@@ -651,7 +715,12 @@ describe('AuctionService', () => {
           .fn()
           .mockReturnValueOnce(auctionRepo)
           .mockReturnValueOnce(bidRepo)
-          .mockReturnValueOnce(eligibilityRepo),
+          .mockReturnValueOnce(eligibilityRepo)
+          .mockReturnValue({
+            findOne: vi
+              .fn()
+              .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+          }),
         query: vi.fn().mockResolvedValue([]),
       };
       const auctions = {
@@ -669,6 +738,7 @@ describe('AuctionService', () => {
         auctionRepo,
         bidRepo,
         eligibilityRepo,
+        manager,
       };
     }
 
@@ -835,7 +905,11 @@ describe('AuctionService', () => {
 
     it('emits bid:placed post-commit using canonical UUID sessionId', async () => {
       const auction = activeAuction();
+      auction.endsAt = new Date(Date.now() + 30_000);
+      const originalEnd = auction.endsAt;
       const emitBidPlaced = vi.fn();
+      const emitAuctionSniped = vi.fn();
+      const schedule = vi.fn();
       const { auctionRepo, bidRepo } = biddingService(auction);
       const mockManager = {
         getRepository: vi
@@ -843,20 +917,34 @@ describe('AuctionService', () => {
           .mockReturnValueOnce(auctionRepo)
           .mockReturnValueOnce(bidRepo)
           .mockReturnValueOnce({ findOne: vi.fn().mockResolvedValue(null) }),
-        query: vi.fn().mockResolvedValue([]),
+        query: vi.fn(async (sql: string) =>
+          sql.includes('ANTI_SNIPING_ENABLED') ? [{ config_value: true }] : [],
+        ),
       };
+      let committed = false;
       const service = new AuctionService(
         {
           manager: {
-            transaction: (fn: (m: any) => Promise<any>) => fn(mockManager),
+            transaction: async (fn: (m: any) => Promise<any>) => {
+              const result = await fn(mockManager);
+              committed = true;
+              return result;
+            },
           },
         } as never,
         {} as never,
         {} as never,
         {} as never,
-        { emitBidPlaced } as never,
+        { emitBidPlaced, emitAuctionSniped } as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { schedule } as never,
       );
 
+      emitAuctionSniped.mockImplementation(() => expect(committed).toBe(true));
+      schedule.mockImplementation(() => expect(committed).toBe(true));
       await service.placeBid('AUC-1', 'buyer-1', 110);
 
       expect(emitBidPlaced).toHaveBeenCalledWith(
@@ -867,6 +955,154 @@ describe('AuctionService', () => {
           highestBidderId: 'buyer-1',
         }),
       );
+      const expectedEnd = new Date(originalEnd.getTime() + 60_000);
+      expect(mockManager.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO auction.auction_extensions'),
+        [auction.id, 'new-bid', originalEnd, expectedEnd, 60],
+      );
+      expect(emitAuctionSniped).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: auction.id,
+          newEndTime: expectedEnd.toISOString(),
+          remainingExtensions: 9,
+        }),
+      );
+      expect(schedule).toHaveBeenCalledWith(
+        expect.objectContaining({ endsAt: expectedEnd }),
+      );
+    });
+
+    it.each([
+      { extensionCount: 10, enabled: true },
+      { extensionCount: 0, enabled: false },
+    ])(
+      'keeps the deadline when anti-sniping is disabled or exhausted',
+      async ({ extensionCount, enabled }) => {
+        const auction = {
+          ...activeAuction(),
+          extensionCount,
+          maxExtensions: 10,
+        };
+        auction.endsAt = new Date(Date.now() + 30_000);
+        const originalEnd = auction.endsAt;
+        const fixture = biddingService(auction);
+        fixture.eligibilityRepo.findOne.mockResolvedValue({
+          reputationScore: 50,
+        });
+        fixture.manager.query.mockResolvedValue([{ config_value: enabled }]);
+        await fixture.service.placeBid('AUC-1', 'buyer-1', 110);
+        expect(auction.endsAt).toBe(originalEnd);
+        expect(fixture.manager.query).not.toHaveBeenCalledWith(
+          expect.stringContaining('INSERT INTO auction.auction_extensions'),
+          expect.any(Array),
+        );
+      },
+    );
+  });
+
+  describe('auction lifecycle', () => {
+    function fixture(status: AuctionEntity['status'], remainingMs: number) {
+      const auction = {
+        id: 'auction-1',
+        sellerId: 'seller-1',
+        status,
+        startsAt: new Date(Date.now() - 120_000),
+        endsAt: new Date(Date.now() + remainingMs),
+      } as AuctionEntity;
+      const repo = {
+        findOne: vi.fn().mockResolvedValue(auction),
+        save: vi.fn(async (value) => value),
+      };
+      const shopRepo = {
+        findOne: vi
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+      };
+      const manager = {
+        getRepository: vi.fn((entity) =>
+          entity === AuctionEntity ? repo : shopRepo,
+        ),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      let committed = false;
+      const settleAuction = vi.fn(async () => {
+        expect(committed).toBe(true);
+        auction.status = 'SETTLED';
+      });
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: async (
+              work: (value: typeof manager) => Promise<unknown>,
+            ) => {
+              committed = false;
+              const result = await work(manager);
+              committed = true;
+              return result;
+            },
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { settleAuction } as never,
+      );
+      return { service, auction, repo, shopRepo, manager, settleAuction };
+    }
+
+    it('activates a due auction and records the transition', async () => {
+      const { service, auction, repo, manager, settleAuction } = fixture(
+        'SCHEDULED',
+        60_000,
+      );
+      await service.advanceLifecycle(auction.id);
+      expect(repo.findOne).toHaveBeenCalledWith({
+        where: { id: auction.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(auction.status).toBe('ACTIVE');
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO auction.auction_status_history'),
+        [auction.id, 'SCHEDULED', 'ACTIVE', null, 'SYSTEM', expect.any(String)],
+      );
+      expect(settleAuction).not.toHaveBeenCalled();
+    });
+
+    it('cancels an ineligible scheduled auction before activation', async () => {
+      const { service, auction, shopRepo, settleAuction } = fixture(
+        'SCHEDULED',
+        60_000,
+      );
+      shopRepo.findOne.mockResolvedValue({
+        status: 'ACTIVE',
+        reputationScore: 49,
+      });
+      await service.advanceLifecycle(auction.id);
+      expect(auction.status).toBe('CANCELLED');
+      expect(settleAuction).not.toHaveBeenCalled();
+    });
+
+    it('ignores a stale close job and settles once the current deadline passes', async () => {
+      const { service, auction, repo, manager, settleAuction } = fixture(
+        'ACTIVE',
+        60_000,
+      );
+      await service.advanceLifecycle(auction.id);
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(settleAuction).not.toHaveBeenCalled();
+
+      auction.endsAt = new Date(Date.now() - 1);
+      await service.advanceLifecycle(auction.id);
+      await service.advanceLifecycle(auction.id);
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO auction.auction_status_history'),
+        [auction.id, 'ACTIVE', 'ENDED', null, 'SYSTEM', expect.any(String)],
+      );
+      expect(settleAuction).toHaveBeenCalledExactlyOnceWith(auction.id);
     });
   });
 
@@ -1305,7 +1541,10 @@ describe('AuctionService', () => {
         }),
         save: vi.fn(),
       };
-      const manager = { getRepository: vi.fn().mockReturnValue(auctionRepo) };
+      const manager = {
+        getRepository: vi.fn().mockReturnValue(auctionRepo),
+        query: vi.fn().mockResolvedValue([]),
+      };
       const releaseError = new Error('release failed');
       const service = new AuctionService(
         {

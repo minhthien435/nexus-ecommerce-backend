@@ -68,7 +68,7 @@ describe('AuctionSettlementService', () => {
           fullName: 'Duy Nguyen',
           email: 'duy@example.com',
           phone: '0901234567',
-          status: 'ACTIVE',
+          status: 'ENDED',
         },
       ]),
     };
@@ -131,7 +131,7 @@ describe('AuctionSettlementService', () => {
         highestBidderId: null,
         currentPrice: '100000.00',
         reservePrice: '500000.00',
-        status: 'ACTIVE',
+        status: 'ENDED',
       };
 
       managerMock.getRepository.mockReturnValue({
@@ -140,13 +140,6 @@ describe('AuctionSettlementService', () => {
           where: vi.fn().mockReturnThis(),
           getOne: vi.fn().mockResolvedValue(mockAuction),
         }),
-      });
-
-      managerMock.query.mockImplementation(async (sql: string) => {
-        if (sql.includes('fulfillment.inventory_items')) {
-          return [{ warehouse_id: 'wh-1', reserved_qty: 1 }];
-        }
-        return [];
       });
 
       const result = await service.settleAuction('auc-no-bids');
@@ -161,16 +154,7 @@ describe('AuctionSettlementService', () => {
         ['seller-1'],
       );
 
-      // Verify inventory released
-      expect(inventoryReservationMock.release).toHaveBeenCalledWith(
-        [{ skuId: 'sku-1', quantity: 1, warehouseId: 'wh-1' }],
-        managerMock,
-        expect.objectContaining({
-          actorId: 'seller-1',
-          operation: 'ORDER_CANCELLATION',
-          operationId: 'failed-auction-auc-no-bids',
-        }),
-      );
+      expect(inventoryReservationMock.release).not.toHaveBeenCalled();
 
       // Verify socket emitted with winnerId = null
       expect(auctionEventsServiceMock.emitAuctionEnded).toHaveBeenCalledWith({
@@ -193,7 +177,7 @@ describe('AuctionSettlementService', () => {
         highestBidderId: 'bidder-1',
         currentPrice: '300000.00',
         reservePrice: '500000.00',
-        status: 'ACTIVE',
+        status: 'ENDED',
         reservationReceipt: [
           { skuId: 'sku-1', quantity: 1, warehouseId: 'wh-khoa-1' },
         ],
@@ -239,7 +223,7 @@ describe('AuctionSettlementService', () => {
         currentPrice: '60000000.00',
         reservePrice: '50000000.00',
         currency: 'VND',
-        status: 'ACTIVE',
+        status: 'ENDED',
         reservationReceipt: [
           { skuId: 'sku-1', quantity: 1, warehouseId: 'wh-win-1' },
         ],
@@ -410,7 +394,7 @@ describe('AuctionSettlementService', () => {
         highestBidderId: 'winner-1',
         currentPrice: '2000000.00',
         reservePrice: '1000000.00',
-        status: 'ACTIVE',
+        status: 'ENDED',
       };
 
       managerMock.getRepository.mockReturnValue({
