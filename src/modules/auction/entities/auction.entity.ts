@@ -5,7 +5,9 @@ import {
   Index,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
+  VersionColumn,
 } from 'typeorm';
+import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 
 export type AuctionStatus =
   | 'DRAFT'
@@ -45,6 +47,8 @@ export class AuctionEntity {
   @Column({ name: 'highest_bidder_id', type: 'uuid', nullable: true })
   highestBidderId?: string | null;
   @Column({ name: 'bid_count', type: 'integer', default: 0 }) bidCount: number;
+  @Column({ type: 'varchar', length: 20, default: 'PUBLIC' })
+  visibility: string;
   @Column({ type: 'varchar', length: 3 }) currency: string;
   @Column({ name: 'start_at', type: 'timestamptz' }) startsAt: Date;
   @Column({ name: 'end_at', type: 'timestamptz' }) endsAt: Date;
@@ -75,6 +79,9 @@ export class AuctionEntity {
   cancelActorType?: 'SELLER' | 'ADMIN' | null;
   @Column({ name: 'cancel_reason', type: 'text', nullable: true })
   cancelReason?: string | null;
+  @VersionColumn({ type: 'integer', default: 1 }) version: number;
+  @Column({ name: 'reservation_receipt', type: 'jsonb', nullable: true })
+  reservationReceipt?: InventoryReservationReceipt[] | null;
   @Column({ type: 'varchar', length: 30 }) status: AuctionStatus;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

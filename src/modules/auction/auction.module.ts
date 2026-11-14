@@ -16,11 +16,14 @@ import { IdentityModule } from '../identity/identity.module.js';
 import { NotificationModule } from '../notification/notification.module.js';
 import { AuctionEventsService } from './ws/auction-events.service.js';
 import { AuctionGateway } from './ws/auction.gateway.js';
+import { FulfillmentModule } from '../fulfillment/fulfillment.module.js';
+import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 
 @Module({
   imports: [
     IdentityModule,
     NotificationModule,
+    FulfillmentModule,
     TypeOrmModule.forFeature([
       AuctionEntity,
       BidEntity,
@@ -29,6 +32,7 @@ import { AuctionGateway } from './ws/auction.gateway.js';
       ProductImageEntity,
       ShopEntity,
       UserEntity,
+      BidderEligibilityEntity,
     ]),
   ],
   controllers: [AuctionController, AdminAuctionController],

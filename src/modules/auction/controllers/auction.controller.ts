@@ -1,8 +1,11 @@
 import {
   Body,
+  BadRequestException,
+  ConflictException,
   Controller,
   Get,
   HttpStatus,
+  Headers,
   Param,
   Post,
   Query,
@@ -78,11 +81,30 @@ export class AuctionController {
     @Param('idOrCode') idOrCode: string,
     @Body() dto: PlaceBidDto,
     @CurrentUserId() bidderId: string,
+    @Headers('idempotency-key') headerIdempotencyKey?: string,
   ) {
+    const headerKey = headerIdempotencyKey?.trim();
+    const bodyKey = dto.idempotencyKey?.trim();
+    if (
+      headerIdempotencyKey !== undefined &&
+      (!headerKey || headerKey.length > 200)
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_IDEMPOTENCY_KEY',
+        message: 'Idempotency-Key phải có từ 1 đến 200 ký tự',
+      });
+    }
+    if (headerKey && bodyKey && headerKey !== bodyKey) {
+      throw new ConflictException({
+        errorCode: 'IDEMPOTENCY_KEY_REUSED',
+        message: 'Idempotency key trong header và body không khớp',
+      });
+    }
     const result = await this.auctionService.placeBid(
       idOrCode,
       bidderId,
       dto.amount,
+      headerKey || bodyKey,
     );
     return {
       success: true as const,

@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ProductSkuEntity } from '../catalog/domain/entities/product-sku.entity.js';
 import { ProductEntity } from '../catalog/domain/entities/product.entity.js';
 import { ShopEntity } from '../identity/domain/shop.entity.js';
@@ -19,6 +19,8 @@ import { BidEntity } from './entities/bid.entity.js';
 import { CreateAuctionDto } from './dtos/create-auction.dto.js';
 import { AuctionEventsService } from './ws/auction-events.service.js';
 import { NotificationDispatchApi } from '../notification/notification-dispatch.api.js';
+import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
+import { InventoryReservationApi } from '../fulfillment/inventory-reservation.api.js';
 
 export interface DemoAuctionOptions {
   startsAt: Date;
@@ -145,7 +147,17 @@ export class AuctionService {
     private readonly auctionEvents?: AuctionEventsService,
     @Optional()
     private readonly notifications?: NotificationDispatchApi,
+    @Optional()
+    private readonly inventoryReservation?: InventoryReservationApi,
+    @Optional()
+    private readonly dataSource?: DataSource,
   ) {}
+
+  private transaction<T>(
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    return (this.dataSource ?? this.auctions.manager).transaction(work);
+  }
 
   calculateDemoPrices(price: number): {
     startPrice: string;
@@ -228,58 +240,80 @@ export class AuctionService {
       });
     }
 
-    const sku = await this.skus.findOne({
-      where: { id: dto.skuId, isActive: true },
-    });
-    if (!sku) {
-      throw new BadRequestException({
-        errorCode: 'AUCTION_SKU_INELIGIBLE',
-        message: 'SKU không tồn tại hoặc không hoạt động',
-      });
-    }
-    const product = await this.products.findOne({
-      where: { id: sku.productId, sellerId, isAuctionEligible: true },
-    });
-    if (!product || product.deletedAt || product.status !== 'ACTIVE') {
-      throw new ForbiddenException({
-        errorCode: 'AUCTION_SKU_NOT_OWNED_OR_INELIGIBLE',
-        message: 'Bạn không sở hữu sản phẩm đủ điều kiện đấu giá này',
-      });
-    }
-    const duplicate = await this.auctions.findOne({
-      where: { skuId: sku.id, status: In(['SCHEDULED', 'ACTIVE']) },
-    });
-    if (duplicate) {
-      throw new ConflictException({
-        errorCode: 'AUCTION_ALREADY_OPEN',
-        message: 'SKU đã có phiên đấu giá đang mở',
-      });
-    }
-
-    const money = (value: number) => value.toFixed(2);
-    const auction = this.auctions.create({
-      code: `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-      sellerId,
-      productId: product.id,
-      skuId: sku.id,
-      titleSnapshot: product.name,
-      startPrice: money(dto.startPrice),
-      reservePrice: money(dto.reservePrice),
-      bidIncrement: money(dto.bidIncrement),
-      currentPrice: money(dto.startPrice),
-      currency: sku.currency,
-      startsAt,
-      endsAt,
-      originalEndsAt: endsAt,
-      status: startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
-      bidCount: 0,
-      highestBidId: null,
-      highestBidderId: null,
-    });
     try {
-      return await this.auctions.save(auction);
+      return await this.transaction(async (manager) => {
+        const skuRepo = manager.getRepository(ProductSkuEntity);
+        const productRepo = manager.getRepository(ProductEntity);
+        const auctionRepo = manager.getRepository(AuctionEntity);
+        const sku = await skuRepo.findOne({
+          where: { id: dto.skuId, isActive: true },
+        });
+        if (!sku) {
+          throw new BadRequestException({
+            errorCode: 'AUCTION_SKU_INELIGIBLE',
+            message: 'SKU không tồn tại hoặc không hoạt động',
+          });
+        }
+        const product = await productRepo.findOne({
+          where: { id: sku.productId, sellerId, isAuctionEligible: true },
+        });
+        if (!product || product.deletedAt || product.status !== 'ACTIVE') {
+          throw new ForbiddenException({
+            errorCode: 'AUCTION_SKU_NOT_OWNED_OR_INELIGIBLE',
+            message: 'Bạn không sở hữu sản phẩm đủ điều kiện đấu giá này',
+          });
+        }
+        const duplicate = await auctionRepo.findOne({
+          where: { skuId: sku.id, status: In(['SCHEDULED', 'ACTIVE']) },
+        });
+        if (duplicate) {
+          throw new ConflictException({
+            errorCode: 'AUCTION_ALREADY_OPEN',
+            message: 'SKU đã có phiên đấu giá đang mở',
+          });
+        }
+        if (!this.inventoryReservation) {
+          throw new Error('InventoryReservationApi is not configured');
+        }
+        const receipt = await this.inventoryReservation.reserve(
+          [{ skuId: sku.id, quantity: 1 }],
+          manager,
+        );
+        const money = (value: number) => value.toFixed(2);
+        return auctionRepo.save(
+          auctionRepo.create({
+            code: `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+            sellerId,
+            productId: product.id,
+            skuId: sku.id,
+            titleSnapshot: product.name,
+            startPrice: money(dto.startPrice),
+            reservePrice: money(dto.reservePrice),
+            bidIncrement: money(dto.bidIncrement),
+            currentPrice: money(dto.startPrice),
+            currency: sku.currency,
+            startsAt,
+            endsAt,
+            originalEndsAt: endsAt,
+            status: startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
+            bidCount: 0,
+            highestBidId: null,
+            highestBidderId: null,
+            reservationReceipt: receipt,
+          }),
+        );
+      });
     } catch (error: unknown) {
-      if ((error as { code?: string }).code === '23505') {
+      const databaseError = error as {
+        code?: string;
+        constraint?: string;
+        driverError?: { code?: string; constraint?: string };
+      };
+      if (
+        (databaseError.code ?? databaseError.driverError?.code) === '23505' &&
+        (databaseError.constraint ?? databaseError.driverError?.constraint) ===
+          'UQ_auction_one_open_per_sku'
+      ) {
         throw new ConflictException({
           errorCode: 'AUCTION_ALREADY_OPEN',
           message: 'SKU đã có phiên đấu giá đang mở',
@@ -293,91 +327,160 @@ export class AuctionService {
     idOrCode: string,
     bidderId: string,
     amount: number,
+    idempotencyKey?: string,
   ): Promise<{ bid: BidEntity; minNextBid: number }> {
-    const txResult = await this.auctions.manager.transaction(
-      async (manager) => {
-        const auctionRepo = manager.getRepository(AuctionEntity);
-        const bidRepo = manager.getRepository(BidEntity);
-        const auction = await auctionRepo
-          .createQueryBuilder('auction')
-          .setLock('pessimistic_write')
-          .where(
-            'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-            { identifier: idOrCode.trim() },
-          )
-          .getOne();
-        if (!auction) {
-          throw new NotFoundException({
-            errorCode: 'AUCTION_NOT_FOUND',
-            message: 'Không tìm thấy phiên đấu giá',
-          });
-        }
-        if (auction.sellerId === bidderId) {
-          throw new ForbiddenException({
-            errorCode: 'CANNOT_BID_OWN_AUCTION',
-            message: 'Không thể đấu giá sản phẩm của chính mình',
-          });
-        }
-        const now = new Date();
-        if (auction.startsAt > now || auction.endsAt <= now) {
-          throw new ConflictException({
-            errorCode: 'AUCTION_NOT_ACTIVE',
-            message: 'Phiên đấu giá không trong thời gian hoạt động',
-          });
-        }
-        if (auction.status === 'SCHEDULED') {
-          auction.status = 'ACTIVE';
-        } else if (auction.status !== 'ACTIVE') {
-          throw new ConflictException({
-            errorCode: 'AUCTION_NOT_ACTIVE',
-            message: 'Phiên đấu giá không trong thời gian hoạt động',
-          });
-        }
-        const currentPriceCents = Math.round(
-          Number(auction.currentPrice) * 100,
-        );
-        const incrementCents = Math.round(Number(auction.bidIncrement) * 100);
-        const amountCents = Math.round(amount * 100);
-        const minNextBidCents = currentPriceCents + incrementCents;
-        const minNextBid = minNextBidCents / 100;
-        if (amountCents < minNextBidCents) {
-          throw new ConflictException({
-            errorCode: 'BID_TOO_LOW',
-            message: 'Giá đặt thấp hơn mức tối thiểu',
-            minNextBid,
-          });
-        }
-
-        const previousHighestBidderId = auction.highestBidderId;
-        if (auction.highestBidId) {
-          await bidRepo.update(
-            { id: auction.highestBidId, status: 'WINNING' },
-            { status: 'OUTBID' },
-          );
-        }
-        const bid = await bidRepo.save(
-          bidRepo.create({
+    const normalizedKey = idempotencyKey?.trim() || null;
+    const txResult = await this.transaction(async (manager) => {
+      const auctionRepo = manager.getRepository(AuctionEntity);
+      const bidRepo = manager.getRepository(BidEntity);
+      const auction = await auctionRepo
+        .createQueryBuilder('auction')
+        .setLock('pessimistic_write')
+        .where(
+          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+          { identifier: idOrCode.trim() },
+        )
+        .getOne();
+      if (!auction) {
+        throw new NotFoundException({
+          errorCode: 'AUCTION_NOT_FOUND',
+          message: 'Không tìm thấy phiên đấu giá',
+        });
+      }
+      if (auction.sellerId === bidderId) {
+        throw new ForbiddenException({
+          errorCode: 'CANNOT_BID_OWN_AUCTION',
+          message: 'Không thể đấu giá sản phẩm của chính mình',
+        });
+      }
+      if (normalizedKey) {
+        const existing = await bidRepo.findOne({
+          where: {
             auctionId: auction.id,
             bidderId,
-            amount: (amountCents / 100).toFixed(2),
-            status: 'WINNING',
-          }),
+            idempotencyKey: normalizedKey,
+          },
+        });
+        if (existing) {
+          if (
+            Math.round(Number(existing.amount) * 100) !==
+            Math.round(amount * 100)
+          ) {
+            throw new ConflictException({
+              errorCode: 'IDEMPOTENCY_KEY_REUSED',
+              message: 'Idempotency key đã được dùng với mức giá khác',
+            });
+          }
+          return {
+            bid: existing,
+            minNextBid:
+              (Math.round(Number(auction.currentPrice) * 100) +
+                Math.round(Number(auction.bidIncrement) * 100)) /
+              100,
+            auctionId: auction.id,
+            auctionCode: auction.code ?? null,
+            bidCount: auction.bidCount,
+            previousHighestBidderId: null,
+            wasReplay: true,
+          };
+        }
+      }
+      if (auction.highestBidderId === bidderId) {
+        throw new ConflictException({
+          errorCode: 'ALREADY_HIGHEST_BIDDER',
+          message: 'Bạn đang là người đặt giá cao nhất',
+        });
+      }
+      const eligibility = await manager
+        .getRepository(BidderEligibilityEntity)
+        .findOne({ where: { userId: bidderId } });
+      const reputation: { score: number; trust_level?: string } | undefined =
+        eligibility
+          ? {
+              score: eligibility.reputationScore,
+              trust_level: eligibility.trustLevel,
+            }
+          : (
+              await manager.query<
+                Array<{ score: number; trust_level: string }>
+              >(
+                'SELECT score, trust_level FROM identity.reputation_scores WHERE user_id = $1 LIMIT 1',
+                [bidderId],
+              )
+            )[0];
+      if (
+        eligibility?.isRestricted ||
+        reputation?.trust_level === 'RESTRICTED' ||
+        Number(reputation?.score ?? 50) < 50
+      ) {
+        throw new ForbiddenException({
+          errorCode: 'REPUTATION_TOO_LOW',
+          message: 'Điểm uy tín tối thiểu 50 để tham gia đấu giá',
+        });
+      }
+      const now = new Date();
+      if (auction.startsAt > now || auction.endsAt <= now) {
+        throw new ConflictException({
+          errorCode: 'AUCTION_NOT_ACTIVE',
+          message: 'Phiên đấu giá không trong thời gian hoạt động',
+        });
+      }
+      if (auction.status === 'SCHEDULED') {
+        auction.status = 'ACTIVE';
+      } else if (auction.status !== 'ACTIVE') {
+        throw new ConflictException({
+          errorCode: 'AUCTION_NOT_ACTIVE',
+          message: 'Phiên đấu giá không trong thời gian hoạt động',
+        });
+      }
+      const currentPriceCents = Math.round(Number(auction.currentPrice) * 100);
+      const incrementCents = Math.round(Number(auction.bidIncrement) * 100);
+      const amountCents = Math.round(amount * 100);
+      const minNextBidCents = currentPriceCents + incrementCents;
+      const minNextBid = minNextBidCents / 100;
+      if (amountCents < minNextBidCents) {
+        throw new ConflictException({
+          errorCode: 'BID_TOO_LOW',
+          message: 'Giá đặt thấp hơn mức tối thiểu',
+          minNextBid,
+        });
+      }
+
+      const previousHighestBidderId = auction.highestBidderId;
+      if (auction.highestBidId) {
+        await bidRepo.update(
+          { id: auction.highestBidId, status: 'WINNING' },
+          { status: 'OUTBID' },
         );
-        auction.currentPrice = (amountCents / 100).toFixed(2);
-        auction.highestBidId = bid.id;
-        auction.highestBidderId = bidderId;
-        auction.bidCount += 1;
-        await auctionRepo.save(auction);
-        return {
-          bid,
-          minNextBid: (amountCents + incrementCents) / 100,
+      }
+      const bid = await bidRepo.save(
+        bidRepo.create({
           auctionId: auction.id,
-          auctionCode: auction.code ?? null,
-          bidCount: auction.bidCount,
-          previousHighestBidderId,
-        };
-      },
-    );
+          bidderId,
+          amount: (amountCents / 100).toFixed(2),
+          status: 'WINNING',
+          idempotencyKey: normalizedKey,
+        }),
+      );
+      auction.currentPrice = (amountCents / 100).toFixed(2);
+      auction.highestBidId = bid.id;
+      auction.highestBidderId = bidderId;
+      auction.bidCount += 1;
+      await auctionRepo.save(auction);
+      return {
+        bid,
+        minNextBid: (amountCents + incrementCents) / 100,
+        auctionId: auction.id,
+        auctionCode: auction.code ?? null,
+        bidCount: auction.bidCount,
+        previousHighestBidderId,
+        wasReplay: false,
+      };
+    });
+
+    if (txResult.wasReplay) {
+      return { bid: txResult.bid, minNextBid: txResult.minNextBid };
+    }
 
     // Emit post-commit using canonical UUID sessionId; never let WS/notification failure fail the HTTP bid.
     this.auctionEvents?.emitBidPlaced({
@@ -983,61 +1086,59 @@ export class AuctionService {
       });
     }
 
-    const endedAuction = await this.auctions.manager.transaction(
-      async (manager) => {
-        const auctionRepo = manager.getRepository(AuctionEntity);
-        const auction = await auctionRepo
-          .createQueryBuilder('auction')
-          .setLock('pessimistic_write')
-          .where(
-            'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-            { identifier: trimmed },
-          )
-          .getOne();
+    const endedAuction = await this.transaction(async (manager) => {
+      const auctionRepo = manager.getRepository(AuctionEntity);
+      const auction = await auctionRepo
+        .createQueryBuilder('auction')
+        .setLock('pessimistic_write')
+        .where(
+          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+          { identifier: trimmed },
+        )
+        .getOne();
 
-        if (!auction) {
-          throw new NotFoundException({
-            errorCode: 'AUCTION_NOT_FOUND',
-            message: 'Không tìm thấy phiên đấu giá',
-          });
-        }
-        if (auction.sellerId !== sellerId) {
-          throw new ForbiddenException({
-            errorCode: 'AUCTION_NOT_OWNED',
-            message: 'Bạn không sở hữu phiên đấu giá này',
-          });
-        }
+      if (!auction) {
+        throw new NotFoundException({
+          errorCode: 'AUCTION_NOT_FOUND',
+          message: 'Không tìm thấy phiên đấu giá',
+        });
+      }
+      if (auction.sellerId !== sellerId) {
+        throw new ForbiddenException({
+          errorCode: 'AUCTION_NOT_OWNED',
+          message: 'Bạn không sở hữu phiên đấu giá này',
+        });
+      }
 
-        const now = new Date();
-        if (
-          auction.status !== 'ACTIVE' ||
-          auction.startsAt > now ||
-          auction.endsAt <= now
-        ) {
-          throw new ConflictException({
-            errorCode: 'AUCTION_NOT_ACTIVE',
-            message: 'Chỉ có thể kết thúc sớm phiên đấu giá đang diễn ra',
-          });
-        }
+      const now = new Date();
+      if (
+        auction.status !== 'ACTIVE' ||
+        auction.startsAt > now ||
+        auction.endsAt <= now
+      ) {
+        throw new ConflictException({
+          errorCode: 'AUCTION_NOT_ACTIVE',
+          message: 'Chỉ có thể kết thúc sớm phiên đấu giá đang diễn ra',
+        });
+      }
 
-        const previousStatus = auction.status;
-        auction.status = 'ENDED';
-        auction.endsAt = now;
-        const saved = await auctionRepo.save(auction);
+      const previousStatus = auction.status;
+      auction.status = 'ENDED';
+      auction.endsAt = now;
+      const saved = await auctionRepo.save(auction);
 
-        await this.recordStatusHistory(
-          manager,
-          saved.id,
-          previousStatus,
-          'ENDED',
-          sellerId,
-          'SELLER',
-          'Seller ended auction early',
-        );
+      await this.recordStatusHistory(
+        manager,
+        saved.id,
+        previousStatus,
+        'ENDED',
+        sellerId,
+        'SELLER',
+        'Seller ended auction early',
+      );
 
-        return saved;
-      },
-    );
+      return saved;
+    });
 
     // TODO(Dev 3/Dev 4): Trigger AuctionSettlementService.settleAuction(endedAuction.id) post-commit when implemented.
     this.auctionEvents?.emitAuctionEnded({
@@ -1068,75 +1169,82 @@ export class AuctionService {
       });
     }
 
-    const cancelledAuction = await this.auctions.manager.transaction(
-      async (manager) => {
-        const auctionRepo = manager.getRepository(AuctionEntity);
-        const auction = await auctionRepo
-          .createQueryBuilder('auction')
-          .setLock('pessimistic_write')
-          .where(
-            'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-            { identifier: trimmed },
-          )
-          .getOne();
+    const cancelledAuction = await this.transaction(async (manager) => {
+      const auctionRepo = manager.getRepository(AuctionEntity);
+      const auction = await auctionRepo
+        .createQueryBuilder('auction')
+        .setLock('pessimistic_write')
+        .where(
+          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+          { identifier: trimmed },
+        )
+        .getOne();
 
-        if (!auction) {
-          throw new NotFoundException({
-            errorCode: 'AUCTION_NOT_FOUND',
-            message: 'Không tìm thấy phiên đấu giá',
+      if (!auction) {
+        throw new NotFoundException({
+          errorCode: 'AUCTION_NOT_FOUND',
+          message: 'Không tìm thấy phiên đấu giá',
+        });
+      }
+
+      if (actorType === 'SELLER') {
+        if (auction.sellerId !== actorId) {
+          throw new ForbiddenException({
+            errorCode: 'AUCTION_NOT_OWNED',
+            message: 'Bạn không sở hữu phiên đấu giá này',
           });
         }
-
-        if (actorType === 'SELLER') {
-          if (auction.sellerId !== actorId) {
-            throw new ForbiddenException({
-              errorCode: 'AUCTION_NOT_OWNED',
-              message: 'Bạn không sở hữu phiên đấu giá này',
-            });
-          }
-          if (
-            ['CANCELLED', 'ENDED', 'SETTLED', 'FAILED'].includes(auction.status)
-          ) {
-            throw new ConflictException({
-              errorCode: 'AUCTION_ALREADY_CLOSED',
-              message: 'Không thể hủy phiên đấu giá đã kết thúc hoặc đã hủy',
-            });
-          }
-          if (auction.bidCount > 0 || auction.highestBidId) {
-            throw new ConflictException({
-              errorCode: 'AUCTION_CANCEL_HAS_BIDS',
-              message: 'Không thể hủy phiên đấu giá đã có người đặt giá',
-            });
-          }
-        } else if (['SETTLED', 'CANCELLED'].includes(auction.status)) {
+        if (
+          ['CANCELLED', 'ENDED', 'SETTLED', 'FAILED'].includes(auction.status)
+        ) {
           throw new ConflictException({
-            errorCode: 'AUCTION_CANNOT_CANCEL',
-            message: 'Phiên đấu giá đã được quyết toán hoặc đã hủy trước đó',
+            errorCode: 'AUCTION_ALREADY_CLOSED',
+            message: 'Không thể hủy phiên đấu giá đã kết thúc hoặc đã hủy',
           });
         }
+        if (auction.bidCount > 0 || auction.highestBidId) {
+          throw new ConflictException({
+            errorCode: 'AUCTION_CANCEL_HAS_BIDS',
+            message: 'Không thể hủy phiên đấu giá đã có người đặt giá',
+          });
+        }
+      } else if (['SETTLED', 'CANCELLED'].includes(auction.status)) {
+        throw new ConflictException({
+          errorCode: 'AUCTION_CANNOT_CANCEL',
+          message: 'Phiên đấu giá đã được quyết toán hoặc đã hủy trước đó',
+        });
+      }
 
-        const previousStatus = auction.status;
-        auction.status = 'CANCELLED';
-        auction.cancelledBy = actorId;
-        auction.cancelActorType = actorType;
-        auction.cancelReason = reason?.trim() || null;
-        const saved = await auctionRepo.save(auction);
-
-        await this.recordStatusHistory(
+      const previousStatus = auction.status;
+      if (auction.reservationReceipt?.length) {
+        if (!this.inventoryReservation) {
+          throw new Error('InventoryReservationApi is not configured');
+        }
+        await this.inventoryReservation.release(
+          auction.reservationReceipt,
           manager,
-          saved.id,
-          previousStatus,
-          'CANCELLED',
-          actorId,
-          actorType,
-          auction.cancelReason ?? `${actorType} cancelled auction`,
         );
+        auction.reservationReceipt = null;
+      }
+      auction.status = 'CANCELLED';
+      auction.cancelledBy = actorId;
+      auction.cancelActorType = actorType;
+      auction.cancelReason = reason?.trim() || null;
+      const saved = await auctionRepo.save(auction);
 
-        return saved;
-      },
-    );
+      await this.recordStatusHistory(
+        manager,
+        saved.id,
+        previousStatus,
+        'CANCELLED',
+        actorId,
+        actorType,
+        auction.cancelReason ?? `${actorType} cancelled auction`,
+      );
 
-    // TODO(Dev 2/Dev 3): Release reserved SKU inventory & decrement seller_auction_counters after cancel.
+      return saved;
+    });
+
     this.auctionEvents?.emitAuctionEnded({
       sessionId: cancelledAuction.id,
       auctionCode: cancelledAuction.code ?? null,
