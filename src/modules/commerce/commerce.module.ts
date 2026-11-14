@@ -50,6 +50,8 @@ import { OrderDisputeController } from './controllers/order-dispute.controller.j
 import { SupportDisputeController } from './controllers/support-dispute.controller.js';
 import { OrderDisputeService } from './services/order-dispute.service.js';
 import { OrderCancelService } from './services/order-cancel.service.js';
+import { AuctionOrderHandoffApi } from './auction-order-handoff.api.js';
+import { AuctionOrderHandoffService } from './services/auction-order-handoff.service.js';
 import { EmailModule } from '../../common/email/email.module.js';
 import { NotificationModule } from '../notification/notification.module.js';
 
@@ -117,6 +119,11 @@ import { NotificationModule } from '../notification/notification.module.js';
       useExisting: OrderStateMachineService,
     },
     { provide: OrderRefundRequestApi, useExisting: OrderRefundService },
+    AuctionOrderHandoffService,
+    {
+      provide: AuctionOrderHandoffApi,
+      useClass: AuctionOrderHandoffService,
+    },
   ],
   exports: [
     CartMergeApi,
@@ -129,6 +136,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     OrderRefundRequestApi,
     OrderDisputeService,
     OrderCompletionSchedulerService,
+    AuctionOrderHandoffApi,
   ],
 })
 export class CommerceModule {}

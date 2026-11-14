@@ -43,6 +43,8 @@ import { AdminShopController } from './admin/admin-shop.controller.js';
 import { AdminShopService } from './admin/admin-shop.service.js';
 import { IdentitySupportLookupApi } from './identity-support-lookup.api.js';
 import { IdentitySupportLookupService } from './identity-support-lookup.service.js';
+import { IdentityReputationApi } from './identity-reputation.api.js';
+import { IdentityReputationService } from './services/identity-reputation.service.js';
 import { AddressModule } from './users/addresses/address.module.js';
 import { NotificationModule } from '../notification/notification.module.js';
 
@@ -105,6 +107,10 @@ import { NotificationModule } from '../notification/notification.module.js';
       provide: IdentitySupportLookupApi,
       useClass: IdentitySupportLookupService,
     },
+    {
+      provide: IdentityReputationApi,
+      useClass: IdentityReputationService,
+    },
   ],
   exports: [
     AccessTokenGuard,
@@ -117,6 +123,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     PermissionsGuard,
     IdentityPublicApi,
     IdentitySupportLookupApi,
+    IdentityReputationApi,
     PasswordResetService,
     RecaptchaService,
     GoogleIdTokenService,
