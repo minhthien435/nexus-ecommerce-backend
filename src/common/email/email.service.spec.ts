@@ -147,6 +147,77 @@ describe('EmailService', () => {
     );
   });
 
+  it('sends auction won email with formatted price, deadline and orderNumber', async () => {
+    mailMocks.sendMail.mockResolvedValue({ messageId: 'message-4' });
+    const service = createService();
+    const deadline = new Date('2026-11-15T10:00:00.000Z');
+
+    await service.sendAuctionWon({
+      recipient: 'winner@example.com',
+      winnerName: 'Duy Nguyen',
+      auctionCode: 'AUC-12345',
+      productTitle: 'Vintage Watch <Gold Edition>',
+      finalPrice: '5000000.00',
+      currency: 'VND',
+      orderId: '00000000-0000-0000-0000-000000000001',
+      orderNumber: 'ORD-AUC-12345',
+      paymentDeadlineAt: deadline,
+    });
+
+    const mail = mailMocks.sendMail.mock.calls[0][0];
+    expect(mail).toEqual(
+      expect.objectContaining({
+        to: 'winner@example.com',
+        subject: expect.stringContaining('AUC-12345'),
+        text: expect.stringMatching(
+          /Chào Duy Nguyen[\s\S]*Vintage Watch <Gold Edition>[\s\S]*ORD-AUC-12345[\s\S]*2026-11-15T10:00:00.000Z/,
+        ),
+        html: expect.stringMatching(/Vintage Watch &lt;Gold Edition&gt;/),
+      }),
+    );
+  });
+
+  it('returns a sanitized service-unavailable error when auction won email fails', async () => {
+    mailMocks.sendMail.mockRejectedValue(new Error('Connection lost'));
+    const service = createService();
+
+    await expect(
+      service.sendAuctionWon({
+        recipient: 'winner@example.com',
+        auctionCode: 'AUC-12345',
+        productTitle: 'Vintage Watch',
+        finalPrice: '5000000.00',
+        currency: 'VND',
+        orderId: '00000000-0000-0000-0000-000000000001',
+        orderNumber: 'ORD-AUC-12345',
+        paymentDeadlineAt: new Date(),
+      }),
+    ).rejects.toThrow(ServiceUnavailableException);
+  });
+
+  it('sends auction payment timeout email with penalty information', async () => {
+    mailMocks.sendMail.mockResolvedValue({ messageId: 'message-5' });
+    const service = createService();
+
+    await service.sendAuctionPaymentTimeout({
+      recipient: 'winner@example.com',
+      winnerName: 'Duy Nguyen',
+      auctionCode: 'AUC-12345',
+      orderNumber: 'ORD-AUC-12345',
+      penaltyPoints: 30,
+    });
+
+    const mail = mailMocks.sendMail.mock.calls[0][0];
+    expect(mail).toEqual(
+      expect.objectContaining({
+        to: 'winner@example.com',
+        subject: expect.stringContaining('ORD-AUC-12345'),
+        text: expect.stringMatching(/AUC-12345[\s\S]*30 điểm uy tín/),
+        html: expect.stringMatching(/30 điểm uy tín/),
+      }),
+    );
+  });
+
   it.each([
     ['SMTP_PORT', 'invalid', 'SMTP_PORT must be a valid TCP port'],
     ['SMTP_SECURE', 'sometimes', 'SMTP_SECURE must be true or false'],

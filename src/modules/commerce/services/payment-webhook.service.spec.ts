@@ -316,4 +316,74 @@ describe('PaymentWebhookService', () => {
 
     expect(result).toEqual({ received: true, duplicate: true });
   });
+
+  it('updates auction settlement to PAID, awards reputation, and creates rating eligibility for AUCTION order', async () => {
+    const mockReputationApi = {
+      rewardAuctionPayment: vi.fn().mockResolvedValue({
+        userId: 'buyer-uuid',
+        newScore: 53,
+        trustLevel: 'STANDARD',
+        alreadyRewarded: false,
+      }),
+      penalizeAuctionPaymentTimeout: vi.fn(),
+    };
+
+    const auctionOrder = {
+      ...mockOrder,
+      source: 'AUCTION' as const,
+      auctionId: '00000000-0000-0000-0000-000000000001',
+    };
+
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null) // no duplicate callback
+      .mockResolvedValueOnce(mockPayment) // payment found
+      .mockResolvedValueOnce(auctionOrder); // order found
+
+    (manager as any).query = vi.fn().mockImplementation(async (sql: string) => {
+      if (
+        sql.includes('auction.auction_settlements') &&
+        sql.includes('SELECT')
+      ) {
+        return [{ id: 'settlement-1', status: 'PENDING_PAYMENT' }];
+      }
+      return [];
+    });
+
+    const auctionWebhookService = new PaymentWebhookService(
+      dataSource,
+      payosClientService,
+      expiryQueue,
+      undefined,
+      mockReputationApi as any,
+    );
+
+    const result =
+      await auctionWebhookService.handlePayosWebhook(mockWebhookPayload);
+
+    expect(result).toEqual({ received: true });
+    expect(auctionOrder.status).toBe('PAID');
+
+    // Verify settlement update query
+    expect((manager as any).query).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE auction.auction_settlements'),
+      ['settlement-1'],
+    );
+
+    // Verify reputation rewarded
+    expect(mockReputationApi.rewardAuctionPayment).toHaveBeenCalledWith(
+      'buyer-uuid',
+      '00000000-0000-0000-0000-000000000001',
+      manager,
+    );
+
+    // Verify rating eligibility created
+    expect((manager as any).query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO identity.rating_eligibilities'),
+      expect.arrayContaining([
+        '00000000-0000-0000-0000-000000000001',
+        'buyer-uuid',
+        'seller-uuid',
+      ]),
+    );
+  });
 });

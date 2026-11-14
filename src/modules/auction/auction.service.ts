@@ -21,6 +21,7 @@ import { AuctionEventsService } from './ws/auction-events.service.js';
 import { NotificationDispatchApi } from '../notification/notification-dispatch.api.js';
 import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 import { InventoryReservationApi } from '../fulfillment/inventory-reservation.api.js';
+import { AuctionSettlementService } from './services/auction-settlement.service.js';
 
 export interface DemoAuctionOptions {
   startsAt: Date;
@@ -151,6 +152,8 @@ export class AuctionService {
     private readonly inventoryReservation?: InventoryReservationApi,
     @Optional()
     private readonly dataSource?: DataSource,
+    @Optional()
+    private readonly auctionSettlement?: AuctionSettlementService,
   ) {}
 
   private transaction<T>(
@@ -1140,7 +1143,16 @@ export class AuctionService {
       return saved;
     });
 
-    // TODO(Dev 3/Dev 4): Trigger AuctionSettlementService.settleAuction(endedAuction.id) post-commit when implemented.
+    // Trigger AuctionSettlementService.settleAuction post-commit
+    if (this.auctionSettlement) {
+      try {
+        await this.auctionSettlement.settleAuction(endedAuction.id);
+      } catch (err) {
+        this.logger.error(
+          `Failed to settle auction ${endedAuction.id} after endEarly: ${(err as Error).message}`,
+        );
+      }
+    }
     this.auctionEvents?.emitAuctionEnded({
       sessionId: endedAuction.id,
       auctionCode: endedAuction.code ?? null,

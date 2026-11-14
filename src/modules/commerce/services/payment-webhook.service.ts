@@ -21,6 +21,7 @@ import {
 } from '../order-expiry.constants.js';
 import { PayosClientService } from './payos-client.service.js';
 import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
+import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
 
 export interface WebhookProcessingResult {
   received: boolean;
@@ -39,6 +40,8 @@ export class PaymentWebhookService {
     private readonly expiryQueue?: Queue<OrderExpiryJobPayload>,
     @Optional()
     private readonly notifications?: NotificationDispatchApi,
+    @Optional()
+    private readonly reputationApi?: IdentityReputationApi,
   ) {}
 
   async handlePayosWebhook(body: Webhook): Promise<WebhookProcessingResult> {
@@ -190,6 +193,50 @@ export class PaymentWebhookService {
             );
 
             orderIdToCancelExpiry = order.id;
+
+            // Handle Auction Order settlement transition and reputation reward
+            if (order.source === 'AUCTION' && order.auctionId) {
+              const settlementRows = await manager.query(
+                `SELECT id, status FROM auction.auction_settlements 
+                 WHERE auction_id = $1 
+                 FOR UPDATE`,
+                [order.auctionId],
+              );
+
+              if (
+                settlementRows.length > 0 &&
+                settlementRows[0].status === 'PENDING_PAYMENT'
+              ) {
+                await manager.query(
+                  `UPDATE auction.auction_settlements
+                   SET status = 'PAID', updated_at = clock_timestamp()
+                   WHERE id = $1`,
+                  [settlementRows[0].id],
+                );
+
+                if (this.reputationApi) {
+                  try {
+                    await this.reputationApi.rewardAuctionPayment(
+                      order.buyerId,
+                      order.auctionId,
+                      manager,
+                    );
+                  } catch (repErr) {
+                    this.logger.error(
+                      `Failed to reward reputation for auction payment ${order.auctionId}: ${(repErr as Error).message}`,
+                    );
+                  }
+                }
+
+                await manager.query(
+                  `INSERT INTO identity.rating_eligibilities
+                     (transaction_type, transaction_id, buyer_id, seller_id, completed_at, buyer_rated, seller_rated)
+                   VALUES ('AUCTION', $1, $2, $3, clock_timestamp(), false, false)
+                   ON CONFLICT (transaction_type, transaction_id) DO NOTHING`,
+                  [order.auctionId, order.buyerId, order.sellerId],
+                );
+              }
+            }
           }
         } else {
           // PayOS payment failure / cancellation
