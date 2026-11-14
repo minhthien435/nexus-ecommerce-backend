@@ -108,6 +108,7 @@ export class AuctionSettlementService {
             finalPrice: auction.finalPrice,
             currency: auction.currency || 'VND',
             paymentDeadlineAt: existingSettlement.paymentDeadlineAt,
+            warehouseId: auction.reservationReceipt?.[0]?.warehouseId ?? null,
           });
           existingSettlement.orderId = orderResult.orderId;
           await this.settlementRepository.save(existingSettlement);
@@ -250,22 +251,13 @@ export class AuctionSettlementService {
           );
 
           // Release inventory reservation authoritatively
-          const invRows = await manager.query(
-            `SELECT warehouse_id, reserved_qty FROM fulfillment.inventory_items 
-             WHERE sku_id = $1 
-             FOR UPDATE`,
-            [auction.skuId],
-          );
-          const invRow = invRows[0];
-          if (invRow && Number(invRow.reserved_qty) >= 1) {
+          const receiptsToRelease = auction.reservationReceipt?.length
+            ? auction.reservationReceipt
+            : null;
+
+          if (receiptsToRelease) {
             await this.inventoryReservation.release(
-              [
-                {
-                  skuId: auction.skuId,
-                  quantity: 1,
-                  warehouseId: invRow.warehouse_id,
-                },
-              ],
+              receiptsToRelease,
               manager,
               {
                 actorId: auction.sellerId,
@@ -273,10 +265,38 @@ export class AuctionSettlementService {
                 operationId: `failed-auction-${auction.id}`,
               },
             );
+            auction.reservationReceipt = null;
+            await manager.save(auction);
           } else {
-            this.logger.log(
-              `settleAuction: No reserved stock (reserved_qty = 0) held for failed auction ${auction.id}. Skipping release.`,
+            // Fallback for older or demo auctions without reservationReceipt
+            const invRows = await manager.query(
+              `SELECT warehouse_id, reserved_qty FROM fulfillment.inventory_items 
+               WHERE sku_id = $1 
+               FOR UPDATE`,
+              [auction.skuId],
             );
+            const invRow = invRows[0];
+            if (invRow && Number(invRow.reserved_qty) >= 1) {
+              await this.inventoryReservation.release(
+                [
+                  {
+                    skuId: auction.skuId,
+                    quantity: 1,
+                    warehouseId: invRow.warehouse_id,
+                  },
+                ],
+                manager,
+                {
+                  actorId: auction.sellerId,
+                  operation: 'ORDER_CANCELLATION',
+                  operationId: `failed-auction-${auction.id}`,
+                },
+              );
+            } else {
+              this.logger.log(
+                `settleAuction: No reserved stock (reserved_qty = 0) held for failed auction ${auction.id}. Skipping release.`,
+              );
+            }
           }
 
           const action: PostCommitAction = {
@@ -327,19 +347,26 @@ export class AuctionSettlementService {
 
         const savedSettlement = await manager.save(settlement);
 
-        // Create Order in Commerce
-        const orderResult = await this.orderHandoffApi.createAuctionOrder({
-          auctionId: auction.id,
-          auctionCode: auction.code,
-          winnerId: auction.winnerId!,
-          sellerId: auction.sellerId,
-          skuId: auction.skuId,
-          productId: auction.productId,
-          titleSnapshot: auction.titleSnapshot,
-          finalPrice: auction.finalPrice!,
-          currency: auction.currency || 'VND',
-          paymentDeadlineAt,
-        });
+        // Create Order in Commerce with manager and warehouseId from reservationReceipt
+        const warehouseId =
+          auction.reservationReceipt?.[0]?.warehouseId ?? null;
+
+        const orderResult = await this.orderHandoffApi.createAuctionOrder(
+          {
+            auctionId: auction.id,
+            auctionCode: auction.code,
+            winnerId: auction.winnerId!,
+            sellerId: auction.sellerId,
+            skuId: auction.skuId,
+            productId: auction.productId,
+            titleSnapshot: auction.titleSnapshot,
+            finalPrice: auction.finalPrice!,
+            currency: auction.currency || 'VND',
+            paymentDeadlineAt,
+            warehouseId,
+          },
+          manager,
+        );
 
         savedSettlement.orderId = orderResult.orderId;
         await manager.save(savedSettlement);

@@ -121,10 +121,11 @@ describe('AuctionSettlementProcessor', () => {
     expect(mockSettlement.status).toBe('PAYMENT_TIMEOUT');
     expect(managerMock.save).toHaveBeenCalledWith(mockSettlement);
 
-    // Verify order cancelled
+    // Verify order cancelled with manager passed
     expect(orderHandoffApiMock.cancelAuctionOrder).toHaveBeenCalledWith(
       'ord-123',
       'PAYMENT_TIMEOUT',
+      managerMock,
     );
 
     // Verify inventory released
@@ -323,5 +324,70 @@ describe('AuctionSettlementProcessor', () => {
     expect(
       reputationApiMock.penalizeAuctionPaymentTimeout,
     ).toHaveBeenCalledWith('winner-1', 'auc-1', managerMock);
+  });
+
+  it('releases inventory using auction.reservationReceipt when present, clears receipt, and saves auction', async () => {
+    const expiredDeadline = new Date(Date.now() - 3600 * 1000);
+    const mockSettlement = {
+      id: 'settlement-receipt',
+      auctionId: 'auc-receipt-1',
+      winnerId: 'winner-1',
+      orderId: 'ord-receipt-1',
+      status: 'PENDING_PAYMENT',
+      paymentDeadlineAt: expiredDeadline,
+    };
+
+    const mockAuction = {
+      id: 'auc-receipt-1',
+      code: 'AUC-REC',
+      skuId: 'sku-1',
+      reservationReceipt: [
+        { skuId: 'sku-1', quantity: 1, warehouseId: 'wh-khoa-custom' },
+      ],
+    };
+
+    managerMock.getRepository.mockReturnValue({
+      createQueryBuilder: vi.fn().mockReturnValue({
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(mockSettlement),
+      }),
+      findOne: vi.fn().mockResolvedValue(mockAuction),
+    });
+
+    managerMock.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('commerce.order_items')) {
+        return [{ warehouse_id: 'wh-fallback' }];
+      }
+      if (sql.includes('fulfillment.inventory_items')) {
+        return [{ reserved_qty: 1 }];
+      }
+      return [];
+    });
+
+    const mockJob: any = {
+      name: AUCTION_PAYMENT_TIMEOUT_JOB,
+      data: {
+        settlementId: 'settlement-receipt',
+        auctionId: 'auc-receipt-1',
+        orderId: 'ord-receipt-1',
+        winnerId: 'winner-1',
+      },
+      moveToDelayed: vi.fn(),
+    };
+
+    await processor.process(mockJob);
+
+    // Verify inventory release used auction.reservationReceipt
+    expect(inventoryReservationMock.release).toHaveBeenCalledWith(
+      [{ skuId: 'sku-1', quantity: 1, warehouseId: 'wh-khoa-custom' }],
+      managerMock,
+      expect.objectContaining({
+        actorId: 'winner-1',
+        operation: 'ORDER_CANCELLATION',
+      }),
+    );
+    expect(mockAuction.reservationReceipt).toBeNull();
+    expect(managerMock.save).toHaveBeenCalledWith(mockAuction);
   });
 });

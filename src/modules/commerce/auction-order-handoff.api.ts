@@ -1,3 +1,5 @@
+import type { EntityManager } from 'typeorm';
+
 export interface CreateAuctionOrderInput {
   auctionId: string;
   auctionCode?: string | null;
@@ -20,9 +22,14 @@ export interface AuctionOrderResult {
 export abstract class AuctionOrderHandoffApi {
   abstract createAuctionOrder(
     input: CreateAuctionOrderInput,
+    manager?: EntityManager,
   ): Promise<AuctionOrderResult>;
 
-  abstract cancelAuctionOrder(orderId: string, reason: string): Promise<void>;
+  abstract cancelAuctionOrder(
+    orderId: string,
+    reason: string,
+    manager?: EntityManager,
+  ): Promise<void>;
 
   abstract findOrderByAuctionId(
     auctionId: string,

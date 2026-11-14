@@ -126,6 +126,7 @@ export class AuctionSettlementProcessor extends WorkerHost {
           await this.orderHandoffApi.cancelAuctionOrder(
             finalOrderId,
             'PAYMENT_TIMEOUT',
+            manager,
           );
         } catch (orderErr) {
           this.logger.warn(
@@ -147,7 +148,9 @@ export class AuctionSettlementProcessor extends WorkerHost {
 
       auctionCode = auction.code ?? auction.id;
       if (auction.skuId) {
-        let warehouseId = warehouseIdFromItem;
+        // Ưu tiên lấy warehouseId từ auction.reservationReceipt của Dev 2
+        let warehouseId =
+          auction.reservationReceipt?.[0]?.warehouseId ?? warehouseIdFromItem;
         if (!warehouseId) {
           const invRow = await manager.query(
             `SELECT warehouse_id FROM fulfillment.inventory_items WHERE sku_id = $1 LIMIT 1`,
@@ -174,15 +177,18 @@ export class AuctionSettlementProcessor extends WorkerHost {
         const currentReserved = Number(invCheck[0]?.reserved_qty ?? 0);
         if (currentReserved >= 1) {
           // Normal path: has reserved stock -> release authoritatively
-          await this.inventoryReservation.release(
-            [{ skuId: auction.skuId, quantity: 1, warehouseId }],
-            manager,
-            {
-              actorId: settlement.winnerId,
-              operation: 'ORDER_CANCELLATION',
-              operationId: `timeout-${settlement.id}`,
-            },
-          );
+          const receiptsToRelease = auction.reservationReceipt?.length
+            ? auction.reservationReceipt
+            : [{ skuId: auction.skuId, quantity: 1, warehouseId }];
+
+          await this.inventoryReservation.release(receiptsToRelease, manager, {
+            actorId: settlement.winnerId,
+            operation: 'ORDER_CANCELLATION',
+            operationId: `timeout-${settlement.id}`,
+          });
+
+          auction.reservationReceipt = null;
+          await manager.save(auction);
         } else {
           // Reserved qty is 0. Check whether it was legitimately released already
           const wasCancelledByExpiry = finalOrderId
@@ -203,6 +209,11 @@ export class AuctionSettlementProcessor extends WorkerHost {
             this.logger.warn(
               `AuctionSettlementProcessor: SKU ${auction.skuId} at warehouse ${warehouseId} has reserved_qty = 0. No reservation held.`,
             );
+          }
+
+          if (auction.reservationReceipt) {
+            auction.reservationReceipt = null;
+            await manager.save(auction);
           }
         }
       }

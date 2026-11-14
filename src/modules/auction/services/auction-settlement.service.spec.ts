@@ -182,7 +182,7 @@ describe('AuctionSettlementService', () => {
       });
     });
 
-    it('settles auction as FAILED when currentPrice < reservePrice', async () => {
+    it('settles auction as FAILED when currentPrice < reservePrice and releases reservationReceipt directly', async () => {
       const mockAuction = {
         id: 'auc-below-reserve',
         code: 'AUC-002',
@@ -194,6 +194,9 @@ describe('AuctionSettlementService', () => {
         currentPrice: '300000.00',
         reservePrice: '500000.00',
         status: 'ACTIVE',
+        reservationReceipt: [
+          { skuId: 'sku-1', quantity: 1, warehouseId: 'wh-khoa-1' },
+        ],
       };
 
       managerMock.getRepository.mockReturnValue({
@@ -209,6 +212,16 @@ describe('AuctionSettlementService', () => {
       expect(result.outcome).toBe('FAILED');
       expect(result.status).toBe('FAILED');
       expect(mockAuction.status).toBe('FAILED');
+      expect(mockAuction.reservationReceipt).toBeNull();
+      expect(inventoryReservationMock.release).toHaveBeenCalledWith(
+        [{ skuId: 'sku-1', quantity: 1, warehouseId: 'wh-khoa-1' }],
+        managerMock,
+        expect.objectContaining({
+          actorId: 'seller-1',
+          operation: 'ORDER_CANCELLATION',
+        }),
+      );
+      expect(managerMock.save).toHaveBeenCalledWith(mockAuction);
       expect(orderHandoffApiMock.createAuctionOrder).not.toHaveBeenCalled();
     });
 
@@ -227,6 +240,9 @@ describe('AuctionSettlementService', () => {
         reservePrice: '50000000.00',
         currency: 'VND',
         status: 'ACTIVE',
+        reservationReceipt: [
+          { skuId: 'sku-1', quantity: 1, warehouseId: 'wh-win-1' },
+        ],
       };
 
       managerMock.getRepository.mockReturnValue({
@@ -262,7 +278,7 @@ describe('AuctionSettlementService', () => {
         }),
       );
 
-      // Verify order created in Commerce
+      // Verify order created in Commerce with manager and warehouseId passed
       expect(orderHandoffApiMock.createAuctionOrder).toHaveBeenCalledWith(
         expect.objectContaining({
           auctionId: 'auc-win',
@@ -270,7 +286,9 @@ describe('AuctionSettlementService', () => {
           sellerId: 'seller-1',
           skuId: 'sku-1',
           finalPrice: '60000000.00',
+          warehouseId: 'wh-win-1',
         }),
+        managerMock,
       );
 
       // Verify 24h payment timeout job queued in BullMQ

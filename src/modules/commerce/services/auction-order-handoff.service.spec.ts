@@ -174,24 +174,48 @@ describe('AuctionOrderHandoffService', () => {
       });
     });
 
-    it('catches unique constraint violation (code 23505) and returns existing order on race condition', async () => {
-      dataSourceMock.transaction.mockRejectedValueOnce({
-        code: '23505',
-        message:
-          'duplicate key value violates unique constraint idx_orders_auction_unique',
-      });
+    it('creates an order using externalManager directly without creating a new transaction', async () => {
+      const customManagerMock = {
+        getRepository: vi.fn().mockReturnValue({
+          createQueryBuilder: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnThis(),
+            getOne: vi.fn().mockResolvedValue(null),
+          }),
+          findOne: vi.fn().mockResolvedValue({
+            recipientName: 'Custom Winner',
+            provinceName: 'Hà Nội',
+          }),
+        }),
+        query: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockImplementation((entityClass, data) => ({
+          id: 'custom-ord-id',
+          ...data,
+        })),
+        save: vi.fn().mockImplementation(async (entity) => ({
+          id: entity.id || 'custom-ord-id',
+          ...entity,
+        })),
+      };
 
-      orderRepoMock.findOne.mockResolvedValueOnce({
-        id: 'concurrent-ord-id',
-        orderNumber: 'ORD-AUC-CONCURRENT',
-      });
+      const result = await service.createAuctionOrder(
+        mockInput,
+        customManagerMock as any,
+      );
 
-      const result = await service.createAuctionOrder(mockInput);
-
-      expect(result).toEqual({
-        orderId: 'concurrent-ord-id',
-        orderNumber: 'ORD-AUC-CONCURRENT',
-      });
+      expect(result.orderId).toBe('custom-ord-id');
+      expect(dataSourceMock.transaction).not.toHaveBeenCalled();
+      expect(customManagerMock.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          source: 'AUCTION',
+          auctionId: mockInput.auctionId,
+        }),
+      );
+      expect(expiryOutboxMock.schedule).toHaveBeenCalledWith(
+        'custom-ord-id',
+        mockInput.paymentDeadlineAt,
+        customManagerMock,
+      );
     });
   });
 
@@ -215,23 +239,32 @@ describe('AuctionOrderHandoffService', () => {
       expect(managerMock.save).toHaveBeenCalledWith(pendingOrder);
     });
 
-    it('does not alter order when order is already PAID', async () => {
-      const paidOrder = {
-        id: 'ord-paid',
-        status: 'PAID',
+    it('cancels order directly using externalManager without creating a new transaction', async () => {
+      const pendingOrder = {
+        id: 'ord-external',
+        status: 'PENDING_PAYMENT',
       };
-      managerMock.getRepository = vi.fn().mockReturnValue({
-        createQueryBuilder: vi.fn().mockReturnValue({
-          setLock: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          getOne: vi.fn().mockResolvedValue(paidOrder),
+      const customManagerMock = {
+        getRepository: vi.fn().mockReturnValue({
+          createQueryBuilder: vi.fn().mockReturnValue({
+            setLock: vi.fn().mockReturnThis(),
+            where: vi.fn().mockReturnThis(),
+            getOne: vi.fn().mockResolvedValue(pendingOrder),
+          }),
         }),
-      });
+        create: vi.fn().mockImplementation((entityClass, data) => data),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
 
-      await service.cancelAuctionOrder('ord-paid', 'PAYMENT_TIMEOUT');
+      await service.cancelAuctionOrder(
+        'ord-external',
+        'PAYMENT_TIMEOUT',
+        customManagerMock as any,
+      );
 
-      expect(paidOrder.status).toBe('PAID');
-      expect(managerMock.save).not.toHaveBeenCalled();
+      expect(pendingOrder.status).toBe('CANCELLED');
+      expect(customManagerMock.save).toHaveBeenCalledWith(pendingOrder);
+      expect(dataSourceMock.transaction).not.toHaveBeenCalled();
     });
   });
 });
