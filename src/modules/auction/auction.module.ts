@@ -14,6 +14,7 @@ import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
 import { BidEntity } from './entities/bid.entity.js';
 import { AuctionSettlementEntity } from './entities/auction-settlement.entity.js';
+import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { NotificationModule } from '../notification/notification.module.js';
 import { CommerceModule } from '../commerce/commerce.module.js';
@@ -29,8 +30,8 @@ import { AUCTION_SETTLEMENT_QUEUE } from './auction-settlement.constants.js';
   imports: [
     IdentityModule,
     NotificationModule,
-    CommerceModule,
     FulfillmentModule,
+    CommerceModule,
     EmailModule,
     BullModule.registerQueue({
       name: AUCTION_SETTLEMENT_QUEUE,
@@ -38,6 +39,7 @@ import { AUCTION_SETTLEMENT_QUEUE } from './auction-settlement.constants.js';
     TypeOrmModule.forFeature([
       AuctionEntity,
       BidEntity,
+      BidderEligibilityEntity,
       AuctionSettlementEntity,
       ProductEntity,
       ProductSkuEntity,

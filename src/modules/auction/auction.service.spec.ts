@@ -401,6 +401,43 @@ describe('AuctionService', () => {
   });
 
   describe('create', () => {
+    const createService = (
+      auctions: Record<string, any>,
+      products: Record<string, any>,
+      skus: Record<string, any>,
+      reservation = {
+        reserve: vi
+          .fn()
+          .mockResolvedValue([
+            { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+          ]),
+      },
+    ) => {
+      const manager = {
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(skus)
+          .mockReturnValueOnce(products)
+          .mockReturnValueOnce(auctions),
+      };
+      auctions.manager = {
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
+      return {
+        service: new AuctionService(
+          auctions as never,
+          products as never,
+          skus as never,
+          {} as never,
+          undefined,
+          undefined,
+          reservation as never,
+        ),
+        reservation,
+        manager,
+      };
+    };
+
     it('creates an auction for an owned active eligible SKU', async () => {
       const auctions = {
         findOne: vi.fn().mockResolvedValue(null),
@@ -424,11 +461,10 @@ describe('AuctionService', () => {
           currency: 'VND',
         }),
       };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
+      const { service, reservation, manager } = createService(
+        auctions,
+        products,
+        skus,
       );
       const result = await service.create(
         {
@@ -446,7 +482,14 @@ describe('AuctionService', () => {
         sellerId: 'seller-1',
         currentPrice: '100.00',
         bidCount: 0,
+        reservationReceipt: [
+          { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+        ],
       });
+      expect(reservation.reserve).toHaveBeenCalledWith(
+        [{ skuId: 'sku-1', quantity: 1 }],
+        manager,
+      );
     });
 
     it('rejects an unowned SKU without creating an auction', async () => {
@@ -457,12 +500,7 @@ describe('AuctionService', () => {
           .fn()
           .mockResolvedValue({ id: 'sku-1', productId: 'product-1' }),
       };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-      );
+      const { service } = createService(auctions, products, skus);
 
       await expect(
         service.create(
@@ -504,12 +542,7 @@ describe('AuctionService', () => {
           productId: 'product-1',
         }),
       };
-      const service = new AuctionService(
-        auctions as never,
-        products as never,
-        skus as never,
-        {} as never,
-      );
+      const { service } = createService(auctions, products, skus);
 
       await expect(
         service.create(
@@ -529,6 +562,52 @@ describe('AuctionService', () => {
       });
       expect(auctions.save).not.toHaveBeenCalled();
     });
+
+    it('does not save when inventory reservation fails', async () => {
+      const auctions = {
+        findOne: vi.fn().mockResolvedValue(null),
+        create: vi.fn((value) => value),
+        save: vi.fn(),
+      };
+      const products = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'product-1',
+          sellerId: 'seller-1',
+          name: 'Product',
+          status: 'ACTIVE',
+          isAuctionEligible: true,
+          deletedAt: null,
+        }),
+      };
+      const skus = {
+        findOne: vi.fn().mockResolvedValue({
+          id: 'sku-1',
+          productId: 'product-1',
+          currency: 'VND',
+        }),
+      };
+      const reservationError = new ConflictException({
+        errorCode: 'INSUFFICIENT_STOCK',
+      });
+      const { service } = createService(auctions, products, skus, {
+        reserve: vi.fn().mockRejectedValue(reservationError),
+      });
+
+      await expect(
+        service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() + 1000).toISOString(),
+            endsAt: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'seller-1',
+        ),
+      ).rejects.toBe(reservationError);
+      expect(auctions.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('placeBid', () => {
@@ -540,6 +619,7 @@ describe('AuctionService', () => {
       bidIncrement: '10.00',
       bidCount: 1,
       highestBidId: 'old-bid',
+      highestBidderId: null as string | null,
       startsAt: new Date(Date.now() - 1000),
       endsAt: new Date(Date.now() + 60000),
       status: 'ACTIVE',
@@ -556,6 +636,7 @@ describe('AuctionService', () => {
         save: vi.fn().mockResolvedValue(auction),
       };
       const bidRepo = {
+        findOne: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue({ affected: 1 }),
         create: vi.fn((value) => value),
         save: vi.fn(async (value) => ({
@@ -564,11 +645,14 @@ describe('AuctionService', () => {
           ...value,
         })),
       };
+      const eligibilityRepo = { findOne: vi.fn().mockResolvedValue(null) };
       const manager = {
         getRepository: vi
           .fn()
           .mockReturnValueOnce(auctionRepo)
-          .mockReturnValueOnce(bidRepo),
+          .mockReturnValueOnce(bidRepo)
+          .mockReturnValueOnce(eligibilityRepo),
+        query: vi.fn().mockResolvedValue([]),
       };
       const auctions = {
         manager: {
@@ -584,6 +668,7 @@ describe('AuctionService', () => {
         ),
         auctionRepo,
         bidRepo,
+        eligibilityRepo,
       };
     }
 
@@ -675,14 +760,90 @@ describe('AuctionService', () => {
       );
     });
 
+    it('returns an idempotent retry before applying the leader prohibition', async () => {
+      const auction = {
+        ...activeAuction(),
+        highestBidderId: 'buyer-1',
+        currentPrice: '110.00',
+      };
+      const { service, bidRepo, auctionRepo } = biddingService(auction);
+      bidRepo.findOne.mockResolvedValue({
+        id: 'original-bid',
+        auctionId: auction.id,
+        bidderId: 'buyer-1',
+        amount: '110.00',
+        idempotencyKey: 'retry-key',
+      });
+
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 110, ' retry-key '),
+      ).resolves.toMatchObject({
+        bid: { id: 'original-bid' },
+        minNextBid: 120,
+      });
+      expect(bidRepo.save).not.toHaveBeenCalled();
+      expect(auctionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects current leaders and restricted bidders before writes', async () => {
+      const leader = biddingService({
+        ...activeAuction(),
+        highestBidderId: 'buyer-1',
+      });
+      await expect(
+        leader.service.placeBid('AUC-1', 'buyer-1', 110),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'ALREADY_HIGHEST_BIDDER' },
+      });
+
+      const restricted = biddingService();
+      restricted.eligibilityRepo.findOne.mockResolvedValue({
+        reputationScore: 90,
+        trustLevel: 'STANDARD',
+        isRestricted: true,
+      });
+      await expect(
+        restricted.service.placeBid('AUC-1', 'buyer-1', 110),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'REPUTATION_TOO_LOW' },
+      });
+      expect(restricted.bidRepo.save).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { reputationScore: 49, trustLevel: 'STANDARD', isRestricted: false },
+      { reputationScore: 90, trustLevel: 'RESTRICTED', isRestricted: false },
+    ])(
+      'rejects ineligible per-user eligibility rows before writes',
+      async (eligibility) => {
+        const fixture = biddingService();
+        fixture.eligibilityRepo.findOne.mockResolvedValue(eligibility);
+
+        await expect(
+          fixture.service.placeBid('AUC-1', 'buyer-1', 110),
+        ).rejects.toMatchObject({
+          status: 403,
+          response: { errorCode: 'REPUTATION_TOO_LOW' },
+        });
+        expect(fixture.eligibilityRepo.findOne).toHaveBeenCalledWith({
+          where: { userId: 'buyer-1' },
+        });
+        expect(fixture.bidRepo.save).not.toHaveBeenCalled();
+        expect(fixture.auctionRepo.save).not.toHaveBeenCalled();
+      },
+    );
+
     it('emits bid:placed post-commit using canonical UUID sessionId', async () => {
       const auction = activeAuction();
       const emitBidPlaced = vi.fn();
       const { auctionRepo, bidRepo } = biddingService(auction);
       const mockManager = {
-        getRepository: vi.fn((entity: unknown) =>
-          entity === AuctionEntity ? auctionRepo : bidRepo,
-        ),
+        getRepository: vi
+          .fn()
+          .mockReturnValueOnce(auctionRepo)
+          .mockReturnValueOnce(bidRepo)
+          .mockReturnValueOnce({ findOne: vi.fn().mockResolvedValue(null) }),
+        query: vi.fn().mockResolvedValue([]),
       };
       const service = new AuctionService(
         {
@@ -1008,6 +1169,165 @@ describe('AuctionService', () => {
           status: 'CANCELLED',
         }),
       );
+    });
+
+    it('releases a persisted reservation and clears its receipt in the cancel transaction', async () => {
+      const receipt = [
+        { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+      ];
+      const auction = {
+        id: 'uuid-1',
+        code: 'AUC-1',
+        sellerId: 'seller-owner',
+        productId: 'prod-1',
+        titleSnapshot: 'Watch',
+        startPrice: '100.00',
+        currentPrice: '100.00',
+        bidIncrement: '10.00',
+        bidCount: 0,
+        highestBidId: null,
+        startsAt: new Date(Date.now() + 60_000),
+        endsAt: new Date(Date.now() + 120_000),
+        status: 'SCHEDULED',
+        reservationReceipt: receipt,
+      } as AuctionEntity;
+      const qb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auction),
+      };
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue(qb),
+        save: vi.fn().mockImplementation(async (value) => value),
+      };
+      const manager = {
+        getRepository: vi.fn().mockReturnValue(auctionRepo),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      const release = vi.fn().mockResolvedValue(undefined);
+      const transaction = vi.fn(async (work) => work(manager));
+      const service = new AuctionService(
+        {
+          manager: {
+            getRepository: vi.fn().mockReturnValue(bidReadRepository()),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        undefined,
+        undefined,
+        { reserve: vi.fn(), release } as never,
+        { transaction } as never,
+      );
+
+      await service.cancelAuction('AUC-1', 'seller-owner', 'SELLER');
+
+      expect(release).toHaveBeenCalledWith(receipt, manager);
+      expect(auctionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'CANCELLED',
+          reservationReceipt: null,
+        }),
+      );
+      expect(transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not release inventory when a cancelled auction has no receipt', async () => {
+      const auction = {
+        id: 'uuid-1',
+        code: 'AUC-1',
+        sellerId: 'seller-owner',
+        productId: 'prod-1',
+        titleSnapshot: 'Legacy auction',
+        startPrice: '100.00',
+        currentPrice: '100.00',
+        bidIncrement: '10.00',
+        bidCount: 0,
+        highestBidId: null,
+        startsAt: new Date(Date.now() + 60_000),
+        endsAt: new Date(Date.now() + 120_000),
+        status: 'SCHEDULED',
+        reservationReceipt: null,
+      } as AuctionEntity;
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue({
+          setLock: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          getOne: vi.fn().mockResolvedValue(auction),
+        }),
+        save: vi.fn().mockImplementation(async (value) => value),
+      };
+      const manager = {
+        getRepository: vi.fn().mockReturnValue(auctionRepo),
+        query: vi.fn().mockResolvedValue([]),
+      };
+      const release = vi.fn();
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (work: (value: any) => Promise<any>) => work(manager),
+            getRepository: vi.fn().mockReturnValue(bidReadRepository()),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        undefined,
+        undefined,
+        { reserve: vi.fn(), release } as never,
+      );
+
+      await service.cancelAuction('AUC-1', 'seller-owner', 'SELLER');
+
+      expect(release).not.toHaveBeenCalled();
+      expect(auctionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'CANCELLED' }),
+      );
+    });
+
+    it('does not save cancellation when reservation release fails', async () => {
+      const auction = {
+        id: 'uuid-1',
+        sellerId: 'seller-owner',
+        bidCount: 0,
+        highestBidId: null,
+        status: 'SCHEDULED',
+        reservationReceipt: [
+          { skuId: 'sku-1', warehouseId: 'warehouse-1', quantity: 1 },
+        ],
+      } as AuctionEntity;
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue({
+          setLock: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          getOne: vi.fn().mockResolvedValue(auction),
+        }),
+        save: vi.fn(),
+      };
+      const manager = { getRepository: vi.fn().mockReturnValue(auctionRepo) };
+      const releaseError = new Error('release failed');
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: (work: (value: any) => Promise<any>) => work(manager),
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        undefined,
+        undefined,
+        {
+          reserve: vi.fn(),
+          release: vi.fn().mockRejectedValue(releaseError),
+        } as never,
+      );
+
+      await expect(
+        service.cancelAuction('AUC-1', 'seller-owner', 'SELLER'),
+      ).rejects.toBe(releaseError);
+      expect(auctionRepo.save).not.toHaveBeenCalled();
     });
 
     it('returns buyer participations with highest bid, settlement orderId, and paymentDeadlineAt', async () => {
