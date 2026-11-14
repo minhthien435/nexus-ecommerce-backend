@@ -25,6 +25,9 @@ import { AuctionGateway } from './ws/auction.gateway.js';
 import { AuctionSettlementService } from './services/auction-settlement.service.js';
 import { AuctionSettlementProcessor } from './processors/auction-settlement.processor.js';
 import { AUCTION_SETTLEMENT_QUEUE } from './auction-settlement.constants.js';
+import { AUCTION_LIFECYCLE_QUEUE } from './auction-lifecycle.constants.js';
+import { AuctionSchedulerService } from './services/auction-scheduler.service.js';
+import { AuctionLifecycleProcessor } from './processors/auction-lifecycle.processor.js';
 
 @Module({
   imports: [
@@ -33,9 +36,10 @@ import { AUCTION_SETTLEMENT_QUEUE } from './auction-settlement.constants.js';
     FulfillmentModule,
     CommerceModule,
     EmailModule,
-    BullModule.registerQueue({
-      name: AUCTION_SETTLEMENT_QUEUE,
-    }),
+    BullModule.registerQueue(
+      { name: AUCTION_SETTLEMENT_QUEUE },
+      { name: AUCTION_LIFECYCLE_QUEUE },
+    ),
     TypeOrmModule.forFeature([
       AuctionEntity,
       BidEntity,
@@ -55,6 +59,8 @@ import { AUCTION_SETTLEMENT_QUEUE } from './auction-settlement.constants.js';
     AuctionGateway,
     AuctionSettlementService,
     AuctionSettlementProcessor,
+    AuctionSchedulerService,
+    AuctionLifecycleProcessor,
   ],
   exports: [
     AuctionService,

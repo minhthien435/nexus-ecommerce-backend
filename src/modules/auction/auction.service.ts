@@ -22,6 +22,17 @@ import { NotificationDispatchApi } from '../notification/notification-dispatch.a
 import { BidderEligibilityEntity } from './entities/bidder-eligibility.entity.js';
 import { InventoryReservationApi } from '../fulfillment/inventory-reservation.api.js';
 import { AuctionSettlementService } from './services/auction-settlement.service.js';
+import { AuctionSchedulerService } from './services/auction-scheduler.service.js';
+import { UpdateAuctionDto } from './dtos/update-auction.dto.js';
+import {
+  ANTI_SNIPING_EXTENSION_SECONDS,
+  ANTI_SNIPING_WINDOW_SECONDS,
+  AUCTION_MAX_DURATION_HOURS,
+  AUCTION_MIN_DURATION_MINUTES,
+  MAX_ACTIVE_AUCTIONS_PER_SELLER,
+  MAX_AUCTION_EXTENSIONS,
+  MIN_SELLER_REPUTATION,
+} from './auction-lifecycle.constants.js';
 
 export interface DemoAuctionOptions {
   startsAt: Date;
@@ -154,6 +165,8 @@ export class AuctionService {
     private readonly dataSource?: DataSource,
     @Optional()
     private readonly auctionSettlement?: AuctionSettlementService,
+    @Optional()
+    private readonly scheduler?: AuctionSchedulerService,
   ) {}
 
   private transaction<T>(
@@ -206,7 +219,7 @@ export class AuctionService {
       options.startsAt.getTime() + durationDays * 86_400_000,
     );
     const code = `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    return this.auctions.save(
+    const auction = await this.auctions.save(
       this.auctions.create({
         code,
         sellerId: product.sellerId,
@@ -222,6 +235,8 @@ export class AuctionService {
         status: options.startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
       }),
     );
+    this.scheduler?.schedule(auction);
+    return auction;
   }
 
   async create(
@@ -230,12 +245,7 @@ export class AuctionService {
   ): Promise<AuctionEntity> {
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
-    if (endsAt <= startsAt || endsAt <= new Date()) {
-      throw new BadRequestException({
-        errorCode: 'INVALID_AUCTION_SCHEDULE',
-        message: 'Thời gian kết thúc phải sau thời gian bắt đầu và ở tương lai',
-      });
-    }
+    this.validateSchedule(startsAt, endsAt);
     if (dto.reservePrice < dto.startPrice) {
       throw new BadRequestException({
         errorCode: 'INVALID_RESERVE_PRICE',
@@ -244,7 +254,7 @@ export class AuctionService {
     }
 
     try {
-      return await this.transaction(async (manager) => {
+      const auction = await this.transaction(async (manager) => {
         const skuRepo = manager.getRepository(ProductSkuEntity);
         const productRepo = manager.getRepository(ProductEntity);
         const auctionRepo = manager.getRepository(AuctionEntity);
@@ -266,6 +276,7 @@ export class AuctionService {
             message: 'Bạn không sở hữu sản phẩm đủ điều kiện đấu giá này',
           });
         }
+        await this.reserveSellerSlot(manager, auctionRepo, sellerId);
         const duplicate = await auctionRepo.findOne({
           where: { skuId: sku.id, status: In(['SCHEDULED', 'ACTIVE']) },
         });
@@ -300,12 +311,15 @@ export class AuctionService {
             originalEndsAt: endsAt,
             status: startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
             bidCount: 0,
+            maxExtensions: MAX_AUCTION_EXTENSIONS,
             highestBidId: null,
             highestBidderId: null,
             reservationReceipt: receipt,
           }),
         );
       });
+      this.scheduler?.schedule(auction);
+      return auction;
     } catch (error: unknown) {
       const databaseError = error as {
         code?: string;
@@ -429,6 +443,18 @@ export class AuctionService {
         });
       }
       if (auction.status === 'SCHEDULED') {
+        if (!(await this.isSellerEligible(manager, auction.sellerId))) {
+          throw this.sellerIneligible();
+        }
+        await this.recordStatusHistory(
+          manager,
+          auction.id,
+          'SCHEDULED',
+          'ACTIVE',
+          null,
+          'SYSTEM',
+          'Scheduled auction activated',
+        );
         auction.status = 'ACTIVE';
       } else if (auction.status !== 'ACTIVE') {
         throw new ConflictException({
@@ -469,6 +495,12 @@ export class AuctionService {
       auction.highestBidId = bid.id;
       auction.highestBidderId = bidderId;
       auction.bidCount += 1;
+      const extended = await this.extendForLateBid(
+        manager,
+        auction,
+        bid.id,
+        now,
+      );
       await auctionRepo.save(auction);
       return {
         bid,
@@ -477,6 +509,7 @@ export class AuctionService {
         auctionCode: auction.code ?? null,
         bidCount: auction.bidCount,
         previousHighestBidderId,
+        extendedAuction: extended ? auction : null,
         wasReplay: false,
       };
     });
@@ -499,6 +532,20 @@ export class AuctionService {
         ? new Date(txResult.bid.placedAt).toISOString()
         : new Date().toISOString(),
     });
+
+    const extendedAuction = txResult.extendedAuction;
+    if (extendedAuction) {
+      this.scheduler?.schedule(extendedAuction);
+      this.auctionEvents?.emitAuctionSniped({
+        sessionId: txResult.auctionId,
+        auctionCode: txResult.auctionCode,
+        newEndTime: extendedAuction.endsAt.toISOString(),
+        extensionCount: extendedAuction.extensionCount,
+        remainingExtensions:
+          this.maxExtensions(extendedAuction) - extendedAuction.extensionCount,
+        message: `Phiên đấu giá được gia hạn thêm ${ANTI_SNIPING_EXTENSION_SECONDS} giây`,
+      });
+    }
 
     if (
       txResult.previousHighestBidderId &&
@@ -1080,32 +1127,127 @@ export class AuctionService {
     };
   }
 
-  async endEarly(idOrCode: string, sellerId: string): Promise<AuctionView> {
-    const trimmed = idOrCode?.trim();
-    if (!trimmed) {
-      throw new NotFoundException({
-        errorCode: 'AUCTION_NOT_FOUND',
-        message: 'Không tìm thấy phiên đấu giá',
-      });
-    }
-
-    const endedAuction = await this.transaction(async (manager) => {
+  async update(
+    idOrCode: string,
+    sellerId: string,
+    dto: UpdateAuctionDto,
+  ): Promise<AuctionView> {
+    const updated = await this.transaction(async (manager) => {
       const auctionRepo = manager.getRepository(AuctionEntity);
-      const auction = await auctionRepo
-        .createQueryBuilder('auction')
-        .setLock('pessimistic_write')
-        .where(
-          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-          { identifier: trimmed },
-        )
-        .getOne();
-
-      if (!auction) {
-        throw new NotFoundException({
-          errorCode: 'AUCTION_NOT_FOUND',
-          message: 'Không tìm thấy phiên đấu giá',
+      const auction = await this.lockAuction(auctionRepo, idOrCode);
+      if (auction.sellerId !== sellerId) {
+        throw new ForbiddenException({
+          errorCode: 'AUCTION_NOT_OWNED',
+          message: 'Bạn không sở hữu phiên đấu giá này',
         });
       }
+      const now = new Date();
+      if (
+        (auction.status !== 'DRAFT' && auction.status !== 'SCHEDULED') ||
+        (auction.status === 'SCHEDULED' && auction.startsAt <= now)
+      ) {
+        throw new ConflictException({
+          errorCode: 'AUCTION_ALREADY_STARTED',
+          message: 'Chỉ có thể chỉnh sửa phiên nháp hoặc chưa bắt đầu',
+        });
+      }
+      const startsAt =
+        dto.startsAt === undefined ? auction.startsAt : new Date(dto.startsAt);
+      const endsAt =
+        dto.endsAt === undefined ? auction.endsAt : new Date(dto.endsAt);
+      this.validateSchedule(startsAt, endsAt);
+      if (auction.status === 'SCHEDULED' && startsAt <= now) {
+        throw new BadRequestException({
+          errorCode: 'INVALID_AUCTION_SCHEDULE',
+          message: 'Thời gian bắt đầu mới phải ở tương lai',
+        });
+      }
+      const startPrice = dto.startPrice?.toFixed(2) ?? auction.startPrice;
+      const reservePrice = dto.reservePrice?.toFixed(2) ?? auction.reservePrice;
+      if (Number(reservePrice) < Number(startPrice)) {
+        throw new BadRequestException({
+          errorCode: 'INVALID_RESERVE_PRICE',
+          message: 'Giá bảo lưu không được thấp hơn giá khởi điểm',
+        });
+      }
+      Object.assign(auction, {
+        startPrice,
+        reservePrice,
+        currentPrice: startPrice,
+        bidIncrement: dto.bidIncrement?.toFixed(2) ?? auction.bidIncrement,
+        startsAt,
+        endsAt,
+        originalEndsAt: endsAt,
+      });
+      return auctionRepo.save(auction);
+    });
+    this.scheduler?.schedule(updated);
+    const [view] = await this.hydrateAuctionViews([updated]);
+    return view;
+  }
+
+  async advanceLifecycle(auctionId: string): Promise<void> {
+    const outcome = await this.transaction(async (manager) => {
+      const repo = manager.getRepository(AuctionEntity);
+      const auction = await repo.findOne({
+        where: { id: auctionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!auction) return null;
+      if (auction.status === 'CANCELLED') return null;
+
+      const now = new Date();
+      if (auction.status === 'SCHEDULED' && auction.startsAt <= now) {
+        if (!(await this.isSellerEligible(manager, auction.sellerId))) {
+          return this.cancelLockedAuction(
+            manager,
+            repo,
+            auction,
+            null,
+            'SYSTEM',
+            'Seller no longer eligible',
+          );
+        }
+        await this.recordStatusHistory(
+          manager,
+          auction.id,
+          'SCHEDULED',
+          'ACTIVE',
+          null,
+          'SYSTEM',
+          'Scheduled auction activated',
+        );
+        auction.status = 'ACTIVE';
+        await repo.save(auction);
+      }
+      if (auction.status === 'ACTIVE' && auction.endsAt <= now) {
+        await this.recordStatusHistory(
+          manager,
+          auction.id,
+          'ACTIVE',
+          'ENDED',
+          null,
+          'SYSTEM',
+          'Auction reached its end time',
+        );
+        auction.status = 'ENDED';
+        await repo.save(auction);
+      }
+      return auction;
+    });
+
+    if (outcome?.status === 'CANCELLED') {
+      this.emitCancellation(outcome);
+    } else if (outcome?.status === 'ENDED') {
+      await this.auctionSettlement?.settleAuction(outcome.id);
+    }
+  }
+
+  async endEarly(idOrCode: string, sellerId: string): Promise<AuctionView> {
+    const endedAuction = await this.transaction(async (manager) => {
+      const auctionRepo = manager.getRepository(AuctionEntity);
+      const auction = await this.lockAuction(auctionRepo, idOrCode);
+
       if (auction.sellerId !== sellerId) {
         throw new ForbiddenException({
           errorCode: 'AUCTION_NOT_OWNED',
@@ -1151,17 +1293,19 @@ export class AuctionService {
         this.logger.error(
           `Failed to settle auction ${endedAuction.id} after endEarly: ${(err as Error).message}`,
         );
+        this.scheduler?.schedule(endedAuction);
       }
+    } else {
+      this.auctionEvents?.emitAuctionEnded({
+        sessionId: endedAuction.id,
+        auctionCode: endedAuction.code ?? null,
+        winnerId: endedAuction.highestBidderId ?? null,
+        finalPrice: endedAuction.highestBidderId
+          ? Number(endedAuction.currentPrice)
+          : null,
+        status: 'ENDED',
+      });
     }
-    this.auctionEvents?.emitAuctionEnded({
-      sessionId: endedAuction.id,
-      auctionCode: endedAuction.code ?? null,
-      winnerId: endedAuction.highestBidderId ?? null,
-      finalPrice: endedAuction.highestBidderId
-        ? Number(endedAuction.currentPrice)
-        : null,
-      status: 'ENDED',
-    });
 
     const [view] = await this.hydrateAuctionViews([endedAuction]);
     return view;
@@ -1173,31 +1317,9 @@ export class AuctionService {
     actorType: 'SELLER' | 'ADMIN',
     reason?: string,
   ): Promise<AuctionView> {
-    const trimmed = idOrCode?.trim();
-    if (!trimmed) {
-      throw new NotFoundException({
-        errorCode: 'AUCTION_NOT_FOUND',
-        message: 'Không tìm thấy phiên đấu giá',
-      });
-    }
-
     const cancelledAuction = await this.transaction(async (manager) => {
       const auctionRepo = manager.getRepository(AuctionEntity);
-      const auction = await auctionRepo
-        .createQueryBuilder('auction')
-        .setLock('pessimistic_write')
-        .where(
-          'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
-          { identifier: trimmed },
-        )
-        .getOne();
-
-      if (!auction) {
-        throw new NotFoundException({
-          errorCode: 'AUCTION_NOT_FOUND',
-          message: 'Không tìm thấy phiên đấu giá',
-        });
-      }
+      const auction = await this.lockAuction(auctionRepo, idOrCode);
 
       if (actorType === 'SELLER') {
         if (auction.sellerId !== actorId) {
@@ -1206,9 +1328,7 @@ export class AuctionService {
             message: 'Bạn không sở hữu phiên đấu giá này',
           });
         }
-        if (
-          ['CANCELLED', 'ENDED', 'SETTLED', 'FAILED'].includes(auction.status)
-        ) {
+        if (auction.status !== 'SCHEDULED' && auction.status !== 'ACTIVE') {
           throw new ConflictException({
             errorCode: 'AUCTION_ALREADY_CLOSED',
             message: 'Không thể hủy phiên đấu giá đã kết thúc hoặc đã hủy',
@@ -1227,43 +1347,17 @@ export class AuctionService {
         });
       }
 
-      const previousStatus = auction.status;
-      if (auction.reservationReceipt?.length) {
-        if (!this.inventoryReservation) {
-          throw new Error('InventoryReservationApi is not configured');
-        }
-        await this.inventoryReservation.release(
-          auction.reservationReceipt,
-          manager,
-        );
-        auction.reservationReceipt = null;
-      }
-      auction.status = 'CANCELLED';
-      auction.cancelledBy = actorId;
-      auction.cancelActorType = actorType;
-      auction.cancelReason = reason?.trim() || null;
-      const saved = await auctionRepo.save(auction);
-
-      await this.recordStatusHistory(
+      return this.cancelLockedAuction(
         manager,
-        saved.id,
-        previousStatus,
-        'CANCELLED',
+        auctionRepo,
+        auction,
         actorId,
         actorType,
-        auction.cancelReason ?? `${actorType} cancelled auction`,
+        reason,
       );
-
-      return saved;
     });
 
-    this.auctionEvents?.emitAuctionEnded({
-      sessionId: cancelledAuction.id,
-      auctionCode: cancelledAuction.code ?? null,
-      winnerId: null,
-      finalPrice: null,
-      status: 'CANCELLED',
-    });
+    this.emitCancellation(cancelledAuction);
 
     const [view] = await this.hydrateAuctionViews([cancelledAuction]);
     return view;
@@ -1329,12 +1423,217 @@ export class AuctionService {
     return map;
   }
 
+  private async lockAuction(
+    repo: Repository<AuctionEntity>,
+    idOrCode: string,
+  ): Promise<AuctionEntity> {
+    if (!idOrCode?.trim()) {
+      throw new NotFoundException({
+        errorCode: 'AUCTION_NOT_FOUND',
+        message: 'Không tìm thấy phiên đấu giá',
+      });
+    }
+    const auction = await repo
+      .createQueryBuilder('auction')
+      .setLock('pessimistic_write')
+      .where(
+        'auction.id::text = :identifier OR LOWER(auction.code) = LOWER(:identifier)',
+        { identifier: idOrCode.trim() },
+      )
+      .getOne();
+    if (!auction) {
+      throw new NotFoundException({
+        errorCode: 'AUCTION_NOT_FOUND',
+        message: 'Không tìm thấy phiên đấu giá',
+      });
+    }
+    return auction;
+  }
+
+  private validateSchedule(startsAt: Date, endsAt: Date): void {
+    const duration = endsAt.getTime() - startsAt.getTime();
+    if (
+      !Number.isFinite(duration) ||
+      endsAt.getTime() <= Date.now() ||
+      duration < AUCTION_MIN_DURATION_MINUTES * 60_000 ||
+      duration > AUCTION_MAX_DURATION_HOURS * 3_600_000
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_AUCTION_SCHEDULE',
+        message:
+          'Phiên đấu giá phải kéo dài từ 60 phút đến 168 giờ và kết thúc trong tương lai',
+      });
+    }
+  }
+
+  private async isSellerEligible(
+    manager: EntityManager,
+    sellerId: string,
+  ): Promise<boolean> {
+    const shop = await manager.getRepository(ShopEntity).findOne({
+      where: { sellerId },
+      lock: { mode: 'pessimistic_read' },
+    });
+    return (
+      shop?.status === 'ACTIVE' && shop.reputationScore >= MIN_SELLER_REPUTATION
+    );
+  }
+
+  private sellerIneligible(): ForbiddenException {
+    return new ForbiddenException({
+      errorCode: 'SELLER_AUCTION_INELIGIBLE',
+      message: 'Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu 50',
+    });
+  }
+
+  private async reserveSellerSlot(
+    manager: EntityManager,
+    auctions: Repository<AuctionEntity>,
+    sellerId: string,
+  ): Promise<void> {
+    if (!(await this.isSellerEligible(manager, sellerId))) {
+      throw this.sellerIneligible();
+    }
+    await manager.query(
+      `INSERT INTO auction.seller_auction_counters (seller_id)
+       VALUES ($1) ON CONFLICT (seller_id) DO NOTHING`,
+      [sellerId],
+    );
+    // The seller counter serializes concurrent creates. Recount existing rows to include older auctions.
+    await manager.query(
+      `SELECT seller_id FROM auction.seller_auction_counters
+       WHERE seller_id = $1 FOR UPDATE`,
+      [sellerId],
+    );
+    const openCount = await auctions.count({
+      where: { sellerId, status: In(['SCHEDULED', 'ACTIVE', 'ENDED']) },
+    });
+    if (openCount >= MAX_ACTIVE_AUCTIONS_PER_SELLER) {
+      throw new ConflictException({
+        errorCode: 'SELLER_AUCTION_LIMIT_REACHED',
+        message: 'Cửa hàng chỉ được mở tối đa 5 phiên đấu giá',
+      });
+    }
+    await manager.query(
+      `UPDATE auction.seller_auction_counters
+       SET active_auctions_count = $2, updated_at = clock_timestamp()
+       WHERE seller_id = $1`,
+      [sellerId, openCount + 1],
+    );
+  }
+
+  private maxExtensions(auction: AuctionEntity): number {
+    return Math.min(
+      auction.maxExtensions ?? MAX_AUCTION_EXTENSIONS,
+      MAX_AUCTION_EXTENSIONS,
+    );
+  }
+
+  private async extendForLateBid(
+    manager: EntityManager,
+    auction: AuctionEntity,
+    bidId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const remainingMs = auction.endsAt.getTime() - now.getTime();
+    const extensionCount = auction.extensionCount ?? 0;
+    if (
+      remainingMs <= 0 ||
+      remainingMs > ANTI_SNIPING_WINDOW_SECONDS * 1000 ||
+      extensionCount >= this.maxExtensions(auction)
+    )
+      return false;
+
+    const [config] = await manager.query<
+      Array<{ config_value: boolean | string }>
+    >(
+      `SELECT config_value FROM auction.service_configs
+       WHERE config_key = 'ANTI_SNIPING_ENABLED'`,
+    );
+    if (config && String(config.config_value).toLowerCase() !== 'true')
+      return false;
+
+    const oldEndsAt = auction.endsAt;
+    auction.endsAt = new Date(
+      oldEndsAt.getTime() + ANTI_SNIPING_EXTENSION_SECONDS * 1000,
+    );
+    auction.extensionCount = extensionCount + 1;
+    await manager.query(
+      `INSERT INTO auction.auction_extensions
+       (auction_id, triggered_by_bid_id, old_end_at, new_end_at, extension_seconds)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        auction.id,
+        bidId,
+        oldEndsAt,
+        auction.endsAt,
+        ANTI_SNIPING_EXTENSION_SECONDS,
+      ],
+    );
+    return true;
+  }
+
+  private async cancelLockedAuction(
+    manager: EntityManager,
+    repo: Repository<AuctionEntity>,
+    auction: AuctionEntity,
+    actorId: string | null,
+    actorType: 'SELLER' | 'ADMIN' | 'SYSTEM',
+    reason?: string,
+  ): Promise<AuctionEntity> {
+    const previousStatus = auction.status;
+    if (['SCHEDULED', 'ACTIVE', 'ENDED'].includes(previousStatus)) {
+      await manager.query(
+        `UPDATE auction.seller_auction_counters
+         SET active_auctions_count = GREATEST(0, active_auctions_count - 1),
+             updated_at = clock_timestamp()
+         WHERE seller_id = $1`,
+        [auction.sellerId],
+      );
+    }
+    if (auction.reservationReceipt?.length) {
+      if (!this.inventoryReservation) {
+        throw new Error('InventoryReservationApi is not configured');
+      }
+      await this.inventoryReservation.release(
+        auction.reservationReceipt,
+        manager,
+      );
+      auction.reservationReceipt = null;
+    }
+    auction.status = 'CANCELLED';
+    auction.cancelledBy = actorId;
+    auction.cancelActorType = actorType === 'SYSTEM' ? null : actorType;
+    auction.cancelReason = reason?.trim() || null;
+    const saved = await repo.save(auction);
+    await this.recordStatusHistory(
+      manager,
+      saved.id,
+      previousStatus,
+      'CANCELLED',
+      actorId,
+      actorType,
+      auction.cancelReason ?? `${actorType} cancelled auction`,
+    );
+    return saved;
+  }
+
+  private emitCancellation(auction: AuctionEntity): void {
+    this.auctionEvents?.emitAuctionEnded({
+      sessionId: auction.id,
+      auctionCode: auction.code ?? null,
+      winnerId: null,
+      finalPrice: null,
+      status: 'CANCELLED',
+    });
+  }
+
   private async recordStatusHistory(
     manager: EntityManager,
     auctionId: string,
     fromStatus: string,
     toStatus: string,
-    actorId: string,
+    actorId: string | null,
     actorType: string,
     reason: string,
   ): Promise<void> {

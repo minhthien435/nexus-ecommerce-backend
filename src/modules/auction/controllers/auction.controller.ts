@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Headers,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -24,6 +25,7 @@ import { PermissionsGuard } from '../../identity/rbac/guards/permissions.guard.j
 import { RolesGuard } from '../../identity/rbac/guards/roles.guard.js';
 import { CreateAuctionDto } from '../dtos/create-auction.dto.js';
 import { PlaceBidDto } from '../dtos/place-bid.dto.js';
+import { UpdateAuctionDto } from '../dtos/update-auction.dto.js';
 
 @Controller(['api/v1/auctions', 'auctions'])
 export class AuctionController {
@@ -111,6 +113,23 @@ export class AuctionController {
       statusCode: HttpStatus.CREATED,
       message: 'Đặt giá thành công',
       data: result,
+    };
+  }
+
+  @Patch(':idOrCode')
+  @Roles('SELLER')
+  @Permissions('AUCTION.UPDATE')
+  @UseGuards(AccessTokenGuard, RolesGuard, PermissionsGuard)
+  async update(
+    @Param('idOrCode') idOrCode: string,
+    @Body() dto: UpdateAuctionDto,
+    @CurrentUserId() sellerId: string,
+  ) {
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Cập nhật phiên đấu giá thành công',
+      data: await this.auctionService.update(idOrCode, sellerId, dto),
     };
   }
 
