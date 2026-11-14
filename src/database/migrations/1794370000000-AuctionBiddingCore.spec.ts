@@ -16,16 +16,15 @@ describe('AuctionBiddingCore migration', () => {
     expect(sql).toContain(
       'ADD COLUMN IF NOT EXISTS "reservation_receipt" jsonb',
     );
-    expect(sql).toContain(
-      'ADD COLUMN IF NOT EXISTS "idempotency_key" varchar(200)',
-    );
+    expect(sql).toContain('ALTER COLUMN "idempotency_key" TYPE varchar(200)');
+    expect(sql).toContain('DROP CONSTRAINT %I');
     expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS');
-    expect(sql).toContain('ALTER TABLE "auction"."bidder_eligibility"');
+    expect(sql).not.toContain('bidder_eligibility');
     expect(sql).not.toContain('CREATE TABLE');
     expect(sql).not.toContain('ADD COLUMN IF NOT EXISTS "max_extensions"');
   });
 
-  it('revert removes only migration-owned artifacts', async () => {
+  it('revert restores the bootstrap idempotency contract', async () => {
     const statements: string[] = [];
     const runner = {
       query: vi.fn(async (sql: string) => statements.push(sql)),
@@ -40,7 +39,10 @@ describe('AuctionBiddingCore migration', () => {
     expect(sql).toContain('DROP COLUMN IF EXISTS "reservation_receipt"');
     expect(sql).not.toContain('DROP TABLE');
     expect(sql).not.toContain('bidder_eligibility');
-    expect(sql).not.toContain('idempotency_key');
+    expect(sql).toContain('ALTER COLUMN "idempotency_key" TYPE varchar(100)');
+    expect(sql).toContain(
+      'ADD CONSTRAINT "bids_idempotency_key_key" UNIQUE ("idempotency_key")',
+    );
   });
 
   it('maps the bootstrap-owned maxExtensions contract with default 10', () => {

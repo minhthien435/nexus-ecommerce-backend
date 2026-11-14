@@ -14,7 +14,6 @@ export type AuctionStatus =
   | 'SCHEDULED'
   | 'ACTIVE'
   | 'ENDED'
-  | 'PENDING_SETTLEMENT'
   | 'SETTLED'
   | 'FAILED'
   | 'CANCELLED';

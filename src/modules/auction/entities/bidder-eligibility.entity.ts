@@ -1,18 +1,19 @@
-import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
+import { Column, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity({ name: 'bidder_eligibility', schema: 'auction' })
-@Index(['auctionId', 'bidderId'], { unique: true })
 export class BidderEligibilityEntity {
-  @PrimaryColumn({ name: 'auction_id', type: 'uuid' }) auctionId: string;
-  @PrimaryColumn({ name: 'bidder_id', type: 'uuid' }) bidderId: string;
-  @Column({ name: 'score', type: 'integer', default: 50 })
+  @PrimaryColumn({ name: 'user_id', type: 'uuid' }) userId: string;
+  @Column({ name: 'reputation_score', type: 'integer', default: 50 })
   reputationScore: number;
-  @Column({ name: 'is_restricted', type: 'boolean', default: false })
-  restricted: boolean;
   @Column({
-    name: 'snapshotted_at',
-    type: 'timestamptz',
-    default: () => 'now()',
+    name: 'trust_level',
+    type: 'varchar',
+    length: 50,
+    default: 'STANDARD',
   })
-  snapshottedAt: Date;
+  trustLevel: string;
+  @Column({ name: 'is_restricted', type: 'boolean', default: false })
+  isRestricted: boolean;
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  updatedAt: Date;
 }
