@@ -398,6 +398,37 @@ describe('AuctionService', () => {
       expect(result.items[0]?.bidCount).toBe(3);
       expect(result.items[0]?.bidderCount).toBe(2);
     });
+
+    it('sorts by bidCount DESC then endsAt ASC when sort=popular', async () => {
+      const qb = {
+        innerJoin: vi.fn().mockReturnThis(),
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        addOrderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[], 0]),
+      };
+      const service = new AuctionService(
+        {
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          manager: { getRepository: vi.fn() },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+      await service.list({
+        status: 'LIVE',
+        page: 1,
+        limit: 15,
+        sort: 'popular',
+      });
+
+      expect(qb.orderBy).toHaveBeenCalledWith('auction.bidCount', 'DESC');
+      expect(qb.addOrderBy).toHaveBeenCalledWith('auction.endsAt', 'ASC');
+    });
   });
 
   describe('create', () => {

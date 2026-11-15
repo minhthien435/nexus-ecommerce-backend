@@ -916,8 +916,13 @@ export class AuctionService {
       case 'price_desc':
         qb.orderBy('auction.currentPrice', 'DESC');
         break;
-      case 'ending_soon':
       case 'popular':
+        qb.orderBy('auction.bidCount', 'DESC').addOrderBy(
+          'auction.endsAt',
+          'ASC',
+        );
+        break;
+      case 'ending_soon':
       default:
         qb.orderBy('auction.endsAt', 'ASC');
         break;
