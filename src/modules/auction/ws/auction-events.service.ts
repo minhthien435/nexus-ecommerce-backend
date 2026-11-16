@@ -5,6 +5,7 @@ export const AUCTION_SOCKET_EVENTS = {
   BID_PLACED: 'bid:placed',
   TICK: 'auction:tick',
   SNIPED: 'auction:sniped',
+  UPDATED: 'auction:updated',
   ENDED: 'auction:ended',
 } as const;
 
@@ -42,6 +43,17 @@ export interface AuctionEndedEventPayload {
   status: string;
 }
 
+export interface AuctionUpdatedEventPayload {
+  sessionId: string;
+  auctionCode?: string | null;
+  status: string;
+  startPrice: number;
+  bidStep: number;
+  minNextBid: number;
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
 @Injectable()
 export class AuctionEventsService {
   private readonly logger = new Logger(AuctionEventsService.name);
@@ -73,6 +85,10 @@ export class AuctionEventsService {
 
   emitAuctionEnded(payload: AuctionEndedEventPayload): void {
     this.emitToRoom(payload.sessionId, AUCTION_SOCKET_EVENTS.ENDED, payload);
+  }
+
+  emitAuctionUpdated(payload: AuctionUpdatedEventPayload): void {
+    this.emitToRoom(payload.sessionId, AUCTION_SOCKET_EVENTS.UPDATED, payload);
   }
 
   private emitToRoom(auctionId: string, event: string, payload: unknown): void {

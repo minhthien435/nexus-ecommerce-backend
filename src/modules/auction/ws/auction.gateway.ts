@@ -142,6 +142,10 @@ export class AuctionGateway implements OnGatewayInit, OnGatewayConnection {
       status: this.auctionService.mapStatus(auction),
       currentPrice: Number(auction.currentPrice),
       highestBidderId: auction.highestBidderId ?? null,
+      startsAt: auction.startsAt
+        ? new Date(auction.startsAt).toISOString()
+        : null,
+      endsAt: auction.endsAt ? new Date(auction.endsAt).toISOString() : null,
       serverTime: new Date(nowMs).toISOString(),
       remainingSeconds,
     };
