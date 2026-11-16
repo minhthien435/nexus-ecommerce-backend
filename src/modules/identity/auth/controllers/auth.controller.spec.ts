@@ -326,4 +326,42 @@ describe('AuthController', () => {
       user: { id: 'u1' },
     });
   });
+
+  it('clears the refresh cookie only on 401/403 during refresh, keeping it on transient DB/5xx errors', async () => {
+    const tokens = {
+      rotateRefreshToken: vi.fn(),
+      setRefreshTokenCookie: vi.fn(),
+      clearRefreshTokenCookie: vi.fn(),
+    };
+    const controller = new AuthController(
+      {} as never,
+      tokens as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const req = {
+      cookies: { refreshToken: 'raw-refresh' },
+      ip: '127.0.0.1',
+      headers: {},
+    } as never;
+    const res = {} as never;
+
+    tokens.rotateRefreshToken.mockRejectedValueOnce(
+      new Error('Connection terminated due to connection timeout'),
+    );
+    await expect(controller.refresh(req, res)).rejects.toThrow(
+      'Connection terminated due to connection timeout',
+    );
+    expect(tokens.clearRefreshTokenCookie).not.toHaveBeenCalled();
+
+    tokens.rotateRefreshToken.mockRejectedValueOnce(
+      new UnauthorizedException('Refresh Token đã hết hạn'),
+    );
+    await expect(controller.refresh(req, res)).rejects.toThrow(
+      UnauthorizedException,
+    );
+    expect(tokens.clearRefreshTokenCookie).toHaveBeenCalledWith(res);
+  });
 });

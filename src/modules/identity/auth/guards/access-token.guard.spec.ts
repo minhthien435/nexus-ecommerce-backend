@@ -1,4 +1,7 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AccessTokenGuard } from './access-token.guard.js';
 
 const id = '11111111-1111-4111-8111-111111111111';
@@ -63,4 +66,18 @@ describe('AccessTokenGuard', () => {
       ).rejects.toBeInstanceOf(UnauthorizedException);
     },
   );
+
+  it('throws ServiceUnavailableException (not 401) when the database lookup fails', async () => {
+    users.findOne.mockRejectedValue(
+      new Error('Connection terminated due to connection timeout'),
+    );
+    await expect(
+      new AccessTokenGuard(
+        {
+          verifyAsync: vi.fn().mockResolvedValue({ sub: id, tokenVersion: 3 }),
+        } as never,
+        users as never,
+      ).canActivate(context('Bearer token').value),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
 });

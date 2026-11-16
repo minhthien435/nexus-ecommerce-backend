@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -31,29 +32,38 @@ export class AccessTokenGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
+    let claims: AccessTokenClaims;
     try {
-      const claims = await this.jwtService.verifyAsync<AccessTokenClaims>(
-        parts[1],
-      );
-      if (
-        typeof claims.sub !== 'string' ||
-        !isUUID(claims.sub) ||
-        typeof claims.tokenVersion !== 'number' ||
-        !Number.isInteger(claims.tokenVersion)
-      ) {
-        throw new UnauthorizedException();
-      }
-      const user = await this.users.findOne({
-        where: { id: claims.sub, status: 'ACTIVE', deletedAt: IsNull() },
-        select: { id: true, tokenVersion: true },
-      });
-      if (!user || user.tokenVersion !== claims.tokenVersion) {
-        throw new UnauthorizedException();
-      }
-      request.user = { id: claims.sub };
-      return true;
+      claims = await this.jwtService.verifyAsync<AccessTokenClaims>(parts[1]);
     } catch {
       throw new UnauthorizedException();
     }
+
+    if (
+      typeof claims.sub !== 'string' ||
+      !isUUID(claims.sub) ||
+      typeof claims.tokenVersion !== 'number' ||
+      !Number.isInteger(claims.tokenVersion)
+    ) {
+      throw new UnauthorizedException();
+    }
+
+    let user: Pick<UserEntity, 'id' | 'tokenVersion'> | null;
+    try {
+      user = await this.users.findOne({
+        where: { id: claims.sub, status: 'ACTIVE', deletedAt: IsNull() },
+        select: { id: true, tokenVersion: true },
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Authentication check temporarily unavailable',
+      );
+    }
+
+    if (!user || user.tokenVersion !== claims.tokenVersion) {
+      throw new UnauthorizedException();
+    }
+    request.user = { id: claims.sub };
+    return true;
   }
 }

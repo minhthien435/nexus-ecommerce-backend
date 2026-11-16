@@ -5,6 +5,7 @@ import {
   Body,
   Req,
   Res,
+  ForbiddenException,
   HttpCode,
   HttpStatus,
   UnauthorizedException,
@@ -134,7 +135,12 @@ export class AuthController {
         user: { id: user.id, email: user.email, fullName: user.fullName },
       };
     } catch (err) {
-      this.tokenService.clearRefreshTokenCookie(res);
+      if (
+        err instanceof UnauthorizedException ||
+        err instanceof ForbiddenException
+      ) {
+        this.tokenService.clearRefreshTokenCookie(res);
+      }
       throw err;
     }
   }
