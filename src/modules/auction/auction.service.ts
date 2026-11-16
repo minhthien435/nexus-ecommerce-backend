@@ -594,7 +594,8 @@ export class AuctionService {
     if (auction.endsAt && new Date(auction.endsAt) <= now) return 'ENDED';
     if (auction.startsAt && new Date(auction.startsAt) > now)
       return 'SCHEDULED';
-    if (auction.status === 'ACTIVE') return 'LIVE';
+    if (auction.status === 'ACTIVE' || auction.status === 'SCHEDULED')
+      return 'LIVE';
     return auction.status;
   }
 
@@ -860,16 +861,16 @@ export class AuctionService {
       const statusUpper = query.status.toUpperCase();
       if (statusUpper === 'LIVE') {
         qb.andWhere(
-          'auction.status = :activeStatus AND auction.startsAt <= :now AND auction.endsAt > :now',
+          'auction.status IN (:...liveStatuses) AND auction.startsAt <= :now AND auction.endsAt > :now',
           {
-            activeStatus: 'ACTIVE',
+            liveStatuses: ['ACTIVE', 'SCHEDULED'],
             now,
           },
         );
       } else if (statusUpper === 'SCHEDULED' || statusUpper === 'UPCOMING') {
         qb.andWhere(
-          '(auction.status = :schedStatus OR (auction.status = :activeStatus AND auction.startsAt > :now)) AND auction.endsAt > :now',
-          { schedStatus: 'SCHEDULED', activeStatus: 'ACTIVE', now },
+          'auction.status IN (:...upcomingStatuses) AND auction.startsAt > :now AND auction.endsAt > :now',
+          { upcomingStatuses: ['SCHEDULED', 'ACTIVE'], now },
         );
       } else if (statusUpper === 'ENDED') {
         qb.andWhere(
@@ -1187,6 +1188,18 @@ export class AuctionService {
       return auctionRepo.save(auction);
     });
     this.scheduler?.schedule(updated);
+    this.auctionEvents?.emitAuctionUpdated({
+      sessionId: updated.id,
+      auctionCode: updated.code ?? null,
+      status: this.mapStatus(updated),
+      startPrice: Number(updated.startPrice),
+      bidStep: Number(updated.bidIncrement),
+      minNextBid: Number(updated.currentPrice) + Number(updated.bidIncrement),
+      startsAt: updated.startsAt
+        ? new Date(updated.startsAt).toISOString()
+        : null,
+      endsAt: updated.endsAt ? new Date(updated.endsAt).toISOString() : null,
+    });
     const [view] = await this.hydrateAuctionViews([updated]);
     return view;
   }

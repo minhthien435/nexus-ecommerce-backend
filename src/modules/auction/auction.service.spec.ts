@@ -1688,5 +1688,111 @@ describe('AuctionService', () => {
       });
       expect(res.items[0].auction.auctionId).toBe('uuid-won-1');
     });
+
+    it('maps SCHEDULED auctions to LIVE once startsAt <= now < endsAt and keeps future ones SCHEDULED', () => {
+      const service = new AuctionService(
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+      const now = Date.now();
+
+      expect(
+        service.mapStatus({
+          status: 'SCHEDULED',
+          startsAt: new Date(now - 60_000),
+          endsAt: new Date(now + 3_600_000),
+        } as AuctionEntity),
+      ).toBe('LIVE');
+
+      expect(
+        service.mapStatus({
+          status: 'SCHEDULED',
+          startsAt: new Date(now + 60_000),
+          endsAt: new Date(now + 3_600_000),
+        } as AuctionEntity),
+      ).toBe('SCHEDULED');
+
+      expect(
+        service.mapStatus({
+          status: 'SCHEDULED',
+          startsAt: new Date(now - 120_000),
+          endsAt: new Date(now - 1_000),
+        } as AuctionEntity),
+      ).toBe('ENDED');
+    });
+
+    it('emits auction:updated when update() modifies a scheduled auction', async () => {
+      const now = Date.now();
+      const scheduled = {
+        id: 'uuid-sched-1',
+        code: 'AUC-SCHED',
+        sellerId: 'seller-1',
+        productId: 'prod-1',
+        titleSnapshot: 'Coffee Maker',
+        startPrice: '100000.00',
+        reservePrice: '150000.00',
+        currentPrice: '100000.00',
+        bidIncrement: '10000.00',
+        bidCount: 0,
+        startsAt: new Date(now + 600_000),
+        endsAt: new Date(now + 7_200_000),
+        originalEndsAt: new Date(now + 7_200_000),
+        status: 'SCHEDULED',
+      } as AuctionEntity;
+      const newStartsAt = new Date(now + 900_000);
+      const newEndsAt = new Date(now + 5_400_000);
+
+      const qb = {
+        setLock: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(scheduled),
+      };
+      const auctionRepo = {
+        createQueryBuilder: vi.fn().mockReturnValue(qb),
+        save: vi.fn().mockImplementation(async (value) => value),
+      };
+      const manager = {
+        getRepository: vi.fn().mockReturnValue(auctionRepo),
+      };
+      const emitAuctionUpdated = vi.fn();
+      const schedule = vi.fn();
+
+      const service = new AuctionService(
+        {
+          manager: {
+            getRepository: vi.fn().mockReturnValue(bidReadRepository()),
+            transaction: (work: (m: any) => Promise<any>) => work(manager),
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        { emitAuctionUpdated } as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { schedule } as never,
+      );
+
+      await service.update('AUC-SCHED', 'seller-1', {
+        startsAt: newStartsAt.toISOString(),
+        endsAt: newEndsAt.toISOString(),
+      });
+
+      expect(schedule).toHaveBeenCalledTimes(1);
+      expect(emitAuctionUpdated).toHaveBeenCalledWith({
+        sessionId: 'uuid-sched-1',
+        auctionCode: 'AUC-SCHED',
+        status: 'SCHEDULED',
+        startPrice: 100_000,
+        bidStep: 10_000,
+        minNextBid: 110_000,
+        startsAt: newStartsAt.toISOString(),
+        endsAt: newEndsAt.toISOString(),
+      });
+    });
   });
 });

@@ -49,6 +49,7 @@ describe('AuctionGateway', () => {
           status: 'ACTIVE',
           currentPrice: '250000.00',
           highestBidderId: validUserId,
+          startsAt: new Date(Date.now() - 60_000),
           endsAt: new Date(Date.now() + 120_000),
         }),
       mapStatus: overrides?.mapStatus ?? vi.fn().mockReturnValue('LIVE'),
@@ -131,6 +132,8 @@ describe('AuctionGateway', () => {
       status: 'LIVE',
       currentPrice: 250000,
       highestBidderId: validUserId,
+      startsAt: expect.any(String),
+      endsAt: expect.any(String),
     });
   });
 
@@ -189,6 +192,16 @@ describe('AuctionGateway', () => {
       finalPrice: 300,
       status: 'ENDED',
     });
+    events.emitAuctionUpdated({
+      sessionId: auctionUuid,
+      auctionCode: 'AUC-100',
+      status: 'SCHEDULED',
+      startPrice: 100000,
+      bidStep: 10000,
+      minNextBid: 110000,
+      startsAt: '2026-11-16T03:00:00.000Z',
+      endsAt: '2026-11-16T05:00:00.000Z',
+    });
 
     expect(to).toHaveBeenCalledWith(`auction:${auctionUuid}`);
     expect(emit).toHaveBeenNthCalledWith(
@@ -207,6 +220,15 @@ describe('AuctionGateway', () => {
       expect.objectContaining({
         sessionId: auctionUuid,
         winnerId: validUserId,
+      }),
+    );
+    expect(emit).toHaveBeenNthCalledWith(
+      4,
+      'auction:updated',
+      expect.objectContaining({
+        sessionId: auctionUuid,
+        startsAt: '2026-11-16T03:00:00.000Z',
+        endsAt: '2026-11-16T05:00:00.000Z',
       }),
     );
   });
