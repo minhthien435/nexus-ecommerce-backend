@@ -12,6 +12,7 @@ describe('AuctionSettlementService', () => {
   let identityLookupMock: any;
   let emailServiceMock: any;
   let auctionEventsServiceMock: any;
+  let notificationMock: any;
   let timeoutQueueMock: any;
   let managerMock: any;
 
@@ -82,6 +83,11 @@ describe('AuctionSettlementService', () => {
       emitAuctionEnded: vi.fn(),
     };
 
+    notificationMock = {
+      notify: vi.fn().mockResolvedValue(undefined),
+      notifyMany: vi.fn().mockResolvedValue(undefined),
+    };
+
     timeoutQueueMock = {
       add: vi.fn().mockResolvedValue({ id: 'job-1' }),
     };
@@ -95,6 +101,7 @@ describe('AuctionSettlementService', () => {
       identityLookupMock as any,
       emailServiceMock as any,
       auctionEventsServiceMock as any,
+      notificationMock as any,
       timeoutQueueMock as any,
     );
   });
@@ -190,6 +197,11 @@ describe('AuctionSettlementService', () => {
           getOne: vi.fn().mockResolvedValue(mockAuction),
         }),
       });
+      managerMock.query.mockImplementation(async (sql: string) =>
+        sql.includes('FROM auction.bids')
+          ? [{ bidder_id: 'bidder-1' }, { bidder_id: 'bidder-2' }]
+          : [],
+      );
 
       const result = await service.settleAuction('auc-below-reserve');
 
@@ -207,6 +219,17 @@ describe('AuctionSettlementService', () => {
       );
       expect(managerMock.save).toHaveBeenCalledWith(mockAuction);
       expect(orderHandoffApiMock.createAuctionOrder).not.toHaveBeenCalled();
+      expect(notificationMock.notifyMany).toHaveBeenCalledWith([
+        expect.objectContaining({
+          userId: 'bidder-1',
+          type: 'AUCTION_LOST',
+          sourceEventId: 'lost-auc-below-reserve-bidder-1',
+        }),
+        expect.objectContaining({
+          userId: 'bidder-2',
+          content: expect.stringContaining('chưa đạt giá sàn'),
+        }),
+      ]);
     });
 
     it('settles auction as SETTLED when bids exist and meet reserve price', async () => {
@@ -236,6 +259,11 @@ describe('AuctionSettlementService', () => {
           getOne: vi.fn().mockResolvedValue(mockAuction),
         }),
       });
+      managerMock.query.mockImplementation(async (sql: string) =>
+        sql.includes('FROM auction.bids')
+          ? [{ bidder_id: 'loser-1' }, { bidder_id: 'loser-2' }]
+          : [],
+      );
 
       const result = await service.settleAuction('auc-win');
 
@@ -288,6 +316,31 @@ describe('AuctionSettlementService', () => {
           attempts: 5,
         }),
       );
+      expect(timeoutQueueMock.add).toHaveBeenCalledWith(
+        'auction-payment-reminder',
+        expect.objectContaining({
+          auctionId: 'auc-win',
+          winnerId: 'winner-1',
+          orderId: 'order-uuid-123',
+        }),
+        expect.objectContaining({
+          jobId: 'auction-reminder-settlement-uuid-1',
+          delay: expect.any(Number),
+        }),
+      );
+
+      expect(notificationMock.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'winner-1',
+          type: 'AUCTION_WON',
+          actionUrl: '/orders/order-uuid-123',
+          sourceEventId: 'won-settlement-uuid-1',
+        }),
+      );
+      expect(notificationMock.notifyMany).toHaveBeenCalledWith([
+        expect.objectContaining({ userId: 'loser-1', type: 'AUCTION_LOST' }),
+        expect.objectContaining({ userId: 'loser-2', type: 'AUCTION_LOST' }),
+      ]);
 
       // Verify Winner email sent
       expect(emailServiceMock.sendAuctionWon).toHaveBeenCalledWith(
@@ -337,6 +390,7 @@ describe('AuctionSettlementService', () => {
         winnerId: 'winner-crash',
         finalPrice: '5000000.00',
         orderId: null,
+        status: 'PENDING_PAYMENT',
         paymentDeadlineAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
       };
 
@@ -381,9 +435,79 @@ describe('AuctionSettlementService', () => {
           delay: expect.any(Number),
         }),
       );
+      expect(timeoutQueueMock.add).toHaveBeenCalledWith(
+        'auction-payment-reminder',
+        expect.objectContaining({ settlementId: 'settlement-orphaned' }),
+        expect.objectContaining({
+          jobId: 'auction-reminder-settlement-orphaned',
+        }),
+      );
     });
 
-    it('does not rollback settlement if email sending throws an error', async () => {
+    it('does not enqueue a reminder when fewer than four hours remain', async () => {
+      settlementRepoMock.findOne.mockResolvedValueOnce({
+        id: 'settlement-short-deadline',
+        auctionId: 'auc-short-deadline',
+        winnerId: 'winner-short',
+        finalPrice: '5000000.00',
+        orderId: null,
+        status: 'PENDING_PAYMENT',
+        paymentDeadlineAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      });
+      auctionRepoMock.findOne.mockResolvedValueOnce({
+        id: 'auc-short-deadline',
+        code: 'AUC-SHORT',
+        winnerId: 'winner-short',
+        sellerId: 'seller-short',
+        skuId: 'sku-short',
+        productId: 'prod-short',
+        titleSnapshot: 'Short deadline product',
+        finalPrice: '5000000.00',
+        currency: 'VND',
+      });
+
+      await service.settleAuction('auc-short-deadline');
+
+      expect(timeoutQueueMock.add).not.toHaveBeenCalledWith(
+        'auction-payment-reminder',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(timeoutQueueMock.add).toHaveBeenCalledWith(
+        'auction-payment-timeout',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('re-enqueues a deterministic reminder for an existing pending settlement with an order', async () => {
+      settlementRepoMock.findOne.mockResolvedValueOnce({
+        id: 'settlement-existing-pending',
+        auctionId: 'auc-existing-pending',
+        winnerId: 'winner-existing',
+        finalPrice: '1000000.00',
+        orderId: 'order-existing',
+        status: 'PENDING_PAYMENT',
+        paymentDeadlineAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+      });
+
+      await service.settleAuction('auc-existing-pending');
+
+      expect(timeoutQueueMock.add).toHaveBeenCalledWith(
+        'auction-payment-reminder',
+        {
+          settlementId: 'settlement-existing-pending',
+          auctionId: 'auc-existing-pending',
+          orderId: 'order-existing',
+          winnerId: 'winner-existing',
+        },
+        expect.objectContaining({
+          jobId: 'auction-reminder-settlement-existing-pending',
+        }),
+      );
+    });
+
+    it('does not rollback settlement if post-commit email or winner notification fails', async () => {
       const mockAuction = {
         id: 'auc-email-fail',
         code: 'AUC-EMAIL',
@@ -404,16 +528,26 @@ describe('AuctionSettlementService', () => {
           getOne: vi.fn().mockResolvedValue(mockAuction),
         }),
       });
+      managerMock.query.mockImplementation(async (sql: string) =>
+        sql.includes('FROM auction.bids')
+          ? [{ bidder_id: 'loser-after-failure' }]
+          : [],
+      );
 
       emailServiceMock.sendAuctionWon.mockRejectedValueOnce(
         new Error('SMTP unreachable'),
       );
+      notificationMock.notify.mockRejectedValueOnce(new Error('push down'));
+      timeoutQueueMock.add.mockRejectedValue(new Error('redis down'));
 
       const result = await service.settleAuction('auc-email-fail');
 
       expect(result.outcome).toBe('SETTLED');
       expect(result.status).toBe('SETTLED');
       expect(mockAuction.status).toBe('SETTLED');
+      expect(notificationMock.notifyMany).toHaveBeenCalledWith([
+        expect.objectContaining({ userId: 'loser-after-failure' }),
+      ]);
     });
   });
 });
