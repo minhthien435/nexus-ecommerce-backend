@@ -278,6 +278,7 @@ export class OrderRefundService extends OrderRefundRequestApi {
           bankReferenceCode: saved.bankReferenceCode!,
           processedAt: saved.processedAt!,
         });
+        this.logger.log(`Refund ${saved.id}: refund email sent`);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

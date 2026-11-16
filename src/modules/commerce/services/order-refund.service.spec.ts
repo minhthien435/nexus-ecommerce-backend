@@ -306,6 +306,13 @@ describe('OrderRefundService', () => {
     const { service, stateMachine, emailService, events } = setup({
       locked: { status: 'PROCESSING' },
     });
+    const log = vi
+      .spyOn(
+        (service as unknown as { logger: { log: (message: string) => void } })
+          .logger,
+        'log',
+      )
+      .mockImplementation(() => undefined);
     await expect(
       service.confirmTransferred('refund-1', 'staff-1', 'BANK-1', 'done'),
     ).resolves.toEqual(
@@ -332,6 +339,7 @@ describe('OrderRefundService', () => {
       bankReferenceCode: 'BANK-1',
       processedAt: expect.any(Date),
     });
+    expect(log).toHaveBeenCalledWith('Refund refund-1: refund email sent');
     expect(events).toEqual(['transaction-committed', 'email-sent']);
   });
 
