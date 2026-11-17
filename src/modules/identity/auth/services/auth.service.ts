@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, ILike, Repository } from 'typeorm';
+import { CoinService } from '../../../coin/coin.service.js';
 import * as argon2 from 'argon2';
 import { UserEntity } from '../../domain/user.entity.js';
 import { RefreshTokenEntity } from '../../domain/refresh-token.entity.js';
@@ -73,6 +74,7 @@ export class AuthService {
           'Default BUYER role is not configured',
         );
       }
+      await CoinService.welcome(manager, created.id);
       return created;
     });
     const { passwordHash: _, googleSub: __, ...result } = saved;
@@ -261,6 +263,7 @@ export class AuthService {
             'Default BUYER role is not configured',
           );
         }
+        await CoinService.welcome(manager, user.id);
       } else if (!user.googleSub) {
         user.googleSub = identity.subject;
       }

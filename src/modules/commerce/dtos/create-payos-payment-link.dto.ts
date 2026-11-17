@@ -1,6 +1,20 @@
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreatePayosPaymentLinkDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(2_147_483_647)
+  useCoins?: number;
+
   @IsUUID('4', { message: 'orderId must be a valid UUID v4' })
   orderId: string;
 
@@ -20,6 +34,8 @@ export interface CreatePayosPaymentLinkResult {
   checkoutUrl: string;
   qrCode: string;
   amount: number;
+  payableAmount?: number;
+  coinDiscountAmount?: number;
   currency: string;
   status: string;
 }

@@ -73,7 +73,10 @@ export class PayosClientService {
     paymentData: CreatePaymentLinkRequest,
   ): Promise<CreatePaymentLinkResponse> {
     const client = this.getClient();
-    return client.paymentRequests.create(paymentData);
+    return client.paymentRequests.create(paymentData, {
+      timeout: 15_000,
+      maxRetries: 0,
+    });
   }
 
   async verifyWebhook(webhook: Webhook): Promise<WebhookData> {

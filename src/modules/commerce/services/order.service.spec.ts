@@ -4,6 +4,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { OrderService } from './order.service.js';
 import { QuerySellerOrdersDto } from '../dtos/query-seller-orders.dto.js';
+import { OrderEntity } from '../domain/entities/order.entity.js';
 import { PaymentsService } from './payments.service.js';
 import { ConfigService } from '@nestjs/config';
 
@@ -144,6 +145,7 @@ function setup(
   };
 
   const manager = {
+    query: vi.fn().mockResolvedValue([{ applied: true }]),
     create: vi.fn((_entityClass, data) => ({
       id: 'mock-id-' + Math.random(),
       ...data,
@@ -391,192 +393,217 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     expect(s.dataSource.transaction).not.toHaveBeenCalled();
   });
 
-  it('successfully creates checkout session and splits orders per seller', async () => {
-    const s = setup();
+  it.each([
+    { useCoins: undefined, expected: [380_000, 640_000] },
+    { useCoins: 110_000, expected: [275_000, 635_000] },
+  ])(
+    'splits checkout and PayOS amounts per seller with useCoins=$useCoins',
+    async ({ useCoins, expected }) => {
+      const s = setup();
 
-    s.shippingQuotes.quoteNewAddress
-      .mockResolvedValueOnce({ fee: 30000 })
-      .mockResolvedValueOnce({ fee: 40000 })
-      .mockResolvedValueOnce({ fee: 30000 })
-      .mockResolvedValueOnce({ fee: 40000 });
-    // 2 items from seller 1, 1 item from seller 2
-    s.cartItemRepo.find.mockResolvedValue([
-      { id: 'item-1', cartId, skuId: 'sku-1', quantity: 2 },
-      { id: 'item-2', cartId, skuId: 'sku-2', quantity: 1 },
-      { id: 'item-3', cartId, skuId: 'sku-3', quantity: 3 },
-    ]);
+      s.shippingQuotes.quoteNewAddress
+        .mockResolvedValueOnce({ fee: 30000 })
+        .mockResolvedValueOnce({ fee: 40000 })
+        .mockResolvedValueOnce({ fee: 30000 })
+        .mockResolvedValueOnce({ fee: 40000 });
+      // 2 items from seller 1, 1 item from seller 2
+      s.cartItemRepo.find.mockResolvedValue([
+        { id: 'item-1', cartId, skuId: 'sku-1', quantity: 2 },
+        { id: 'item-2', cartId, skuId: 'sku-2', quantity: 1 },
+        { id: 'item-3', cartId, skuId: 'sku-3', quantity: 3 },
+      ]);
 
-    s.catalogApi.getCartSkus.mockResolvedValue([
-      {
-        id: 'sku-1',
-        productId: 'prod-1',
-        sellerId: seller1,
-        skuCode: 'SKU-1',
-        variantAttributes: { color: 'Blue' },
-        weightGrams: 250,
-        price: '100000.00',
-        currency: 'VND',
-        isActive: true,
-        productName: 'Product 1',
-        productSlug: 'product-1',
-        productStatus: 'ACTIVE',
-        productDeletedAt: null,
-      },
-      {
-        id: 'sku-2',
-        productId: 'prod-1',
-        sellerId: seller1,
-        skuCode: 'SKU-2',
-        variantAttributes: { color: 'Red' },
-        weightGrams: 250,
-        price: '150000.00',
-        currency: 'VND',
-        isActive: true,
-        productName: 'Product 1',
-        productSlug: 'product-1',
-        productStatus: 'ACTIVE',
-        productDeletedAt: null,
-      },
-      {
-        id: 'sku-3',
-        productId: 'prod-2',
-        sellerId: seller2,
-        skuCode: 'SKU-3',
-        variantAttributes: { size: 'XL' },
-        weightGrams: 250,
-        price: '200000.00',
-        currency: 'VND',
-        isActive: true,
-        productName: 'Product 2',
-        productSlug: 'product-2',
-        productStatus: 'ACTIVE',
-        productDeletedAt: null,
-      },
-    ]);
+      s.catalogApi.getCartSkus.mockResolvedValue([
+        {
+          id: 'sku-1',
+          productId: 'prod-1',
+          sellerId: seller1,
+          skuCode: 'SKU-1',
+          variantAttributes: { color: 'Blue' },
+          weightGrams: 250,
+          price: '100000.00',
+          currency: 'VND',
+          isActive: true,
+          productName: 'Product 1',
+          productSlug: 'product-1',
+          productStatus: 'ACTIVE',
+          productDeletedAt: null,
+        },
+        {
+          id: 'sku-2',
+          productId: 'prod-1',
+          sellerId: seller1,
+          skuCode: 'SKU-2',
+          variantAttributes: { color: 'Red' },
+          weightGrams: 250,
+          price: '150000.00',
+          currency: 'VND',
+          isActive: true,
+          productName: 'Product 1',
+          productSlug: 'product-1',
+          productStatus: 'ACTIVE',
+          productDeletedAt: null,
+        },
+        {
+          id: 'sku-3',
+          productId: 'prod-2',
+          sellerId: seller2,
+          skuCode: 'SKU-3',
+          variantAttributes: { size: 'XL' },
+          weightGrams: 250,
+          price: '200000.00',
+          currency: 'VND',
+          isActive: true,
+          productName: 'Product 2',
+          productSlug: 'product-2',
+          productStatus: 'ACTIVE',
+          productDeletedAt: null,
+        },
+      ]);
 
-    const quote = await s.service.quoteCart(userId, {
-      addressId,
-      selectedCartItemIds: ['item-1', 'item-2', 'item-3'],
-    });
-    expect(quote.totalFee).toBe(70000);
-    expect(quote.sellers).toEqual([
-      { sellerId: seller1, weightGrams: 750, fee: 30000 },
-      { sellerId: seller2, weightGrams: 750, fee: 40000 },
-    ]);
-    s.shippingQuotes.quoteNewAddress.mockClear();
-    const result = await s.service.checkout(userId, {
-      paymentMethod: 'PAYOS',
-    });
-
-    // Check checkout session totals:
-    // Seller 1: 2 * 100,000 + 1 * 150,000 = 350,000
-    // Seller 2: 3 * 200,000 = 600,000
-    // Total: 950,000 merchandise + 70,000 shipping.
-    expect(result.totalAmount).toBe('1020000.00');
-    expect(s.manager.create).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ skuId: 'sku-1', weightGramsSnapshot: 250 }),
-    );
-    expect(result.orders).toHaveLength(2);
-    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenCalledTimes(2);
-    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(1, {
-      recipientName: 'Nguyen Van A',
-      recipientPhone: '0901234567',
-      addressLine: '123 Nguyen Hue',
-      provinceName: 'Hồ Chí Minh',
-      wardName: 'Ward',
-      weightGrams: 750,
-      content: 'Product 1, Product 1',
-    });
-    expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(2, {
-      recipientName: 'Nguyen Van A',
-      recipientPhone: '0901234567',
-      addressLine: '123 Nguyen Hue',
-      provinceName: 'Hồ Chí Minh',
-      wardName: 'Ward',
-      weightGrams: 750,
-      content: 'Product 2',
-    });
-    // Existing PayOS API creates one link per seller order. Their sum must match checkout.
-    const payos = {
-      createPaymentLink: vi.fn().mockResolvedValue({
-        paymentLinkId: 'test',
-        checkoutUrl: 'https://example.test',
-        qrCode: 'test',
-      }),
-    };
-    const payments = {
-      findOne: vi.fn().mockResolvedValue(null),
-      count: vi.fn().mockResolvedValue(0),
-      create: vi.fn((value) => value),
-      save: vi.fn(async (value) => value),
-    };
-    const paymentOrders = { findOne: vi.fn() };
-    const paymentService = new PaymentsService(
-      paymentOrders as never,
-      payments as never,
-      payos as never,
-      new ConfigService({
-        PAYOS_RETURN_URL: 'https://example.test/return',
-        PAYOS_CANCEL_URL: 'https://example.test/cancel',
-      }),
-    );
-    for (const order of result.orders) {
-      paymentOrders.findOne.mockResolvedValue({
-        ...order,
-        buyerId: userId,
-        currency: 'VND',
-        checkoutSessionId: result.checkoutSessionId,
+      const quote = await s.service.quoteCart(userId, {
+        addressId,
+        selectedCartItemIds: ['item-1', 'item-2', 'item-3'],
       });
-      await paymentService.createPayosPaymentLink(userId, {
-        orderId: order.id,
+      expect(quote.totalFee).toBe(70000);
+      expect(quote.sellers).toEqual([
+        { sellerId: seller1, weightGrams: 750, fee: 30000 },
+        { sellerId: seller2, weightGrams: 750, fee: 40000 },
+      ]);
+      s.shippingQuotes.quoteNewAddress.mockClear();
+      const result = await s.service.checkout(userId, {
+        useCoins,
+        paymentMethod: 'PAYOS',
       });
-    }
-    expect(
-      payos.createPaymentLink.mock.calls.map(([input]) => input.amount),
-    ).toEqual([380000, 640000]);
-    expect(
-      payos.createPaymentLink.mock.calls.reduce(
-        (sum, [input]) => sum + input.amount,
-        0,
-      ),
-    ).toBe(Number(result.totalAmount));
 
-    const orderSeller1 = result.orders.find((o) => o.sellerId === seller1);
-    const orderSeller2 = result.orders.find((o) => o.sellerId === seller2);
+      // Check checkout session totals:
+      // Seller 1: 2 * 100,000 + 1 * 150,000 = 350,000
+      // Seller 2: 3 * 200,000 = 600,000
+      // Total: 950,000 merchandise + 70,000 shipping.
+      expect(Number(result.totalAmount)).toBe(expected[0] + expected[1]);
+      expect(Number(result.coinDiscountAmount)).toBe(useCoins ?? 0);
+      expect(s.manager.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ skuId: 'sku-1', weightGramsSnapshot: 250 }),
+      );
+      expect(result.orders).toHaveLength(2);
+      expect(s.shippingQuotes.quoteNewAddress).toHaveBeenCalledTimes(2);
+      expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(1, {
+        recipientName: 'Nguyen Van A',
+        recipientPhone: '0901234567',
+        addressLine: '123 Nguyen Hue',
+        provinceName: 'Hồ Chí Minh',
+        wardName: 'Ward',
+        weightGrams: 750,
+        content: 'Product 1, Product 1',
+      });
+      expect(s.shippingQuotes.quoteNewAddress).toHaveBeenNthCalledWith(2, {
+        recipientName: 'Nguyen Van A',
+        recipientPhone: '0901234567',
+        addressLine: '123 Nguyen Hue',
+        provinceName: 'Hồ Chí Minh',
+        wardName: 'Ward',
+        weightGrams: 750,
+        content: 'Product 2',
+      });
+      // Existing PayOS API creates one link per seller order. Their sum must match checkout.
+      const payos = {
+        createPaymentLink: vi.fn().mockResolvedValue({
+          paymentLinkId: 'test',
+          checkoutUrl: 'https://example.test',
+          qrCode: 'test',
+        }),
+      };
+      const payments = {
+        findOne: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+        update: vi.fn().mockResolvedValue({ affected: 1 }),
+        create: vi.fn((value) => value),
+        save: vi.fn(async (value) => value),
+      };
+      const paymentOrders = { findOne: vi.fn() };
+      const paymentService = new PaymentsService(
+        {
+          transaction: (run: (manager: unknown) => unknown) =>
+            run({
+              getRepository: (entity: unknown) =>
+                entity === OrderEntity ? paymentOrders : payments,
+            }),
+        } as never,
+        payos as never,
+        new ConfigService({
+          PAYOS_RETURN_URL: 'https://example.test/return',
+          PAYOS_CANCEL_URL: 'https://example.test/cancel',
+        }),
+      );
+      for (const order of result.orders) {
+        paymentOrders.findOne.mockResolvedValue({
+          ...order,
+          buyerId: userId,
+          currency: 'VND',
+          checkoutSessionId: result.checkoutSessionId,
+        });
+        await paymentService.createPayosPaymentLink(userId, {
+          orderId: order.id,
+        });
+      }
+      expect(
+        payos.createPaymentLink.mock.calls.map(([input]) => input.amount),
+      ).toEqual(expected);
+      expect(
+        payos.createPaymentLink.mock.calls.reduce(
+          (sum, [input]) => sum + input.amount,
+          0,
+        ),
+      ).toBe(Number(result.totalAmount));
 
-    expect(orderSeller1).toBeDefined();
-    expect(orderSeller1!.total).toBe('380000.00');
-    expect(orderSeller1!.status).toBe('PENDING_PAYMENT');
+      const orderSeller1 = result.orders.find((o) => o.sellerId === seller1);
+      const orderSeller2 = result.orders.find((o) => o.sellerId === seller2);
 
-    expect(orderSeller2).toBeDefined();
-    expect(orderSeller2!.total).toBe('640000.00');
-    expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
+      expect(orderSeller1).toBeDefined();
+      expect(Number(orderSeller1!.total)).toBe(expected[0]);
+      expect(orderSeller1!.status).toBe('PENDING_PAYMENT');
 
-    // PayOS rows remain in the cart and are mapped to their exact seller order.
-    expect(s.manager.delete).not.toHaveBeenCalled();
-    expect(s.manager.update).toHaveBeenCalledTimes(2);
-    const cartReservations = s.manager.update.mock.calls.map((call) => ({
-      itemIds: (call[1] as { id: { value: string[] } }).id.value,
-      orderId: (call[2] as { reservedOrderId: string }).reservedOrderId,
-    }));
-    expect(cartReservations).toEqual(
-      expect.arrayContaining([
-        { itemIds: ['item-1', 'item-2'], orderId: orderSeller1!.id },
-        { itemIds: ['item-3'], orderId: orderSeller2!.id },
-      ]),
-    );
-    expect(s.inventoryReservation.reserve).toHaveBeenCalledOnce();
-    expect(s.expiryOutbox.schedule).toHaveBeenCalledTimes(2);
-    expect(s.expiryOutbox.reconcile).toHaveBeenCalledOnce();
-    expect(s.manager.create).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.objectContaining({
-        skuId: 'sku-1',
-        warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      }),
-    );
-  });
+      expect(orderSeller2).toBeDefined();
+      expect(Number(orderSeller2!.total)).toBe(expected[1]);
+      const coinChanges = s.manager.query.mock.calls.filter(([sql]) =>
+        sql.includes('identity.record_coin_change'),
+      );
+      expect(coinChanges.map(([, params]) => params)).toEqual(
+        useCoins
+          ? [
+              [userId, orderSeller1!.id, -105_000],
+              [userId, orderSeller2!.id, -5_000],
+            ]
+          : [],
+      );
+      expect(orderSeller2!.status).toBe('PENDING_PAYMENT');
+
+      // PayOS rows remain in the cart and are mapped to their exact seller order.
+      expect(s.manager.delete).not.toHaveBeenCalled();
+      expect(s.manager.update).toHaveBeenCalledTimes(2);
+      const cartReservations = s.manager.update.mock.calls.map((call) => ({
+        itemIds: (call[1] as { id: { value: string[] } }).id.value,
+        orderId: (call[2] as { reservedOrderId: string }).reservedOrderId,
+      }));
+      expect(cartReservations).toEqual(
+        expect.arrayContaining([
+          { itemIds: ['item-1', 'item-2'], orderId: orderSeller1!.id },
+          { itemIds: ['item-3'], orderId: orderSeller2!.id },
+        ]),
+      );
+      expect(s.inventoryReservation.reserve).toHaveBeenCalledOnce();
+      expect(s.expiryOutbox.schedule).toHaveBeenCalledTimes(2);
+      expect(s.expiryOutbox.reconcile).toHaveBeenCalledOnce();
+      expect(s.manager.create).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({
+          skuId: 'sku-1',
+          warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        }),
+      );
+    },
+  );
 
   it('does not create checkout data or clear the cart when reservation fails', async () => {
     const s = setup();

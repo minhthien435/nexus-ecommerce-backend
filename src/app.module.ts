@@ -8,6 +8,7 @@ import { createTypeOrmOptions } from './config/typeorm.config.js';
 import { IdentityModule } from './modules/identity/identity.module.js';
 import { AddressModule } from './modules/identity/users/addresses/address.module.js';
 import { CatalogModule } from './modules/catalog/catalog.module.js';
+import { CoinModule } from './modules/coin/coin.module.js';
 import { CommerceModule } from './modules/commerce/commerce.module.js';
 import { AuthCartModule } from './modules/auth-cart/auth-cart.module.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
@@ -36,6 +37,7 @@ import { NotificationModule } from './modules/notification/notification.module.j
     IdentityModule,
     CatalogModule,
     CommerceModule,
+    CoinModule,
     AuthCartModule,
     AuctionModule,
     IntegrationsModule,

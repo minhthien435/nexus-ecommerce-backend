@@ -2,6 +2,9 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsIn,
+  IsInt,
+  Max,
+  Min,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -36,6 +39,12 @@ export class CustomShippingAddressDto {
 }
 
 export class CreateCheckoutDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(2_147_483_647)
+  useCoins?: number;
+
   @IsOptional()
   @IsArray()
   @IsUUID('4', { each: true })

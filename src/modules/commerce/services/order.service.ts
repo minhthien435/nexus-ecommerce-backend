@@ -30,6 +30,8 @@ import { ConfirmSellerOrderDto } from '../dtos/confirm-seller-order.dto.js';
 import { ShipSellerOrderDto } from '../dtos/ship-seller-order.dto.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderExpiryOutboxApi } from '../order-expiry-outbox.api.js';
+import { CoinService } from '../../coin/coin.service.js';
+import { coinDiscountCents, coinLimit } from '../../coin/coin-policy.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import { GhnClientService } from '../../fulfillment/services/ghn-client.service.js';
@@ -241,6 +243,10 @@ export class OrderService {
    * Giữ tồn kho tạm thời 15 phút (Soft-Hold)
    */
   async checkout(userId: string, dto: CreateCheckoutDto) {
+    const requestedCoins = dto.useCoins ?? 0;
+    if (requestedCoins > 0 && dto.paymentMethod === 'COD') {
+      throw new BadRequestException('Coin redemption requires PayOS');
+    }
     // 1. Kiểm tra giỏ hàng ACTIVE của người dùng
     const cart = await this.cartRepo.findOne({
       where: { userId: userId.toLowerCase(), status: 'ACTIVE' },
@@ -590,6 +596,24 @@ export class OrderService {
       }
 
       const sessionTotalCents = sessionSubtotalCents + sessionShippingFeeCents;
+      let remainingCoins = requestedCoins;
+      const coinAllocation = ordersToCreate.map(
+        ({ subtotalCents, totalCents }) => {
+          const coins = Math.min(
+            remainingCoins,
+            coinLimit(subtotalCents, totalCents),
+          );
+          remainingCoins -= coins;
+          return coins;
+        },
+      );
+      if (remainingCoins > 0) {
+        throw new BadRequestException({
+          errorCode: 'COIN_DISCOUNT_LIMIT_EXCEEDED',
+          message: 'The requested Coin discount exceeds the checkout limit',
+        });
+      }
+      const sessionCoinDiscount = coinDiscountCents(requestedCoins);
 
       // Tạo Checkout Session
       const checkoutSession = manager.create(CheckoutSessionEntity, {
@@ -601,9 +625,9 @@ export class OrderService {
         paymentMethod: dto.paymentMethod || 'PAYOS',
         subtotal: centsToMoney(sessionSubtotalCents),
         shippingFee: centsToMoney(sessionShippingFeeCents),
-        discountAmount: '0.00',
+        discountAmount: centsToMoney(sessionCoinDiscount),
         tax: '0.00',
-        total: centsToMoney(sessionTotalCents),
+        total: centsToMoney(sessionTotalCents - sessionCoinDiscount),
         currency: 'VND',
         expiresAt,
         idempotencyKey: dto.idempotencyKey || null,
@@ -616,7 +640,9 @@ export class OrderService {
       const initialStatus = isCod ? 'PROCESSING' : 'PENDING_PAYMENT';
       const orderHoldExpiresAt = isCod ? null : expiresAt;
 
-      for (const orderData of ordersToCreate) {
+      for (const [index, orderData] of ordersToCreate.entries()) {
+        const coins = coinAllocation[index];
+        const coinDiscount = coinDiscountCents(coins);
         const order = manager.create(OrderEntity, {
           orderNumber: orderData.orderCode,
           checkoutSessionId: savedSession.id,
@@ -626,9 +652,9 @@ export class OrderService {
           status: initialStatus,
           subtotal: centsToMoney(orderData.subtotalCents),
           shippingFee: centsToMoney(orderData.shippingFeeCents),
-          discountAmount: '0.00',
+          discountAmount: centsToMoney(coinDiscount),
           tax: '0.00',
-          total: centsToMoney(orderData.totalCents),
+          total: centsToMoney(orderData.totalCents - coinDiscount),
           currency: 'VND',
           shippingAddressSnapshot: shippingSnapshot,
           holdExpiresAt: orderHoldExpiresAt,
@@ -637,6 +663,14 @@ export class OrderService {
             : null,
         });
         const savedOrder = await manager.save(order);
+        if (coins > 0) {
+          await CoinService.redeem(
+            manager,
+            savedOrder.buyerId,
+            savedOrder.id,
+            coins,
+          );
+        }
         if (!isCod) {
           await this.expiryOutbox.schedule(savedOrder.id, expiresAt, manager);
         }
@@ -705,6 +739,8 @@ export class OrderService {
         expiresAt: savedSession.expiresAt,
         paymentMethod: savedSession.paymentMethod,
         totalAmount: savedSession.total,
+        coinDiscountAmount: savedSession.discountAmount,
+        payableAmount: savedSession.total,
         currency: savedSession.currency,
         orders: createdOrders.map((o) => ({
           id: o.id,
@@ -714,6 +750,8 @@ export class OrderService {
           status: o.status,
           total: o.total,
           totalAmount: o.total,
+          coinDiscountAmount: o.discountAmount,
+          payableAmount: o.total,
           paymentMethod: savedSession.paymentMethod,
           itemsCount:
             o.items?.reduce(
