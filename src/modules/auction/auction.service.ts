@@ -1533,7 +1533,7 @@ export class AuctionService {
   private sellerIneligible(): ForbiddenException {
     return new ForbiddenException({
       errorCode: 'SELLER_AUCTION_INELIGIBLE',
-      message: 'Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu 50',
+      message: `Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu ${MIN_SELLER_REPUTATION}`,
     });
   }
 

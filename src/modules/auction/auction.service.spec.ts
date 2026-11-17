@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { In } from 'typeorm';
 import { AuctionService } from './auction.service.js';
 import { AuctionEntity } from './entities/auction.entity.js';
+import { ShopEntity } from '../identity/domain/shop.entity.js';
 
 describe('AuctionService', () => {
   const bidReadRepository = (rows: unknown[] = [], bids: unknown[] = []) => ({
@@ -447,7 +448,7 @@ describe('AuctionService', () => {
       const shopRepo = {
         findOne: vi
           .fn()
-          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 70 }),
       };
       const manager = {
         getRepository: vi
@@ -479,6 +480,75 @@ describe('AuctionService', () => {
     };
 
     it.each([
+      { shopScore: 50, personalScore: 100, allowed: false },
+      { shopScore: 69, personalScore: 100, allowed: false },
+      { shopScore: 70, personalScore: 20, allowed: true },
+      { shopScore: 85, personalScore: 20, allowed: true },
+    ])(
+      'uses shop reputation at the seller boundary: %j',
+      async ({ shopScore, personalScore, allowed }) => {
+        const auctions = {
+          findOne: vi.fn().mockResolvedValue(null),
+          create: vi.fn((value) => value),
+          save: vi.fn(async (value) => ({ id: 'auction-1', ...value })),
+        };
+        const { service, shopRepo, manager, reservation } = createService(
+          auctions,
+          {
+            findOne: vi.fn().mockResolvedValue({
+              id: 'product-1',
+              sellerId: 'seller-1',
+              name: 'Product',
+              status: 'ACTIVE',
+              isAuctionEligible: true,
+              deletedAt: null,
+            }),
+          },
+          {
+            findOne: vi.fn().mockResolvedValue({
+              id: 'sku-1',
+              productId: 'product-1',
+              currency: 'VND',
+            }),
+          },
+        );
+        shopRepo.findOne.mockResolvedValue({
+          status: 'ACTIVE',
+          reputationScore: shopScore,
+        });
+        manager.query.mockImplementation(async (sql: string) =>
+          sql.includes('identity.reputation_scores')
+            ? [{ score: personalScore }]
+            : [],
+        );
+        const result = service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() + 60_000).toISOString(),
+            endsAt: new Date(Date.now() + 3_660_000).toISOString(),
+          },
+          'seller-1',
+        );
+        if (allowed)
+          await expect(result).resolves.toMatchObject({ id: 'auction-1' });
+        else {
+          await expect(result).rejects.toMatchObject({
+            response: {
+              errorCode: 'SELLER_AUCTION_INELIGIBLE',
+              message:
+                'Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu 70',
+            },
+          });
+          expect(reservation.reserve).not.toHaveBeenCalled();
+        }
+        expect(manager.getRepository).toHaveBeenCalledWith(ShopEntity);
+      },
+    );
+
+    it.each([
       {
         status: 'SUSPENDED',
         reputationScore: 100,
@@ -493,7 +563,7 @@ describe('AuctionService', () => {
       },
       {
         status: 'ACTIVE',
-        reputationScore: 50,
+        reputationScore: 70,
         openCount: 5,
         errorCode: 'SELLER_AUCTION_LIMIT_REACHED',
       },
@@ -750,7 +820,7 @@ describe('AuctionService', () => {
           .mockReturnValue({
             findOne: vi
               .fn()
-              .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+              .mockResolvedValue({ status: 'ACTIVE', reputationScore: 70 }),
           }),
         query: vi.fn().mockResolvedValue([]),
       };
@@ -772,6 +842,34 @@ describe('AuctionService', () => {
         manager,
       };
     }
+
+    it.each([50, 69])(
+      'blocks scheduled activation through bid for shop %s despite personal score 100',
+      async (shopScore) => {
+        const auction = activeAuction();
+        auction.status = 'SCHEDULED';
+        const test = biddingService(auction);
+        test.eligibilityRepo.findOne.mockResolvedValue({
+          reputationScore: 100,
+          isRestricted: false,
+        });
+        test.manager.getRepository.mockReturnValue({
+          findOne: vi
+            .fn()
+            .mockResolvedValue({
+              status: 'ACTIVE',
+              reputationScore: shopScore,
+            }),
+        });
+        await expect(
+          test.service.placeBid('AUC-1', 'buyer-1', 110),
+        ).rejects.toMatchObject({
+          response: { errorCode: 'SELLER_AUCTION_INELIGIBLE' },
+        });
+        expect(test.bidRepo.save).not.toHaveBeenCalled();
+        expect(test.auctionRepo.save).not.toHaveBeenCalled();
+      },
+    );
 
     it('atomically outbids the previous winner and updates counters', async () => {
       const { service, auctionRepo, bidRepo } = biddingService();
@@ -1094,7 +1192,7 @@ describe('AuctionService', () => {
       const shopRepo = {
         findOne: vi
           .fn()
-          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 50 }),
+          .mockResolvedValue({ status: 'ACTIVE', reputationScore: 70 }),
       };
       const manager = {
         getRepository: vi.fn((entity) =>
@@ -1150,19 +1248,22 @@ describe('AuctionService', () => {
       expect(settleAuction).not.toHaveBeenCalled();
     });
 
-    it('cancels an ineligible scheduled auction before activation', async () => {
-      const { service, auction, shopRepo, settleAuction } = fixture(
-        'SCHEDULED',
-        60_000,
-      );
-      shopRepo.findOne.mockResolvedValue({
-        status: 'ACTIVE',
-        reputationScore: 49,
-      });
-      await service.advanceLifecycle(auction.id);
-      expect(auction.status).toBe('CANCELLED');
-      expect(settleAuction).not.toHaveBeenCalled();
-    });
+    it.each([49, 50, 69])(
+      'cancels an ineligible scheduled auction before activation at shop score %s',
+      async (shopScore) => {
+        const { service, auction, shopRepo, settleAuction } = fixture(
+          'SCHEDULED',
+          60_000,
+        );
+        shopRepo.findOne.mockResolvedValue({
+          status: 'ACTIVE',
+          reputationScore: shopScore,
+        });
+        await service.advanceLifecycle(auction.id);
+        expect(auction.status).toBe('CANCELLED');
+        expect(settleAuction).not.toHaveBeenCalled();
+      },
+    );
 
     it('ignores a stale close job and settles once the current deadline passes', async () => {
       const { service, auction, repo, manager, settleAuction } = fixture(
