@@ -1,4 +1,5 @@
 ﻿import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DataSource, type EntityManager } from 'typeorm';
 import { OrderStateMachineService } from '../../commerce/services/order-state-machine.service.js';
@@ -15,6 +16,14 @@ import { OrderCompletionProcessor } from '../../commerce/processors/order-comple
 // Optional in ordinary runs; the explicit runner requires this suite, including in full runs.
 // Never import dotenv or silently fall back to the application DB.
 const url = process.env.REPUTATION_TEST_DATABASE_URL;
+const schemaMode = process.env.REPUTATION_TEST_SCHEMA_MODE ?? 'fixture';
+if (!['fixture', 'migrated'].includes(schemaMode)) {
+  throw new Error('REPUTATION_TEST_SCHEMA_MODE must be fixture or migrated');
+}
+const migrated = schemaMode === 'migrated';
+const permittedDatabases = migrated
+  ? ['/nexus_reputation_baseline_test', '/nexus_reputation_baseline_final_test']
+  : ['/nexus_reputation_test'];
 if (process.env.REPUTATION_TEST_DATABASE_REQUIRED === '1' && !url) {
   throw new Error(
     'REPUTATION_TEST_DATABASE_URL is required when REPUTATION_TEST_DATABASE_REQUIRED=1',
@@ -25,11 +34,11 @@ if (url) {
   if (
     !['postgres:', 'postgresql:'].includes(target.protocol) ||
     !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) ||
-    target.pathname !== '/nexus_reputation_test' ||
+    !permittedDatabases.includes(target.pathname) ||
     target.search !== ''
   ) {
     throw new Error(
-      'Reputation integration tests require a dedicated loopback nexus_reputation_test database',
+      `Reputation integration tests require a dedicated loopback database for ${schemaMode} mode: ${permittedDatabases.join(', ')}`,
     );
   }
 }
@@ -38,7 +47,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   let db: DataSource;
   let reputation: IdentityReputationService;
   let profiles: ProfileService;
-  let backfill: { claims: number; history: number };
+  let backfill: { claims: number; history: number; score: number };
 
   beforeAll(async () => {
     db = new DataSource({
@@ -55,13 +64,41 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       extra: { max: 16 },
     });
     await db.initialize();
-    // Schemas are disposable ONLY within the explicit dedicated target checked above.
-    await db.query(
-      'DROP SCHEMA IF EXISTS auction CASCADE; DROP SCHEMA IF EXISTS commerce CASCADE; DROP SCHEMA IF EXISTS identity CASCADE',
-    );
-    await db.query(`
+    if (migrated) {
+      // Validate provenance before removing data; never apply migration.up in this mode.
+      const history = await db.query<Array<{ name: string }>>(
+        'SELECT name FROM public.migrations ORDER BY id',
+      );
+      const manifest = JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../../test/fixtures/reputation-official-baseline.manifest.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ) as {
+        baseMigrations: Array<{ name: string }>;
+        reputationMigration: { name: string };
+      };
+      expect(history.map((row) => row.name)).toEqual([
+        ...manifest.baseMigrations.map((migration) => migration.name),
+        manifest.reputationMigration.name,
+      ]);
+      const [tables] = await db.query(
+        `SELECT to_regclass('identity.profile_completion_rewards') AS personal,
+          to_regclass('identity.shop_reputation_rewards') AS shop`,
+      );
+      expect(tables.personal).toBeTruthy();
+      expect(tables.shop).toBeTruthy();
+    } else {
+      // Schemas are disposable ONLY within the explicit dedicated target checked above.
+      await db.query(
+        'DROP SCHEMA IF EXISTS auction CASCADE; DROP SCHEMA IF EXISTS commerce CASCADE; DROP SCHEMA IF EXISTS identity CASCADE',
+      );
+      await db.query(`
       CREATE SCHEMA identity; CREATE SCHEMA commerce; CREATE SCHEMA auction;
-      CREATE TABLE identity.users (id uuid PRIMARY KEY, email varchar UNIQUE NOT NULL, full_name varchar(150) NOT NULL,
+      CREATE TABLE identity.users (id uuid PRIMARY KEY, email varchar UNIQUE NOT NULL, password_hash varchar(255) NOT NULL, full_name varchar(150) NOT NULL,
         phone varchar(30) UNIQUE, avatar_url varchar(2048), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW(), deleted_at timestamptz);
       CREATE TABLE identity.trust_levels (code varchar PRIMARY KEY);
       INSERT INTO identity.trust_levels VALUES ('UNTRUSTED'),('STANDARD'),('TRUSTED'),('VERIFIED_ELITE');
@@ -77,7 +114,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
         is_restricted boolean, updated_at timestamptz DEFAULT NOW());
       CREATE TABLE identity.roles (id uuid PRIMARY KEY, code varchar, deleted_at timestamptz);
       CREATE TABLE identity.user_roles (user_id uuid, role_id uuid);
-      CREATE TABLE identity.shops (id uuid PRIMARY KEY, seller_id uuid REFERENCES identity.users(id), name varchar(150), phone varchar(30),
+      CREATE TABLE identity.shops (id uuid PRIMARY KEY, seller_id uuid REFERENCES identity.users(id), name varchar(150), slug varchar(180) NOT NULL, phone varchar(30),
         warehouse_address text, identity_number varchar(100), reputation_score integer NOT NULL DEFAULT 50, deleted_at timestamptz, updated_at timestamptz DEFAULT NOW());
       CREATE UNIQUE INDEX shops_seller ON identity.shops(seller_id) WHERE deleted_at IS NULL;
       CREATE TABLE commerce.orders (id uuid PRIMARY KEY, order_number varchar(50) UNIQUE NOT NULL,
@@ -95,23 +132,29 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       CREATE TABLE commerce.order_disputes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid UNIQUE REFERENCES commerce.orders(id), status varchar);
       CREATE TABLE commerce.order_refunds (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid UNIQUE REFERENCES commerce.orders(id), amount numeric, status varchar);
     `);
-    const legacy = await user();
-    await db.query(
-      `INSERT INTO identity.reputation_history(user_id, source_type) VALUES ($1,'PROFILE_COMPLETION'),($1,'PROFILE_COMPLETION')`,
-      [legacy],
-    );
-    const runner = db.createQueryRunner();
-    await runner.startTransaction();
-    try {
-      await new DurableReputationRewards1794873600000().up(runner);
-      await runner.commitTransaction();
-    } catch (error) {
-      await runner.rollbackTransaction();
-      throw error;
-    } finally {
-      await runner.release();
+      const legacy = await user({ score: 80 });
+      await db.query(
+        `INSERT INTO identity.reputation_history(user_id, source_type) VALUES ($1,'PROFILE_COMPLETION'),($1,'PROFILE_COMPLETION')`,
+        [legacy],
+      );
+      const runner = db.createQueryRunner();
+      await runner.startTransaction();
+      try {
+        await new DurableReputationRewards1794873600000().up(runner);
+        await runner.commitTransaction();
+      } catch (error) {
+        await runner.rollbackTransaction();
+        throw error;
+      } finally {
+        await runner.release();
+      }
     }
+    // Capture the real prepared backfill before beforeEach removes test data.
     backfill = {
+      score: Number(
+        (await db.query('SELECT score FROM identity.reputation_scores'))[0]
+          ?.score,
+      ),
       claims: Number(
         (
           await db.query(
@@ -134,7 +177,9 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   }, 30000);
 
   beforeEach(async () => {
-    await db.query('TRUNCATE identity.users CASCADE');
+    await db.query(
+      'TRUNCATE identity.users, commerce.orders, auction.bidder_eligibility CASCADE',
+    );
   });
   afterAll(async () => {
     if (db?.isInitialized) await db.destroy();
@@ -150,7 +195,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   ) {
     const id = randomUUID();
     await db.query(
-      `INSERT INTO identity.users(id,email,full_name,phone,avatar_url) VALUES ($1,$2,$3,$4,$5)`,
+      `INSERT INTO identity.users(id,email,full_name,phone,avatar_url,password_hash) VALUES ($1,$2,$3,$4,$5,'SYNTHETIC_TEST_NON_LOGIN_PASSWORD_HASH')`,
       [
         id,
         `${id}@example.com`,
@@ -170,8 +215,8 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     const sellerId = await user();
     const id = randomUUID();
     await db.query(
-      `INSERT INTO identity.shops(id,seller_id,name,phone,warehouse_address,identity_number,reputation_score)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      `INSERT INTO identity.shops(id,seller_id,name,phone,warehouse_address,identity_number,reputation_score,slug)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         id,
         sellerId,
@@ -180,6 +225,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
         fields.warehouseAddress ?? 'Valid address',
         fields.identityNumber ?? '123456789',
         score,
+        id,
       ],
     );
     return { id, sellerId };
@@ -187,8 +233,8 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   async function order(sellerId: string, status = 'COMPLETED', hours = 73) {
     const id = randomUUID();
     await db.query(
-      `INSERT INTO commerce.orders(id,order_number,buyer_id,seller_id,status,delivered_at)
-        VALUES ($1,$4,$2,$2,$3,NOW()-INTERVAL '100 hours')`,
+      `INSERT INTO commerce.orders(id,order_number,buyer_id,seller_id,status,delivered_at,shipping_address_snapshot,total,subtotal)
+        VALUES ($1,$4,$2,$2,$3,NOW()-INTERVAL '100 hours','{}',100,100)`,
       [id, sellerId, status, id],
     );
     await db.query(
@@ -196,6 +242,44 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       [id, hours],
     );
     return id;
+  }
+  async function dispute(orderId: string, status: string) {
+    if (!migrated) {
+      await db.query(
+        'INSERT INTO commerce.order_disputes(order_id,status) VALUES ($1,$2)',
+        [orderId, status],
+      );
+      return;
+    }
+    await db.query(
+      `INSERT INTO commerce.order_disputes
+      (order_id,buyer_id,seller_id,reason_category,evidence_description,status)
+      SELECT id,buyer_id,seller_id,'OTHER','Synthetic reputation test evidence',$2
+      FROM commerce.orders WHERE id=$1`,
+      [orderId, status],
+    );
+  }
+  async function refund(orderId: string, status: string) {
+    if (!migrated) {
+      await db.query(
+        'INSERT INTO commerce.order_refunds(order_id,amount,status) VALUES ($1,100,$2)',
+        [orderId, status],
+      );
+      return;
+    }
+    const paymentId = randomUUID();
+    await db.query(
+      `INSERT INTO commerce.payments(id,order_id,amount,status)
+      VALUES ($1,$2,100,'SUCCEEDED')`,
+      [paymentId, orderId],
+    );
+    await db.query(
+      `INSERT INTO commerce.order_refunds
+      (order_id,payment_id,refund_code,amount,currency,reason,status,payment_carrier,idempotency_key,requested_by)
+      SELECT id,$2,$4,100,'VND','Synthetic reputation test refund',$3,'PAYOS',$4,buyer_id
+      FROM commerce.orders WHERE id=$1`,
+      [orderId, paymentId, status, paymentId],
+    );
   }
   async function shopScore(id: string) {
     return (
@@ -210,7 +294,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   }
 
   it('backfills one durable claim without deleting duplicate legacy history', () => {
-    expect(backfill).toEqual({ claims: 1, history: 2 });
+    expect(backfill).toEqual({ claims: 1, history: 2, score: 80 });
   });
   it('rewards a persisted partial PATCH and keeps claim consumed after deletion/refill', async () => {
     const id = await user();
@@ -576,10 +660,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       'REJECTED_PAY_SELLER',
     ]) {
       const id = await order(s.sellerId);
-      await db.query(
-        'INSERT INTO commerce.order_disputes(order_id,status) VALUES ($1,$2)',
-        [id, status],
-      );
+      await dispute(id, status);
       const result = await reputation.rewardCompletedOrder(id);
       if (status === 'REJECTED_PAY_SELLER')
         expect(result).toMatchObject({ newScore: 55 });
@@ -587,10 +668,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     }
     for (const status of ['REQUESTED', 'PROCESSING', 'COMPLETED']) {
       const id = await order(s.sellerId);
-      await db.query(
-        'INSERT INTO commerce.order_refunds(order_id,amount,status) VALUES ($1,100,$2)',
-        [id, status],
-      );
+      await refund(id, status);
       expect(await reputation.rewardCompletedOrder(id)).toBeNull();
     }
     expect(
@@ -626,10 +704,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   it('defers a pending dispute and rewards after a committed rejection, excluding refunded orders regardless fault', async () => {
     const s = await shop();
     const id = await order(s.sellerId);
-    await db.query(
-      "INSERT INTO commerce.order_disputes(order_id,status) VALUES ($1,'PENDING_STAFF_REVIEW')",
-      [id],
-    );
+    await dispute(id, 'PENDING_STAFF_REVIEW');
     expect(await reputation.rewardCompletedOrder(id)).toBeNull();
     await db.query(
       "UPDATE commerce.order_disputes SET status='REJECTED_PAY_SELLER' WHERE order_id=$1",
@@ -639,10 +714,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       newScore: 55,
     });
     const rejectedRefund = await order(s.sellerId);
-    await db.query(
-      "INSERT INTO commerce.order_refunds(order_id,amount,status) VALUES ($1,100,'REJECTED')",
-      [rejectedRefund],
-    );
+    await refund(rejectedRefund, 'REJECTED');
     expect(await reputation.rewardCompletedOrder(rejectedRefund)).toMatchObject(
       { newScore: 60 },
     );

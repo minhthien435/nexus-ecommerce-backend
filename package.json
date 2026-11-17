@@ -19,7 +19,7 @@
     "lint": "oxlint src/ test/",
     "typecheck": "tsc --noEmit",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "validate:reputation": "npm run test:reputation:db && npm run validate && npm run test:reputation:migrations",
+    "validate:reputation": "npm run test:reputation:db && npm run validate && npm run test:reputation:baseline",
     "prepare": "husky",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -38,7 +38,8 @@
     "kaggle:transform": "npm run build && node dist/scripts/kaggle-import.js transform",
     "kaggle:import": "npm run build && node dist/scripts/kaggle-import.js import",
     "kaggle:dry-run": "npm run build && node dist/scripts/kaggle-import.js dry-run",
-    "kaggle:generate-auctions": "npm run build && node dist/scripts/kaggle-import.js generate-auctions"
+    "kaggle:generate-auctions": "npm run build && node dist/scripts/kaggle-import.js generate-auctions",
+    "test:reputation:baseline": "npm run build && node scripts/test-reputation-baseline.mjs"
   },
   "lint-staged": {
     "*.ts": [
