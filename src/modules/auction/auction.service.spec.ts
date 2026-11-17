@@ -120,6 +120,146 @@ describe('AuctionService', () => {
     expect(auctions.save).not.toHaveBeenCalled();
   });
 
+  describe('demo seller eligibility', () => {
+    function fixture(shop: { status: string; reputationScore: number } | null) {
+      const persistedShop = shop ? Object.freeze({ ...shop }) : null;
+      const shopRepo = {
+        findOne: vi.fn().mockResolvedValue(persistedShop),
+        save: vi.fn(),
+        update: vi.fn(),
+      };
+      const auctionRepo = {
+        create: vi.fn((value) => value),
+        save: vi.fn(async (value) => ({ id: 'demo-auction', ...value })),
+      };
+      const manager = {
+        getRepository: vi.fn((entity) => {
+          if (entity === ShopEntity) return shopRepo;
+          if (entity === AuctionEntity) return auctionRepo;
+          throw new Error(
+            'Unexpected repository: reputation must remain read-only',
+          );
+        }),
+      };
+      let committed = false;
+      const transaction = vi.fn(async (work) => {
+        const result = await work(manager);
+        committed = true;
+        return result;
+      });
+      const schedule = vi.fn(() => expect(committed).toBe(true));
+      const auctions = {
+        findOne: vi.fn().mockResolvedValue(null),
+        save: vi.fn(),
+        manager: { transaction },
+      };
+      const service = new AuctionService(
+        auctions as never,
+        {
+          findOne: vi.fn().mockResolvedValue({
+            id: 'product',
+            sellerId: 'seller',
+            name: 'Product',
+            isAuctionEligible: true,
+          }),
+        } as never,
+        {
+          findOne: vi.fn().mockResolvedValue({
+            id: 'sku',
+            productId: 'product',
+            price: 1000,
+            currency: 'VND',
+          }),
+        } as never,
+        {} as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { schedule } as never,
+      );
+      return {
+        service,
+        shopRepo,
+        auctionRepo,
+        manager,
+        transaction,
+        schedule,
+        auctions,
+        persistedShop,
+      };
+    }
+
+    it.each([
+      ...[49, 50, 59, 60, 69].map((reputationScore) => ({
+        status: 'ACTIVE',
+        reputationScore,
+      })),
+      ...['PENDING', 'SUSPENDED', 'CLOSED'].map((status) => ({
+        status,
+        reputationScore: 100,
+      })),
+      null,
+    ])('skips an ineligible demo seller: %j', async (shop) => {
+      const f = fixture(shop);
+      await expect(
+        f.service.createDemoForSku('sku', { startsAt: new Date() }),
+      ).resolves.toBeNull();
+      expect(f.auctionRepo.save).not.toHaveBeenCalled();
+      expect(f.auctions.save).not.toHaveBeenCalled();
+      expect(f.schedule).not.toHaveBeenCalled();
+      expect(f.shopRepo.save).not.toHaveBeenCalled();
+      expect(f.shopRepo.update).not.toHaveBeenCalled();
+    });
+
+    it.each([70, 71])(
+      'creates and schedules after committing the locked shop lookup at %s',
+      async (reputationScore) => {
+        const f = fixture({ status: 'ACTIVE', reputationScore });
+        const startsAt = new Date(Date.now() + 60_000);
+        await expect(
+          f.service.createDemoForSku('sku', { startsAt }),
+        ).resolves.toMatchObject({
+          id: 'demo-auction',
+          sellerId: 'seller',
+          startPrice: '600.00',
+          reservePrice: '800.00',
+          bidIncrement: '20.00',
+          status: 'SCHEDULED',
+          startsAt,
+        });
+        expect(f.transaction).toHaveBeenCalledTimes(1);
+        expect(f.shopRepo.findOne).toHaveBeenCalledWith({
+          where: { sellerId: 'seller' },
+          lock: { mode: 'pessimistic_read' },
+        });
+        expect(f.manager.getRepository).toHaveBeenCalledWith(AuctionEntity);
+        expect(f.auctionRepo.save).toHaveBeenCalledTimes(1);
+        expect(f.auctions.save).not.toHaveBeenCalled();
+        expect(f.schedule).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: 'demo-auction' }),
+        );
+        expect(f.shopRepo.save).not.toHaveBeenCalled();
+        expect(f.shopRepo.update).not.toHaveBeenCalled();
+        expect(f.persistedShop).toEqual({ status: 'ACTIVE', reputationScore });
+      },
+    );
+
+    it('does not schedule a transaction that fails to commit', async () => {
+      const f = fixture({ status: 'ACTIVE', reputationScore: 70 });
+      const failure = new Error('commit failed');
+      f.transaction.mockImplementationOnce(async (work) => {
+        await work(f.manager);
+        throw failure;
+      });
+      await expect(
+        f.service.createDemoForSku('sku', { startsAt: new Date() }),
+      ).rejects.toBe(failure);
+      expect(f.schedule).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findByIdOrCode', () => {
     const mockAuction: Partial<AuctionEntity> = {
       id: 'a0000000-0000-0000-0000-000000000001',
@@ -446,6 +586,8 @@ describe('AuctionService', () => {
       },
     ) => {
       const shopRepo = {
+        save: vi.fn(),
+        update: vi.fn(),
         findOne: vi
           .fn()
           .mockResolvedValue({ status: 'ACTIVE', reputationScore: 70 }),
@@ -480,9 +622,13 @@ describe('AuctionService', () => {
     };
 
     it.each([
+      { shopScore: 49, personalScore: 100, allowed: false },
       { shopScore: 50, personalScore: 100, allowed: false },
+      { shopScore: 59, personalScore: 100, allowed: false },
+      { shopScore: 60, personalScore: 100, allowed: false },
       { shopScore: 69, personalScore: 100, allowed: false },
-      { shopScore: 70, personalScore: 20, allowed: true },
+      { shopScore: 70, personalScore: 60, allowed: true },
+      { shopScore: 71, personalScore: 60, allowed: true },
       { shopScore: 85, personalScore: 20, allowed: true },
     ])(
       'uses shop reputation at the seller boundary: %j',
@@ -512,26 +658,27 @@ describe('AuctionService', () => {
             }),
           },
         );
-        shopRepo.findOne.mockResolvedValue({
+        const persistedShop = Object.freeze({
           status: 'ACTIVE',
           reputationScore: shopScore,
         });
+        shopRepo.findOne.mockResolvedValue(persistedShop);
         manager.query.mockImplementation(async (sql: string) =>
           sql.includes('identity.reputation_scores')
             ? [{ score: personalScore }]
             : [],
         );
-        const result = service.create(
-          {
-            skuId: 'sku-1',
-            startPrice: 100,
-            reservePrice: 120,
-            bidIncrement: 10,
-            startsAt: new Date(Date.now() + 60_000).toISOString(),
-            endsAt: new Date(Date.now() + 3_660_000).toISOString(),
-          },
-          'seller-1',
-        );
+        const dto = {
+          reputationScore: 100,
+          sellerId: 'spoofed-seller',
+          skuId: 'sku-1',
+          startPrice: 100,
+          reservePrice: 120,
+          bidIncrement: 10,
+          startsAt: new Date(Date.now() + 60_000).toISOString(),
+          endsAt: new Date(Date.now() + 3_660_000).toISOString(),
+        };
+        const result = service.create(dto, 'seller-1');
         if (allowed)
           await expect(result).resolves.toMatchObject({ id: 'auction-1' });
         else {
@@ -543,8 +690,32 @@ describe('AuctionService', () => {
             },
           });
           expect(reservation.reserve).not.toHaveBeenCalled();
+          expect(auctions.save).not.toHaveBeenCalled();
+          await expect(result).rejects.toMatchObject({ status: 403 });
         }
+        expect(persistedShop).toEqual({
+          status: 'ACTIVE',
+          reputationScore: shopScore,
+        });
+        expect(shopRepo.save).not.toHaveBeenCalled();
+        expect(shopRepo.update).not.toHaveBeenCalled();
+        expect(
+          manager.query.mock.calls.some(([sql]) =>
+            /(?:UPDATE|INSERT INTO) identity\.(?:shops|users|reputation_scores)/i.test(
+              sql,
+            ),
+          ),
+        ).toBe(false);
         expect(manager.getRepository).toHaveBeenCalledWith(ShopEntity);
+        expect(shopRepo.findOne).toHaveBeenCalledWith({
+          where: { sellerId: 'seller-1' },
+          lock: { mode: 'pessimistic_read' },
+        });
+        expect(
+          manager.query.mock.calls.some(([sql]) =>
+            sql.includes('identity.reputation_scores'),
+          ),
+        ).toBe(false);
       },
     );
 
@@ -555,6 +726,12 @@ describe('AuctionService', () => {
         openCount: 0,
         errorCode: 'SELLER_AUCTION_INELIGIBLE',
       },
+      ...['PENDING', 'CLOSED', null].map((status) => ({
+        status,
+        reputationScore: 100,
+        openCount: 0,
+        errorCode: 'SELLER_AUCTION_INELIGIBLE',
+      })),
       {
         status: 'ACTIVE',
         reputationScore: 49,
@@ -570,7 +747,10 @@ describe('AuctionService', () => {
     ])(
       'rejects invalid seller state before reserving inventory',
       async ({ status, reputationScore, openCount, errorCode }) => {
-        const auctionRepo = { count: vi.fn().mockResolvedValue(openCount) };
+        const auctionRepo = {
+          count: vi.fn().mockResolvedValue(openCount),
+          save: vi.fn(),
+        };
         const productRepo = {
           findOne: vi.fn().mockResolvedValue({ status: 'ACTIVE' }),
         };
@@ -584,7 +764,9 @@ describe('AuctionService', () => {
           productRepo,
           skuRepo,
         );
-        shopRepo.findOne.mockResolvedValue({ status, reputationScore });
+        shopRepo.findOne.mockResolvedValue(
+          status ? { status, reputationScore } : null,
+        );
         const now = Date.now();
         await expect(
           service.create(
@@ -599,6 +781,7 @@ describe('AuctionService', () => {
             'seller-1',
           ),
         ).rejects.toMatchObject({ response: { errorCode } });
+        expect(auctionRepo.save).not.toHaveBeenCalled();
         expect(reservation.reserve).not.toHaveBeenCalled();
       },
     );
@@ -854,12 +1037,10 @@ describe('AuctionService', () => {
           isRestricted: false,
         });
         test.manager.getRepository.mockReturnValue({
-          findOne: vi
-            .fn()
-            .mockResolvedValue({
-              status: 'ACTIVE',
-              reputationScore: shopScore,
-            }),
+          findOne: vi.fn().mockResolvedValue({
+            status: 'ACTIVE',
+            reputationScore: shopScore,
+          }),
         });
         await expect(
           test.service.placeBid('AUC-1', 'buyer-1', 110),
@@ -1190,6 +1371,8 @@ describe('AuctionService', () => {
         save: vi.fn(async (value) => value),
       };
       const shopRepo = {
+        save: vi.fn(),
+        update: vi.fn(),
         findOne: vi
           .fn()
           .mockResolvedValue({ status: 'ACTIVE', reputationScore: 70 }),
@@ -1248,7 +1431,7 @@ describe('AuctionService', () => {
       expect(settleAuction).not.toHaveBeenCalled();
     });
 
-    it.each([49, 50, 69])(
+    it.each([49, 50, 59, 60, 69])(
       'cancels an ineligible scheduled auction before activation at shop score %s',
       async (shopScore) => {
         const { service, auction, shopRepo, settleAuction } = fixture(
