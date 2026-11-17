@@ -18,6 +18,7 @@ import {
 } from '../dtos/seller-shop.dto.js';
 import { RoleEntity } from '../rbac/entities/role.entity.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
+import { IdentityReputationApi } from '../identity-reputation.api.js';
 
 export type SellerShopView = {
   id: string;
@@ -46,7 +47,10 @@ export type RegisteredSellerShop = SellerShopView & { roles: string[] };
 
 @Injectable()
 export class SellerShopService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly reputation: IdentityReputationApi,
+  ) {}
 
   async registerShop(
     userId: string,
@@ -131,6 +135,11 @@ export class SellerShopService {
             ORDER BY role.code`,
           [userId],
         );
+        const reward = await this.reputation.rewardShopProfileCompletion(
+          shop.id,
+          manager,
+        );
+        if (reward) shop.reputationScore = reward.newScore;
         return {
           ...this.toView(shop),
           roles: roleRows.map(({ code }) => code),
@@ -161,26 +170,35 @@ export class SellerShopService {
         'Payload cập nhật cửa hàng không được để trống',
       );
     }
-    const shops = this.dataSource.getRepository(ShopEntity);
-    const shop = await shops.findOne({
-      where: { sellerId: userId, status: 'ACTIVE', deletedAt: IsNull() },
-    });
-    if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
+    return this.dataSource.transaction(async (manager) => {
+      const shops = manager.getRepository(ShopEntity);
+      const shop = await shops.findOne({
+        where: { sellerId: userId, status: 'ACTIVE', deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
 
-    for (const field of [
-      'headline',
-      'description',
-      'logoUrl',
-      'bannerUrl',
-      'phone',
-      'email',
-      'warehouseAddress',
-    ] as const) {
-      if (dto[field] !== undefined) {
-        Object.assign(shop, { [field]: dto[field] });
+      for (const field of [
+        'headline',
+        'description',
+        'logoUrl',
+        'bannerUrl',
+        'phone',
+        'email',
+        'warehouseAddress',
+      ] as const) {
+        if (dto[field] !== undefined) {
+          Object.assign(shop, { [field]: dto[field] });
+        }
       }
-    }
-    return this.toView(await shops.save(shop));
+      const saved = await shops.save(shop);
+      const reward = await this.reputation.rewardShopProfileCompletion(
+        saved.id,
+        manager,
+      );
+      if (reward) saved.reputationScore = reward.newScore;
+      return this.toView(saved);
+    });
   }
 
   async closeMyShop(userId: string): Promise<SellerShopView> {

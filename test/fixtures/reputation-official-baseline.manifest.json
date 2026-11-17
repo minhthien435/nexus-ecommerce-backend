@@ -1,0 +1,212 @@
+{
+  "source": "Authoritative applied SQL from supabase_migrations.schema_migrations, exported READ ONLY on 2026-11-17",
+  "baseCommit": "ddb3d57173601d5bc174bcd7e727aaf105789326",
+  "baselineDirectory": "test/fixtures/database-baseline",
+  "baseline": [
+    {
+      "file": "20261006033146_0000_foundation.sql",
+      "version": "20261006033146",
+      "name": "0000_foundation",
+      "bytes": 3657,
+      "sha256": "8a947df042b4de33c0669c7c6910354357d25113a278b8c5e9f72e409c1da63a"
+    },
+    {
+      "file": "20261006033315_0001_identity.sql",
+      "version": "20261006033315",
+      "name": "0001_identity",
+      "bytes": 16126,
+      "sha256": "55499a7b8be94637a2a34ad2c052b4e14558fa2ac7ba1bfe0727524ac61f225c"
+    },
+    {
+      "file": "20261006033402_0002_catalog.sql",
+      "version": "20261006033402",
+      "name": "0002_catalog",
+      "bytes": 5555,
+      "sha256": "a49ceac185fbd1ebaa3bfca576cec784252a34e76bad668d2507814520f15bae"
+    },
+    {
+      "file": "20261006033511_0003_commerce.sql",
+      "version": "20261006033511",
+      "name": "0003_commerce",
+      "bytes": 8841,
+      "sha256": "14160812f0b28b3affb27bae0e1b03f826da83e1d84c1753bc03ca8030881e94"
+    },
+    {
+      "file": "20261006033551_0004_auction.sql",
+      "version": "20261006033551",
+      "name": "0004_auction",
+      "bytes": 6087,
+      "sha256": "b9c3f819673624e4917012f8d018bb2e0b8d105ad214616fdf1d8bdbe5f70690"
+    },
+    {
+      "file": "20261006033800_0005_fulfillment.sql",
+      "version": "20261006033800",
+      "name": "0005_fulfillment",
+      "bytes": 8518,
+      "sha256": "083279e11380eb30cc93f2aa67e26aaa0fa9fb4fd23ece77076efb9b51a9d1c4"
+    },
+    {
+      "file": "20261006033842_0006_notification.sql",
+      "version": "20261006033842",
+      "name": "0006_notification",
+      "bytes": 4913,
+      "sha256": "2c091279d9eab472cf91e6eee192e75a659340b84d3e15bd4bb56a833ff3f0f1"
+    }
+  ],
+  "baseMigrations": [
+    {
+      "file": "src/database/migrations/1760076000000-AddAvatarUrlToUsers.ts",
+      "name": "AddAvatarUrlToUsers1760076000000",
+      "sha256": "30b416a47177cbe24af361e6e7643fcce4ef908910a920172eda492879ce85d0"
+    },
+    {
+      "file": "src/database/migrations/1791586800000-AddTokenVersionToUsers.ts",
+      "name": "AddTokenVersionToUsers1791586800000",
+      "sha256": "cd8745514f95966546a3fe84f366f8cd2dcc28f44c9734891bd6ea6c3ff01494"
+    },
+    {
+      "file": "src/database/migrations/1792015200000-AddGoogleIdentityToUsers.ts",
+      "name": "AddGoogleIdentityToUsers1792015200000",
+      "sha256": "c8a1ae6538d563b82a650992627b354ce141122b6d2cd98141019d1c5f00e05a"
+    },
+    {
+      "file": "src/database/migrations/1792018800000-CreatePasswordResetTokens.ts",
+      "name": "CreatePasswordResetTokens1792018800000",
+      "sha256": "d56540823220d876271cf71a8d29cb7766870df6c8ce858662567fc88a65b66c"
+    },
+    {
+      "file": "src/database/migrations/1792195200000-HardenProductSkuConstraints.ts",
+      "name": "HardenProductSkuConstraints1792195200000",
+      "sha256": "f5166e8f4fad54591088c22be1c71f324a090b76687c8de1c616c73211000550"
+    },
+    {
+      "file": "src/database/migrations/1792368000000-CreateKaggleImportAndAuctions.ts",
+      "name": "CreateKaggleImportAndAuctions1792368000000",
+      "sha256": "36aa9dc255a6ae1cd71a70f7eeb22b3bf435d8e1020ac5df43cf1b6785710e03"
+    },
+    {
+      "file": "src/database/migrations/1792370000000-RenamePaymentDeadlineToHoldExpiresAtInOrders.ts",
+      "name": "RenamePaymentDeadlineToHoldExpiresAtInOrders1792370000000",
+      "sha256": "3e797121d217aed2f67edc1b33eb37c017e57c8b2d79b35f46ff1f7c1330af0a"
+    },
+    {
+      "file": "src/database/migrations/1792969200000-AddWarehouseAndExpiryOutbox.ts",
+      "name": "AddWarehouseAndExpiryOutbox1792969200000",
+      "sha256": "579a2f4290ed6ad9f7f6c4cc9f81a83803681d6c06f81091ae8342a0d4e88cbb"
+    },
+    {
+      "file": "src/database/migrations/1793040000000-AddCartItemReservations.ts",
+      "name": "AddCartItemReservations1793040000000",
+      "sha256": "ced659153734fe33c2cad3fd8d591ab7f5e3f2045b5fae496a74ca9821a0363f"
+    },
+    {
+      "file": "src/database/migrations/1793050000000-AllowCancelledStatusInCheckoutSessions.ts",
+      "name": "AllowCancelledStatusInCheckoutSessions1793050000000",
+      "sha256": "97cf0dab1669661ec05d3ba54daee16c1e6ad1f8124fd38dc1ce87e508613c02"
+    },
+    {
+      "file": "src/database/migrations/1793131200000-AddOriginalPriceToProductSkus.ts",
+      "name": "AddOriginalPriceToProductSkus1793131200000",
+      "sha256": "63907f0453f81dcd3872d833f994739df6db3031fed3dc0e7f94717dc25be375"
+    },
+    {
+      "file": "src/database/migrations/1793134800000-CreateSellerInventoryAdjustments.ts",
+      "name": "CreateSellerInventoryAdjustments1793134800000",
+      "sha256": "8df8d73a7be694cf3319a85f086fa43a3ca3f718cb468b6762f63bbfe6ceb28a"
+    },
+    {
+      "file": "src/database/migrations/1793138400000-AllowHiddenProductStatus.ts",
+      "name": "AllowHiddenProductStatus1793138400000",
+      "sha256": "f023cba18373576f49b04a1555b2d60713e98cd9a66bccd918510d6d61fc601c"
+    },
+    {
+      "file": "src/database/migrations/1793224800000-CreateIdentityShops.ts",
+      "name": "CreateIdentityShops1793224800000",
+      "sha256": "d9f96a3b64ad59bf5ecc912ce054411ed839aaf65a07544d53a9bc7bb686f556"
+    },
+    {
+      "file": "src/database/migrations/1793584800000-AddPayosOrderCodeToPayments.ts",
+      "name": "AddPayosOrderCodeToPayments1793584800000",
+      "sha256": "cc3fda74a4398e435100d51fc09413f32cda43e12d554447969c45aefb5e1cce"
+    },
+    {
+      "file": "src/database/migrations/1793757600000-AddOrderShipmentTracking.ts",
+      "name": "AddOrderShipmentTracking1793757600000",
+      "sha256": "e7854c5b0d27047d63e9a88fef1d5b8f70ad90a5734501bca4217ac33ab7d074"
+    },
+    {
+      "file": "src/database/migrations/1794096000000-CreateOrderCancellations.ts",
+      "name": "CreateOrderCancellations1794096000000",
+      "sha256": "dcd8c0579130f493b759b6a21381357803e4477abb78f7613bec09bc714f48bc"
+    },
+    {
+      "file": "src/database/migrations/1794103200000-CreateOrderRefunds.ts",
+      "name": "CreateOrderRefunds1794103200000",
+      "sha256": "7ab749c7a89c25ba536b2f2d7a4d6345588d8badab005a51486c10f63af00a6c"
+    },
+    {
+      "file": "src/database/migrations/1794110400000-CreateOrderDisputes.ts",
+      "name": "CreateOrderDisputes1794110400000",
+      "sha256": "ef688a3bab7e0d16785b91a7a1cadd32b8701dad14b393f8f710400e6c47f9ac"
+    },
+    {
+      "file": "src/database/migrations/1794189600000-MigrateSupportStaffRole.ts",
+      "name": "MigrateSupportStaffRole1794189600000",
+      "sha256": "d881af48ff5eaeecea1d7e0b76e7852826aa36690380424f7c0cd382a878ed14"
+    },
+    {
+      "file": "src/database/migrations/1794193200000-AddShopStatusMetadata.ts",
+      "name": "AddShopStatusMetadata1794193200000",
+      "sha256": "575b7ea6faeb1ae9145bd0d8798aad647e2d6bc16a704c8998d1d7325de8b931"
+    },
+    {
+      "file": "src/database/migrations/1794200000000-AddDeliveredAtToOrders.ts",
+      "name": "AddDeliveredAtToOrders1794200000000",
+      "sha256": "2b9d8b7051f397ae90966a187a725fc206dac04455c1af6f8abb8f3c4cdd8e5f"
+    },
+    {
+      "file": "src/database/migrations/1794279600000-AddGhnV3Address.ts",
+      "name": "AddGhnV3Address1794279600000",
+      "sha256": "85b616ad31c05c812e6be452f8da6dfa7130bb7b85f4d401cb35e2dc04772507"
+    },
+    {
+      "file": "src/database/migrations/1794283200000-AddOrderItemWeightSnapshot.ts",
+      "name": "AddOrderItemWeightSnapshot1794283200000",
+      "sha256": "1088eeed15f83a89cd06873dc5e6d4e648aaf069ff8b0259dd53e316a7c41223"
+    },
+    {
+      "file": "src/database/migrations/1794290000000-AddCodeToAuctions.ts",
+      "name": "AddCodeToAuctions1794290000000",
+      "sha256": "17c3b6eea1be19f654b6775a663a3bae643e37e88fb7ec168f5f628af1d12394"
+    },
+    {
+      "file": "src/database/migrations/1794355200000-CreateChatSchema.ts",
+      "name": "CreateChatSchema1794355200000",
+      "sha256": "50744b422e9fb74257a34c22039d99e6ec2ef448f463ce458dc9847dbdc36606"
+    },
+    {
+      "file": "src/database/migrations/1794360000000-AddBuyerBankInfoToOrderRefunds.ts",
+      "name": "AddBuyerBankInfoToOrderRefunds1794360000000",
+      "sha256": "bc793126e1fd70def1ce66d9b1215d229f564450ada3457da913a331d960a47a"
+    },
+    {
+      "file": "src/database/migrations/1794370000000-AuctionBiddingCore.ts",
+      "name": "AuctionBiddingCore1794370000000",
+      "sha256": "50985535f31bef191a10ab181c0ffbca0b2d81fd7be0976b7363d39d7d7cdcb6"
+    },
+    {
+      "file": "src/database/migrations/1794450000000-ReconcileChatSchema.ts",
+      "name": "ReconcileChatSchema1794450000000",
+      "sha256": "22c7e3a61ce2c8b7b81a52691d4ac22f2adacf77ed95fa4a169f6d4abf44ab07"
+    },
+    {
+      "file": "src/database/migrations/1794531600000-AddNotificationDeliveryFields.ts",
+      "name": "AddNotificationDeliveryFields1794531600000",
+      "sha256": "4e51f259a2f53aead9fd3c237fc2c7dd5328e58292b89ba94071bb6fb14653f5"
+    }
+  ],
+  "reputationMigration": {
+    "file": "src/database/migrations/1794873600000-DurableReputationRewards.ts",
+    "name": "DurableReputationRewards1794873600000"
+  }
+}

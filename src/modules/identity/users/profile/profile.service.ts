@@ -9,6 +9,7 @@ import { UpdateProfileDto } from '../dtos/update-profile.dto.js';
 import { ProfileUserEntity } from '../entities/profile-user.entity.js';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressService } from '../addresses/address.service.js';
+import { IdentityReputationApi } from '../../identity-reputation.api.js';
 
 export type PublicProfile = {
   id: string;
@@ -18,6 +19,7 @@ export type PublicProfile = {
   avatarUrl: string | null;
   roles: string[];
   trustLevel: string;
+  profileCompletionRewarded: boolean;
   addresses: UserAddressEntity[];
 };
 
@@ -28,6 +30,7 @@ export class ProfileService {
     private readonly users: Repository<ProfileUserEntity>,
     private readonly dataSource: DataSource,
     private readonly addresses: AddressService,
+    private readonly reputation: IdentityReputationApi,
   ) {}
 
   async getProfile(userId: string): Promise<PublicProfile> {
@@ -52,11 +55,9 @@ export class ProfileService {
           ORDER BY r.code`,
         [userId],
       ),
-      this.dataSource.query<{ trust_level: string }[]>(
-        `SELECT trust_level
-           FROM identity.reputation_scores
-          WHERE user_id = $1
-          LIMIT 1`,
+      this.dataSource.query<{ trust_level: string; rewarded: boolean }[]>(
+        `SELECT (SELECT trust_level FROM identity.reputation_scores WHERE user_id = $1) AS trust_level,
+          EXISTS (SELECT 1 FROM identity.profile_completion_rewards WHERE user_id = $1) AS rewarded`,
         [userId],
       ),
       this.addresses.list(userId),
@@ -70,6 +71,7 @@ export class ProfileService {
       avatarUrl: user.avatarUrl,
       roles: roleRows.map(({ code }) => code),
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
+      profileCompletionRewarded: trustRows[0]?.rewarded ?? false,
       addresses: addresses.map((addr) => {
         const { userId: _, ...rest } = addr;
         return rest as unknown as typeof addr;
@@ -86,14 +88,19 @@ export class ProfileService {
     );
 
     try {
-      const result = await this.users
-        .createQueryBuilder()
-        .update(ProfileUserEntity)
-        .set(changes)
-        .where('id = :id', { id: userId })
-        .andWhere('deleted_at IS NULL')
-        .execute();
-      if (result.affected !== 1) throw new NotFoundException('User not found');
+      await this.dataSource.transaction(async (manager) => {
+        const result = await manager
+          .getRepository(ProfileUserEntity)
+          .createQueryBuilder()
+          .update(ProfileUserEntity)
+          .set(changes)
+          .where('id = :id', { id: userId })
+          .andWhere('deleted_at IS NULL')
+          .execute();
+        if (result.affected !== 1)
+          throw new NotFoundException('User not found');
+        await this.reputation.rewardProfileCompletion(userId, manager);
+      });
     } catch (error: unknown) {
       if (
         typeof error === 'object' &&

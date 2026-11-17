@@ -24,6 +24,7 @@ describe('IdentityReputationService', () => {
     it('rewards +3 reputation, updates reputation_scores, reputation_history, and bidder_eligibility', async () => {
       // 1. History check: not yet rewarded
       managerMock.query
+        .mockResolvedValueOnce([{ id: 'user-1' }]) // user lock before history/score
         .mockResolvedValueOnce([]) // history check
         .mockResolvedValueOnce([{ score: 50, trust_level: 'STANDARD' }]) // getOrCreate with lock
         .mockResolvedValueOnce([]) // update reputation_scores
@@ -39,6 +40,11 @@ describe('IdentityReputationService', () => {
         trustLevel: 'STANDARD',
         alreadyRewarded: false,
       });
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        1,
+        'SELECT id FROM identity.users WHERE id = $1 FOR UPDATE',
+        ['user-1'],
+      );
 
       // Verify update reputation_scores
       expect(managerMock.query).toHaveBeenCalledWith(
@@ -62,6 +68,7 @@ describe('IdentityReputationService', () => {
     it('returns existing score without duplicate reward on idempotent retry', async () => {
       // History check returns existing record
       managerMock.query
+        .mockResolvedValueOnce([{ id: 'user-1' }]) // user lock before idempotency check
         .mockResolvedValueOnce([{ id: 'existing-history-1' }]) // history check
         .mockResolvedValueOnce([{ score: 53, trust_level: 'STANDARD' }]); // current score check
 
@@ -87,6 +94,7 @@ describe('IdentityReputationService', () => {
     it('penalizes -30 reputation, sets is_restricted = true if score < 50, records penalty and history', async () => {
       // 1. Penalty check: not yet penalized
       managerMock.query
+        .mockResolvedValueOnce([{ id: 'user-1' }]) // user lock before history/score
         .mockResolvedValueOnce([]) // penalty check
         .mockResolvedValueOnce([{ score: 60, trust_level: 'STANDARD' }]) // getOrCreate with lock (60 - 30 = 30 -> UNTRUSTED, restricted)
         .mockResolvedValueOnce([]) // update reputation_scores
@@ -107,6 +115,11 @@ describe('IdentityReputationService', () => {
         isRestricted: true,
         alreadyPenalized: false,
       });
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        1,
+        'SELECT id FROM identity.users WHERE id = $1 FOR UPDATE',
+        ['user-1'],
+      );
 
       // Verify penalties inserted with score_delta -30
       expect(managerMock.query).toHaveBeenCalledWith(
@@ -123,6 +136,7 @@ describe('IdentityReputationService', () => {
 
     it('returns existing penalty state without duplicate deduction on worker retry', async () => {
       managerMock.query
+        .mockResolvedValueOnce([{ id: 'user-1' }]) // user lock before idempotency check
         .mockResolvedValueOnce([{ id: 'existing-penalty-1' }]) // penalty check
         .mockResolvedValueOnce([{ score: 30, trust_level: 'UNTRUSTED' }]); // current score check
 

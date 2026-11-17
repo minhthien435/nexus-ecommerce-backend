@@ -39,6 +39,7 @@ describe('IdentityPublicApiService', () => {
       status: 'ACTIVE',
       roles: ['BUYER'],
       trustLevel: 'TRUSTED',
+      profileCompletionRewarded: false,
     });
     expect(users.findOne).toHaveBeenCalledWith(
       expect.objectContaining({

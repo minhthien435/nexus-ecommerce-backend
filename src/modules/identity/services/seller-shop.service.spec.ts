@@ -10,6 +10,9 @@ import { SellerShopService } from './seller-shop.service.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const shopId = '22222222-2222-4222-8222-222222222222';
+const reputation = {
+  rewardShopProfileCompletion: vi.fn().mockResolvedValue({ newScore: 60 }),
+};
 const now = new Date('2026-11-01T00:00:00.000Z');
 const dto = {
   name: 'Gốm Sứ Việt',
@@ -111,7 +114,7 @@ function setup(options?: {
     getRepository: vi.fn().mockReturnValue(shopRepo),
   };
   return {
-    service: new SellerShopService(dataSource as never),
+    service: new SellerShopService(dataSource as never, reputation as never),
     dataSource,
     manager,
     shopRepo,
@@ -139,9 +142,10 @@ describe('SellerShopService', () => {
     };
     const dataSource = { transaction: vi.fn(async (work) => work(manager)) };
 
-    const result = await new SellerShopService(dataSource as never).closeMyShop(
-      userId,
-    );
+    const result = await new SellerShopService(
+      dataSource as never,
+      reputation as never,
+    ).closeMyShop(userId);
 
     expect(qb.setLock).toHaveBeenCalledWith('pessimistic_write');
     expect(result.status).toBe('CLOSED');
@@ -164,9 +168,12 @@ describe('SellerShopService', () => {
         save: vi.fn(),
       };
       const manager = { getRepository: vi.fn().mockReturnValue(repo) };
-      const service = new SellerShopService({
-        transaction: vi.fn(async (work) => work(manager)),
-      } as never);
+      const service = new SellerShopService(
+        {
+          transaction: vi.fn(async (work) => work(manager)),
+        } as never,
+        reputation as never,
+      );
       if (expectedError)
         await expect(service.closeMyShop(userId)).rejects.toBeInstanceOf(
           NotFoundException,
@@ -191,6 +198,11 @@ describe('SellerShopService', () => {
       { shopId },
     );
     expect(result.roles).toEqual(['BUYER', 'SELLER']);
+    expect(result.reputationScore).toBe(60);
+    expect(reputation.rewardShopProfileCompletion).toHaveBeenCalledWith(
+      shopId,
+      test.manager,
+    );
     expect(result).not.toHaveProperty('identityNumber');
   });
 
@@ -290,6 +302,14 @@ describe('SellerShopService', () => {
     });
     expect(updated.headline).toBe('Tinh hoa Việt');
     expect(updated.logoUrl).toBeNull();
+    expect(updated.reputationScore).toBe(60);
+    expect(test.shopRepo.findOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
+    expect(reputation.rewardShopProfileCompletion).toHaveBeenCalledWith(
+      shopId,
+      test.manager,
+    );
     expect(updated).not.toHaveProperty('identityNumber');
   });
 

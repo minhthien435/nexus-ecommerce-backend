@@ -24,11 +24,16 @@ function setup() {
     findOne: vi.fn().mockResolvedValue(user),
     createQueryBuilder: vi.fn().mockReturnValue(builder),
   };
-  const dataSource = {
+  const dataSource: any = {
     query: vi
       .fn()
       .mockResolvedValueOnce([{ code: 'CUSTOMER' }, { code: 'SELLER' }])
       .mockResolvedValueOnce([{ trust_level: 'TRUSTED' }]),
+  };
+  const manager = { getRepository: () => users };
+  dataSource.transaction = vi.fn(async (work) => work(manager));
+  const reputation = {
+    rewardProfileCompletion: vi.fn().mockResolvedValue(null),
   };
   const addresses = {
     list: vi.fn().mockResolvedValue([{ addressLine: 'Updated street' }]),
@@ -38,8 +43,11 @@ function setup() {
       users as never,
       dataSource as never,
       addresses as never,
+      reputation as never,
     ),
     addresses,
+    manager,
+    reputation,
     users,
     dataSource,
     builder,
@@ -56,6 +64,7 @@ describe('ProfileService', () => {
       ...user,
       roles: ['CUSTOMER', 'SELLER'],
       trustLevel: 'TRUSTED',
+      profileCompletionRewarded: false,
       addresses: [{ addressLine: 'Updated street' }],
     });
     expect(users.findOne).toHaveBeenCalledWith(
@@ -97,6 +106,24 @@ describe('ProfileService', () => {
     });
     expect(test.builder.where).toHaveBeenCalledWith('id = :id', { id: userId });
     expect(test.builder.andWhere).toHaveBeenCalledWith('deleted_at IS NULL');
+    expect(test.reputation.rewardProfileCompletion).toHaveBeenCalledWith(
+      userId,
+      test.manager,
+    );
+    expect(test.execute.mock.invocationCallOrder[0]).toBeLessThan(
+      test.reputation.rewardProfileCompletion.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('fails the PATCH transaction when the reward fails before reading a response', async () => {
+    const test = setup();
+    test.reputation.rewardProfileCompletion.mockRejectedValue(
+      new Error('reward failed'),
+    );
+    await expect(
+      test.service.updateProfile(userId, { fullName: 'Updated' }),
+    ).rejects.toThrow('reward failed');
+    expect(test.users.findOne).not.toHaveBeenCalled();
   });
 
   it('maps phone uniqueness conflicts and concurrent soft-delete to HTTP errors', async () => {
