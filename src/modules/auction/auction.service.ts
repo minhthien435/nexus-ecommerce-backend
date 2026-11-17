@@ -308,28 +308,33 @@ export class AuctionService {
       where: { skuId, status: In(['SCHEDULED', 'ACTIVE']) },
     });
     if (duplicate) return null;
-    const prices = this.calculateDemoPrices(sku.price);
-    const endsAt = new Date(
-      options.startsAt.getTime() + durationDays * 86_400_000,
-    );
-    const code = `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    const auction = await this.auctions.save(
-      this.auctions.create({
-        code,
-        sellerId: product.sellerId,
-        productId: product.id,
-        skuId: sku.id,
-        titleSnapshot: product.name,
-        ...prices,
-        currentPrice: prices.startPrice,
-        currency: sku.currency,
-        startsAt: options.startsAt,
-        endsAt,
-        originalEndsAt: endsAt,
-        status: options.startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
-      }),
-    );
-    this.scheduler?.schedule(auction);
+    const auction = await this.transaction(async (manager) => {
+      if (!(await this.isSellerEligible(manager, product.sellerId)))
+        return null;
+      const auctionRepo = manager.getRepository(AuctionEntity);
+      const prices = this.calculateDemoPrices(sku.price);
+      const endsAt = new Date(
+        options.startsAt.getTime() + durationDays * 86_400_000,
+      );
+      const code = `AUC-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      return auctionRepo.save(
+        auctionRepo.create({
+          code,
+          sellerId: product.sellerId,
+          productId: product.id,
+          skuId: sku.id,
+          titleSnapshot: product.name,
+          ...prices,
+          currentPrice: prices.startPrice,
+          currency: sku.currency,
+          startsAt: options.startsAt,
+          endsAt,
+          originalEndsAt: endsAt,
+          status: options.startsAt <= new Date() ? 'ACTIVE' : 'SCHEDULED',
+        }),
+      );
+    });
+    if (auction) this.scheduler?.schedule(auction);
     return auction;
   }
 
@@ -1908,7 +1913,7 @@ export class AuctionService {
   private sellerIneligible(): ForbiddenException {
     return new ForbiddenException({
       errorCode: 'SELLER_AUCTION_INELIGIBLE',
-      message: 'Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu 50',
+      message: `Cửa hàng phải đang hoạt động và có điểm uy tín tối thiểu ${MIN_SELLER_REPUTATION}`,
     });
   }
 
