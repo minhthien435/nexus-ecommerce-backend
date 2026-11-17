@@ -204,7 +204,8 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
       expect(geminiGenerate.mock.calls[1][0].contents).toEqual(
         expect.arrayContaining([round1Content]),
       );
-      // Guest declarations omit track_my_order but include the registered read tools.
+      // Guest declarations omit track_my_order / get_my_auction_participations
+      // but include the registered public read tools (catalog + auctions).
       const declaredNames =
         geminiGenerate.mock.calls[0][0].config.tools[0].functionDeclarations.map(
           (d: { name: string }) => d.name,
@@ -216,6 +217,8 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'get_trending_products',
         'compare_products',
         'get_price_insight',
+        'search_auctions',
+        'get_auction_detail',
       ]);
 
       // 2) User explicitly asks to open product -> NAVIGATE allowed
@@ -330,6 +333,9 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'get_trending_products',
         'compare_products',
         'get_price_insight',
+        'search_auctions',
+        'get_auction_detail',
+        'get_my_auction_participations',
       ]);
 
       // Missing API key degrades cleanly to 503 AI_UNAVAILABLE

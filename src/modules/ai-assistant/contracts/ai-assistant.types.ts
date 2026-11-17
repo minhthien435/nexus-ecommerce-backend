@@ -7,6 +7,7 @@ export interface AiChatContext {
   currentPath?: string;
   currentUrl?: string;
   currentProductSlug?: string;
+  currentAuctionIdOrCode?: string;
   userId?: string;
 }
 
@@ -56,13 +57,34 @@ export interface AiProductCard {
   shop?: AiProductShopSummary | null;
 }
 
+export interface AiAuctionCard {
+  id: string;
+  auctionId: string;
+  code: string | null;
+  title: string;
+  imageUrl?: string | null;
+  status: string;
+  currentPrice: number;
+  bidStep: number;
+  minNextBid: number;
+  bidCount: number;
+  startTime: string | null;
+  endTime: string;
+  has3dModel: boolean;
+}
+
 export type AiUiActionType =
-  'SHOW_PRODUCTS' | 'NAVIGATE' | 'OPEN_SEARCH' | 'HANDOFF_TO_SHOP';
+  | 'SHOW_PRODUCTS'
+  | 'SHOW_AUCTIONS'
+  | 'NAVIGATE'
+  | 'OPEN_SEARCH'
+  | 'HANDOFF_TO_SHOP';
 
 export interface AiUiAction {
   type: AiUiActionType;
   url?: string;
   slug?: string;
+  auctionIdOrCode?: string;
   searchQuery?: string;
   shopSlug?: string;
   productSlug?: string;
@@ -70,6 +92,7 @@ export interface AiUiAction {
 
 export interface AiUiActionVerifyOptions {
   allowedShopSlugs?: readonly string[];
+  observedAuctions?: readonly AiAuctionCard[];
   userMessage?: string;
 }
 
@@ -87,6 +110,7 @@ export interface AiAgentChatInput {
 export interface AiAgentChatOutput {
   reply: string;
   products: AiProductCard[];
+  auctions?: AiAuctionCard[];
   action: AiUiAction | null;
   suggestions: string[];
 }
@@ -110,6 +134,7 @@ export interface AiModelTurnResponse {
 export interface AiToolExecutionResult {
   toolResult: Record<string, unknown>;
   products?: AiProductCard[];
+  auctions?: AiAuctionCard[];
   observedShopSlugs?: string[];
 }
 

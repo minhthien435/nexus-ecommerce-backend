@@ -19,6 +19,7 @@ import {
 } from '../contracts/ai-assistant.types.js';
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const AUCTION_ID_PATTERN = /^[a-zA-Z0-9_-]{2,100}$/;
 
 @Injectable()
 export class PlaceholderAiModelClient extends AiModelClientApi {
@@ -102,7 +103,64 @@ export class DefaultAiUiActionGuard extends AiUiActionGuardApi {
           : null;
       }
 
+      case 'SHOW_AUCTIONS': {
+        const observedAuctions = options?.observedAuctions ?? [];
+        if (observedAuctions.length === 0) return null;
+        if (args.auctionIds === undefined) {
+          return { type: 'SHOW_AUCTIONS' };
+        }
+        if (
+          !Array.isArray(args.auctionIds) ||
+          args.auctionIds.length > 5 ||
+          !args.auctionIds.every(
+            (id) =>
+              typeof id === 'string' && AUCTION_ID_PATTERN.test(id.trim()),
+          )
+        ) {
+          return null;
+        }
+        const validKeys = new Set<string>();
+        for (const auction of observedAuctions) {
+          validKeys.add(auction.id.toLowerCase());
+          validKeys.add(auction.auctionId.toLowerCase());
+          if (auction.code) validKeys.add(auction.code.toLowerCase());
+        }
+        return args.auctionIds.some((id) =>
+          validKeys.has(id.trim().toLowerCase()),
+        )
+          ? { type: 'SHOW_AUCTIONS' }
+          : null;
+      }
+
       case 'NAVIGATE': {
+        const rawAuctionId =
+          typeof args.auctionIdOrCode === 'string'
+            ? args.auctionIdOrCode.trim()
+            : '';
+        if (rawAuctionId && AUCTION_ID_PATTERN.test(rawAuctionId)) {
+          const observedAuctions = options?.observedAuctions ?? [];
+          const matchedAuction = observedAuctions.find(
+            (a) =>
+              a.id.toLowerCase() === rawAuctionId.toLowerCase() ||
+              a.auctionId.toLowerCase() === rawAuctionId.toLowerCase() ||
+              (a.code
+                ? a.code.toLowerCase() === rawAuctionId.toLowerCase()
+                : false),
+          );
+          if (!matchedAuction) {
+            this.logger.warn(
+              `Blocked NAVIGATE action for unverified auction '${rawAuctionId}'`,
+            );
+            return null;
+          }
+          const canonical = matchedAuction.code || matchedAuction.id;
+          return {
+            type: 'NAVIGATE',
+            auctionIdOrCode: canonical,
+            url: `/auctions/${encodeURIComponent(canonical)}`,
+          };
+        }
+
         const rawSlug =
           typeof args.slug === 'string' ? args.slug.trim().toLowerCase() : '';
         if (!rawSlug || !SLUG_PATTERN.test(rawSlug)) {

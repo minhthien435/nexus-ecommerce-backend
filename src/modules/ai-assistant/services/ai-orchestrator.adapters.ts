@@ -37,6 +37,12 @@ import {
   ToolExecutorService,
   type AiToolTurn,
 } from '../tools/tool-executor.service.js';
+import {
+  AI_AUCTION_TOOLS,
+  AUCTION_READ_DECLARATIONS,
+  AuctionReadToolsService,
+  type AiAuctionToolName,
+} from '../tools/auction-read-tools.service.js';
 import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 import { TRACK_MY_ORDER_DECLARATION } from '../tools/track-my-order.tool.js';
 import {
@@ -274,6 +280,9 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
     @Optional()
     @Inject(AiReadTools)
     private readonly readTools?: AiReadTools,
+    @Optional()
+    @Inject(AuctionReadToolsService)
+    private readonly auctionTools?: AuctionReadToolsService,
   ) {
     super();
   }
@@ -291,6 +300,17 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
     if (this.readTools) {
       declarations.push(...AI_READ_DECLARATIONS);
     }
+    if (this.auctionTools) {
+      for (const decl of AUCTION_READ_DECLARATIONS) {
+        if (
+          decl.name === 'get_my_auction_participations' &&
+          !options.isAuthenticated
+        ) {
+          continue;
+        }
+        declarations.push(decl);
+      }
+    }
     return declarations
       .filter((decl) => Boolean(decl.name))
       .map((decl) => ({
@@ -307,10 +327,30 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
     call: AiFunctionCall,
     context: AiChatContext,
   ): Promise<AiToolExecutionResult> {
+    if (
+      this.auctionTools &&
+      AI_AUCTION_TOOLS.includes(call.name as AiAuctionToolName)
+    ) {
+      const response = await this.auctionTools.execute(
+        call.name as AiAuctionToolName,
+        call.args ?? {},
+        context.userId,
+      );
+      return {
+        toolResult: response.result,
+        products: [],
+        auctions: response.auctions.slice(0, 5),
+        ...(response.observedShopSlugs?.length
+          ? { observedShopSlugs: response.observedShopSlugs }
+          : {}),
+      };
+    }
+
     const turn: AiToolTurn = {
       verifiedUserId: context.userId,
       userMessage: '',
       products: [],
+      auctions: [],
     };
     const rawResult = await this.toolExecutor.execute(
       call.name,
@@ -405,6 +445,7 @@ export class UiActionGuardAdapter extends AiUiActionGuardApi {
       rawActionCall.args ?? {},
       mappedProducts,
       options?.userMessage ?? '',
+      options?.observedAuctions ?? [],
     );
     return result as AiUiAction | null;
   }
@@ -466,6 +507,9 @@ export class MinhAiOrchestrator extends AiOrchestrator {
     return {
       reply: output.reply,
       products,
+      ...(output.auctions && output.auctions.length > 0
+        ? { auctions: output.auctions }
+        : {}),
       action: output.action as UiAction | null,
       suggestions: output.suggestions,
     };

@@ -20,6 +20,7 @@ import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 
 const DEFAULT_FALLBACK_COOLDOWN_MS = 30_000;
 const NOT_FOUND_COOLDOWN_MS = 300_000;
+const MAX_FALLBACK_ATTEMPT_TIMEOUT_MS = 8_000;
 const MAX_COOLDOWN_ENTRIES = 50;
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const FALLBACK_ONLY_STATUSES = new Set([404]);
@@ -201,6 +202,9 @@ export class GeminiClientService {
           lastError = error;
           const info = classifyGeminiError(error, controller.signal.aborted);
           if (controller.signal.aborted || !info.isFallbackEligible) {
+            this.logger.warn(
+              `Gemini model '${model}' stopped without further fallback (${info.reasonLabel})`,
+            );
             throw error;
           }
 
@@ -259,7 +263,10 @@ export class GeminiClientService {
 
     const attemptTimeoutMs = params.isLastCandidate
       ? remainingMs
-      : Math.max(1, Math.floor(remainingMs * 0.65));
+      : Math.min(
+          MAX_FALLBACK_ATTEMPT_TIMEOUT_MS,
+          Math.max(1, Math.floor(remainingMs * 0.65)),
+        );
 
     const attemptController = new AbortController();
     const onOuterAbort = () => attemptController.abort();
