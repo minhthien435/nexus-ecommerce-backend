@@ -5,6 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { PRIVILEGE_SEEDS } from '../../identity/rbac/rbac.constants.js';
+import { PERMISSIONS_KEY } from '../../identity/rbac/decorators/permissions.decorator.js';
+import { ROLES_KEY } from '../../identity/rbac/decorators/roles.decorator.js';
 import {
   AdminAuctionController,
   AuctionController,
@@ -261,5 +264,110 @@ describe('AuctionController', () => {
       'ADMIN',
       'Fraud',
     );
+  });
+
+  it('lists and inspects admin auctions with ADMIN role and AUCTION.ADMIN_LIST permission', async () => {
+    const adminSummary = {
+      liveCount: 2,
+      upcomingCount: 1,
+      settledCount: 3,
+      paymentTimeoutCount: 1,
+      endedCount: 0,
+      failedCount: 0,
+      cancelledCount: 0,
+      totalCount: 7,
+    };
+    const adminItem = {
+      ...mockAuctionDetail,
+      reservePrice: 2000000,
+      reserveMet: false,
+      extensionCount: 2,
+      maxExtensions: 10,
+      settlementStatus: 'PENDING_PAYMENT',
+      winnerId: 'winner-1',
+      winnerEmail: 'winner@nexus.vn',
+      winnerFullName: 'Nguyen Van A',
+      orderId: 'ord-1',
+      paymentDeadlineAt: '2026-11-18T00:00:00.000Z',
+      finalPrice: 1500000,
+      suspiciousFlags: [],
+    };
+    const mockService = {
+      listForAdmin: vi.fn().mockResolvedValue({
+        items: [adminItem],
+        summary: adminSummary,
+        total: 1,
+        page: 1,
+        limit: 12,
+        totalPages: 1,
+      }),
+      findAdminDetailByIdOrCode: vi.fn().mockResolvedValue({
+        ...adminItem,
+        bids: [],
+        statusHistory: [],
+        extensions: [],
+        settlement: {
+          id: 'set-1',
+          winnerId: 'winner-1',
+          winnerEmail: 'winner@nexus.vn',
+          winnerFullName: 'Nguyen Van A',
+          winningBidId: 'bid-1',
+          finalPrice: 1500000,
+          currency: 'VND',
+          status: 'PENDING_PAYMENT',
+          orderId: 'ord-1',
+          paymentDeadlineAt: '2026-11-18T00:00:00.000Z',
+          settledAt: '2026-11-17T00:00:00.000Z',
+        },
+      }),
+    } as unknown as AuctionService;
+
+    const adminController = new AdminAuctionController(mockService);
+    const listRes = await adminController.list({
+      status: 'LIVE',
+      search: 'Rolex',
+      page: 1,
+      limit: 12,
+    });
+    expect(mockService.listForAdmin).toHaveBeenCalledWith({
+      status: 'LIVE',
+      search: 'Rolex',
+      page: 1,
+      limit: 12,
+    });
+    expect(listRes.data.summary).toEqual(adminSummary);
+    expect(listRes.data.items[0].reservePrice).toBe(2000000);
+    expect(listRes.meta.totalItems).toBe(1);
+
+    const detailRes = await adminController.findDetail('AUC-123456-ABCD');
+    expect(mockService.findAdminDetailByIdOrCode).toHaveBeenCalledWith(
+      'AUC-123456-ABCD',
+    );
+    expect(detailRes.data.reservePrice).toBe(2000000);
+    expect(detailRes.data.settlement?.winnerEmail).toBe('winner@nexus.vn');
+
+    for (const method of ['list', 'findDetail'] as const) {
+      expect(
+        Reflect.getMetadata(
+          ROLES_KEY,
+          AdminAuctionController.prototype[method],
+        ),
+      ).toEqual(['ADMIN']);
+      expect(
+        Reflect.getMetadata(
+          PERMISSIONS_KEY,
+          AdminAuctionController.prototype[method],
+        ),
+      ).toEqual(['AUCTION.ADMIN_LIST']);
+    }
+
+    const privilege = PRIVILEGE_SEEDS.find(
+      (item) => item.code === 'AUCTION.ADMIN_LIST',
+    );
+    expect(privilege).toMatchObject({
+      code: 'AUCTION.ADMIN_LIST',
+      module: 'AUCTION',
+      roles: ['ADMIN'],
+    });
   });
 });

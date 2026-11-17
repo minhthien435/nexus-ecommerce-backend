@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { AuctionService } from '../auction.service.js';
 import { CancelAuctionDto } from '../dtos/cancel-auction.dto.js';
+import { QueryAdminAuctionsDto } from '../dtos/query-admin-auctions.dto.js';
 import { QueryAuctionBidsDto } from '../dtos/query-auction-bids.dto.js';
 import { QueryAuctionsDto } from '../dtos/query-auctions.dto.js';
 import { QueryParticipationsDto } from '../dtos/query-participations.dto.js';
@@ -246,6 +247,50 @@ export class AuctionController {
 @Controller(['api/v1/admin/auctions', 'admin/auctions'])
 export class AdminAuctionController {
   constructor(private readonly auctionService: AuctionService) {}
+
+  @Get()
+  @Roles('ADMIN')
+  @Permissions('AUCTION.ADMIN_LIST')
+  @UseGuards(AccessTokenGuard, RolesGuard, PermissionsGuard)
+  async list(@Query() query: QueryAdminAuctionsDto) {
+    const result = await this.auctionService.listForAdmin(query);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy danh sách giám sát đấu giá thành công',
+      data: {
+        items: result.items,
+        summary: result.summary,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages,
+      },
+      meta: {
+        page: result.page,
+        limit: result.limit,
+        totalItems: result.total,
+        totalPages: result.totalPages,
+        hasNextPage: result.page < result.totalPages,
+        hasPrevPage: result.page > 1,
+      },
+    };
+  }
+
+  @Get(':idOrCode')
+  @Roles('ADMIN')
+  @Permissions('AUCTION.ADMIN_LIST')
+  @UseGuards(AccessTokenGuard, RolesGuard, PermissionsGuard)
+  async findDetail(@Param('idOrCode') idOrCode: string) {
+    const result =
+      await this.auctionService.findAdminDetailByIdOrCode(idOrCode);
+    return {
+      success: true as const,
+      statusCode: HttpStatus.OK,
+      message: 'Lấy chi tiết giám sát phiên đấu giá thành công',
+      data: result,
+    };
+  }
 
   @Post(':idOrCode/cancel')
   @Roles('ADMIN')
