@@ -1,6 +1,68 @@
 ﻿# BE-REP-01 verification
 
-Date: 2026-11-17. Workspace: feat/duy/reputation-seller-threshold. No commit, push, merge or shared database writes performed.
+Date: 2026-11-17. Workspace: feat/duy/reputation-seller-threshold. Local implementation commits exist; no push, merge, deployment or shared database writes performed.
+
+## Additional pre-merge verification (current)
+
+The evidence in this section supersedes the earlier completion-integration claim below. Merge readiness remains blocked by historical migration bootstrap: running the actual repository migration chain on an empty local database fails before the new reward migration. Earlier fixture success never proved that chain.
+
+The PostgreSQL fixture now registers the actual `OrderEntity`, `OrderStatusHistoryEntity`, `CheckoutSessionEntity` and `OrderItemEntity` metadata with `synchronize:false`. Its order/history tables contain the columns needed for actual repository reads and saves. Every completion-processor integration constructs the real `OrderStateMachineService` and `IdentityReputationService`; the former direct-UPDATE transition stub is gone. The existing transition already saves both order and history, so no production save or production logic was added.
+
+The real processor test verifies persisted COMPLETED, a DELIVERED-to-COMPLETED history row with reason/actor/timestamp, +5 order ledger arithmetic, independent already-completed rewards, and no repeated history or points on a second job. Another test injects a PostgreSQL AFTER UPDATE trigger failure on the final shop write, after the order/history and ledger inserts. It checks the entire persisted order and history remain identical to their pre-job snapshots, with no ledger and unchanged shop score; removing the trigger allows a successful retry and another idempotent run.
+
+Required validation commands (PowerShell; use the equivalent process environment on other platforms):
+
+```powershell
+$env:REPUTATION_TEST_DATABASE_URL='<EXPLICIT_ISOLATED_TEST_URL>'
+npm.cmd run test:reputation:db
+# Forward ordinary Vitest options, including --coverage and reporters, after --.
+# Require PostgreSQL in the entire ordinary backend suite too:
+$env:REPUTATION_TEST_DATABASE_REQUIRED='1'
+npm.cmd run test:cov -- --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
+# Separate empty dedicated database for the actual historical chain:
+$env:REPUTATION_MIGRATION_TEST_DATABASE_URL='<EXPLICIT_EMPTY_ISOLATED_MIGRATION_URL>'
+npm.cmd run test:reputation:migrations
+# Combined DB, normal validation and historical-chain entry point:
+npm.cmd run validate:reputation
+```
+
+`test:reputation:db` is a portable Node runner forcing `REPUTATION_TEST_DATABASE_REQUIRED=1`, forwards CLI arguments, and propagates the Vitest exit status. The spec also checks the flag directly, so a full-suite invocation cannot silently skip PostgreSQL when required. Neither path imports `.env` or falls back to application configuration. The dedicated local URL guard remains in force. Ordinary runs without the flag and URL retain visible skips. No CI/deployment pipeline was invented.
+
+Targeted implementation verification on 2026-11-17:
+
+| Command / environment                                                                                       | Exit | Result                                                                                         |
+| ----------------------------------------------------------------------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `npm.cmd run test:reputation:db`, explicit loopback55439 fixture URL above                                  | 0    | 1 file, 32 passed, zero skipped                                                                |
+| `npm.cmd run test:reputation:db`, URL and required flag absent from caller                                  | 1    | Explicit missing `REPUTATION_TEST_DATABASE_URL` error before DataSource creation or connection |
+| `npm.cmd exec -- vitest run src/modules/identity/services/reputation-postgres.spec.ts`, URL and flag absent | 0    | 1 file, 32 visibly skipped                                                                     |
+| `npm.cmd run typecheck`                                                                                     | 0    | Passed                                                                                         |
+| `git diff --check`                                                                                          | 0    | Passed                                                                                         |
+
+The first targeted invocation discovered the separate ignored `_bmad-output/be-rep-02` worktree as well, causing two independent fixtures to race over the same disposable schemas (`pg_namespace_nspname_index`). Vitest discovery now names the current checkout's `src/**/*.spec.ts` and `test/**/*.spec.ts` roots; all 167 tracked specs remain included, and coverage defaults/thresholds remain unchanged. BE-REP-02 was untouched. That failed duplicate run is superseded by the clean 32-test result. An intermediate SQL parameter inference failure in the expanded fixture was also corrected before that passing run.
+
+Historical-chain attempt (root-owned harness): `npm.cmd run test:reputation:migrations`, with the separate explicit local migration URL above, builds successfully, loads all 31 actual compiled repository migrations, then fails at `AddAvatarUrlToUsers1760076000000`: PostgreSQL `3F000`, `schema "identity" does not exist`. The empty database has no fabricated bootstrap or fixture schemas, and `1794873600000-DurableReputationRewards` is not reached. Historical migrations were not modified. A valid historical bootstrap/source is still needed to prove this chain; the fixture remains a separately labeled integration test.
+
+The connection values above are placeholders for privacy. Actual runs supplied explicit isolated loopback URLs; no shared environment fallback was used. `validate:reputation` is a documented composition entry point; it was not reported as passing end to end, and its historical-chain stage remains blocked.
+
+### Final current-revision checks
+
+Root ran `npm.cmd run test:cov -- --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json --reporter=default --reporter=json --outputFile=_bmad-output/reputation-supplemental-tests.json` with the explicit isolated URL and `REPUTATION_TEST_DATABASE_REQUIRED=1`: **exit0, 167 files, 1394 passed, 0 skipped, 0 failed, 0 todo**, including all32 PostgreSQL tests. Lint, typecheck and build each exited0. Required missing-URL invocation exited1 as intended; ordinary missing-URL invocation exited0 with0 passed/32 skipped/0 failed. Historical-chain npm command exited1 at first migration3F000 after its build succeeded; new reputation migration was not reached.
+
+Coverage from the full unchanged backend coverage scope, S/B/F/L:
+
+| Scope                          | Statements         | Branches               | Functions          | Lines              |
+| ------------------------------ | ------------------ | ---------------------- | ------------------ | ------------------ |
+| Overall                        | 86.76% (6641/7654) | 75.24% (3992/5305)     | 82.74% (1189/1437) | 87.95% (6412/7290) |
+| identity-reputation.service.ts | 96.33% (105/109)   | 85.45% (47/55)         | 100% (15/15)       | 99.02% (102/103)   |
+| order-completion.processor.ts  | 100% (16/16)       | 100% (0/0 JS branches) | 100% (3/3)         | 100% (16/16)       |
+| order-state-machine.service.ts | 96.15% (50/52)     | 93.10% (27/29)         | 100% (8/8)         | 97.91% (47/48)     |
+| profile.service.ts             | 100% (25/25)       | 100% (14/14)           | 100% (7/7)         | 100% (24/24)       |
+
+The changed PostgreSQL spec is a test file, excluded from production coverage by the existing defaults;32 actual cases executed. CLI runners are exercised as subprocess commands rather than instrumented by Vitest, so no CLI source coverage percentage is claimed. Processor0/0 JavaScript branches does not measure SQL predicate coverage; SQL outcomes are exercised by real database cases.
+
+Remaining uncovered reputation branch locations include missing order/shop (lines148/166), TRUSTED70..89 transition (217), and older score/trust fallback paths (471/493/494/506/509). State-machine uncovered branches117/160 concern absent checkout session during expiry finalization and malformed database-clock results, outside the new completion path. No threshold or coverage exclusion was changed to hide these gaps.
+
+BMAD quick review of this verification change returned no findings. Fresh `git fetch origin` kept the integration target at `ddb3d57173601d5bc174bcd7e727aaf105789326`. Final merge-tree outcome is recorded in [the supplemental handoff](reputation-merge-verification.md). BE-REP-02 ref and worktree remain unchanged. The missing bootstrap/historical-chain proof prevents an unconditional merge-readiness claim.
 
 ## Final verification after review fixes
 
@@ -26,7 +88,7 @@ The full-suite and coverage results in this section describe the initial impleme
 All commands used PowerShell from repository root. For PostgreSQL runs the process environment explicitly set:
 
 ```powershell
-$env:REPUTATION_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55439/nexus_reputation_test'
+$env:REPUTATION_TEST_DATABASE_URL='<EXPLICIT_ISOLATED_TEST_URL>'
 ```
 
 No .env or application connection fallback was used. Parent provisioned PostgreSQL18.6 locally. The integration fixture recreates disposable identity/commerce/auction schemas exclusively in that dedicated database. It is not an end-to-end run of every historical migration.

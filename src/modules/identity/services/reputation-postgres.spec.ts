@@ -1,15 +1,25 @@
 ﻿import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DataSource, type EntityManager } from 'typeorm';
-import type { OrderTransitionInput } from '../../commerce/services/order-state-machine.service.js';
+import { OrderStateMachineService } from '../../commerce/services/order-state-machine.service.js';
+import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
+import { OrderStatusHistoryEntity } from '../../commerce/domain/entities/order-status-history.entity.js';
+import { CheckoutSessionEntity } from '../../commerce/domain/entities/checkout-session.entity.js';
+import { OrderItemEntity } from '../../commerce/domain/entities/order-item.entity.js';
 import { DurableReputationRewards1794873600000 } from '../../../database/migrations/1794873600000-DurableReputationRewards.js';
 import { ProfileUserEntity } from '../users/entities/profile-user.entity.js';
 import { ProfileService } from '../users/profile/profile.service.js';
 import { IdentityReputationService } from './identity-reputation.service.js';
 import { OrderCompletionProcessor } from '../../commerce/processors/order-completion.processor.js';
 
-// Opt-in only. Never import dotenv or silently fall back to the application DB.
+// Optional in ordinary runs; the explicit runner requires this suite, including in full runs.
+// Never import dotenv or silently fall back to the application DB.
 const url = process.env.REPUTATION_TEST_DATABASE_URL;
+if (process.env.REPUTATION_TEST_DATABASE_REQUIRED === '1' && !url) {
+  throw new Error(
+    'REPUTATION_TEST_DATABASE_URL is required when REPUTATION_TEST_DATABASE_REQUIRED=1',
+  );
+}
 if (url) {
   const target = new URL(url);
   if (
@@ -34,7 +44,13 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     db = new DataSource({
       type: 'postgres',
       url,
-      entities: [ProfileUserEntity],
+      entities: [
+        ProfileUserEntity,
+        OrderEntity,
+        OrderStatusHistoryEntity,
+        CheckoutSessionEntity,
+        OrderItemEntity,
+      ],
       synchronize: false,
       extra: { max: 16 },
     });
@@ -64,10 +80,18 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       CREATE TABLE identity.shops (id uuid PRIMARY KEY, seller_id uuid REFERENCES identity.users(id), name varchar(150), phone varchar(30),
         warehouse_address text, identity_number varchar(100), reputation_score integer NOT NULL DEFAULT 50, deleted_at timestamptz, updated_at timestamptz DEFAULT NOW());
       CREATE UNIQUE INDEX shops_seller ON identity.shops(seller_id) WHERE deleted_at IS NULL;
-      CREATE TABLE commerce.orders (id uuid PRIMARY KEY, seller_id uuid REFERENCES identity.users(id), status varchar, total numeric NOT NULL DEFAULT 100,
-        delivered_at timestamptz);
+      CREATE TABLE commerce.orders (id uuid PRIMARY KEY, order_number varchar(50) UNIQUE NOT NULL,
+        checkout_session_id uuid, buyer_id uuid NOT NULL, seller_id uuid REFERENCES identity.users(id),
+        source varchar(20) NOT NULL DEFAULT 'CART', auction_id uuid, status varchar(30),
+        subtotal numeric(18,2) NOT NULL DEFAULT 100, discount_amount numeric(18,2) NOT NULL DEFAULT 0,
+        shipping_fee numeric(18,2) NOT NULL DEFAULT 0, tax numeric(18,2) NOT NULL DEFAULT 0,
+        total numeric(18,2) NOT NULL DEFAULT 100, currency char(3) NOT NULL DEFAULT 'VND',
+        shipping_address_snapshot jsonb NOT NULL DEFAULT '{}', tracking_code varchar(100), carrier_name varchar(100),
+        delivered_at timestamptz, hold_expires_at timestamptz, idempotency_key varchar(100) UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT NOW(), updated_at timestamptz NOT NULL DEFAULT NOW());
       CREATE TABLE commerce.order_status_history (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid REFERENCES commerce.orders(id),
-        to_status varchar, created_at timestamptz NOT NULL DEFAULT NOW());
+        from_status varchar(30), to_status varchar(30) NOT NULL, reason text, changed_by uuid,
+        created_at timestamptz NOT NULL DEFAULT NOW());
       CREATE TABLE commerce.order_disputes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid UNIQUE REFERENCES commerce.orders(id), status varchar);
       CREATE TABLE commerce.order_refunds (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid UNIQUE REFERENCES commerce.orders(id), amount numeric, status varchar);
     `);
@@ -163,8 +187,9 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   async function order(sellerId: string, status = 'COMPLETED', hours = 73) {
     const id = randomUUID();
     await db.query(
-      `INSERT INTO commerce.orders(id,seller_id,status,delivered_at) VALUES ($1,$2,$3,NOW()-INTERVAL '100 hours')`,
-      [id, sellerId, status],
+      `INSERT INTO commerce.orders(id,order_number,buyer_id,seller_id,status,delivered_at)
+        VALUES ($1,$4,$2,$2,$3,NOW()-INTERVAL '100 hours')`,
+      [id, sellerId, status, id],
     );
     await db.query(
       `INSERT INTO commerce.order_status_history(order_id,to_status,created_at) VALUES ($1,'DELIVERED',NOW()-$2*INTERVAL '1 hour')`,
@@ -662,11 +687,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     for (let i = 0; i < 105; i++) await order(s.sellerId);
     const processor = new OrderCompletionProcessor(
       db,
-      {
-        transition: async () => {
-          throw new Error('unexpected delivered');
-        },
-      } as never,
+      new OrderStateMachineService(),
       reputation,
     );
     expect(await processor.process({} as never)).toBe(0);
@@ -682,11 +703,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     for (let i = 0; i < 105; i++) await order(s.sellerId);
     const processor = new OrderCompletionProcessor(
       db,
-      {
-        transition: async () => {
-          throw new Error('unexpected delivered');
-        },
-      } as never,
+      new OrderStateMachineService(),
       reputation,
     );
     await Promise.all([
@@ -697,27 +714,33 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     expect(await shopScore(s.id)).toBe(100);
   });
 
-  it('preserves delivered completion work while rewarding due completed orders in the same job', async () => {
+  it('persists real delivered transitions, history and rewards together and retries idempotently', async () => {
     const s = await shop();
     const delivered = await order(s.sellerId, 'DELIVERED');
     const tooEarly = await order(s.sellerId, 'DELIVERED', 71);
     const completed = await order(s.sellerId);
     const processor = new OrderCompletionProcessor(
       db,
-      {
-        transition: async (
-          manager: EntityManager,
-          input: OrderTransitionInput,
-        ) => {
-          await manager.query(
-            'UPDATE commerce.orders SET status=$1 WHERE id=$2',
-            [input.toStatus, input.orderId],
-          );
-        },
-      } as never,
+      new OrderStateMachineService(),
       reputation,
     );
     expect(await processor.process({} as never)).toBe(1);
+    expect(
+      await db.getRepository(OrderEntity).findOneByOrFail({ id: delivered }),
+    ).toMatchObject({ status: 'COMPLETED' });
+    const history = await db.getRepository(OrderStatusHistoryEntity).find({
+      where: { orderId: delivered },
+      order: { createdAt: 'ASC' },
+    });
+    expect(history).toHaveLength(2);
+    expect(history[1]).toMatchObject({
+      fromStatus: 'DELIVERED',
+      toStatus: 'COMPLETED',
+      changedBy: null,
+      reason: 'Automatically completed after the 72 hour complaint window',
+    });
+    expect(history[1].createdAt).toBeInstanceOf(Date);
+    expect(await shopScore(s.id)).toBe(60);
     const claims = await db.query<Array<{ reference_id: string }>>(
       'SELECT reference_id FROM identity.shop_reputation_rewards ORDER BY reference_id',
     );
@@ -725,11 +748,90 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       [delivered, completed].sort(),
     );
     expect(
+      await db.query(
+        'SELECT source_type, old_score, new_score, delta FROM identity.shop_reputation_rewards ORDER BY old_score',
+      ),
+    ).toEqual([
+      {
+        source_type: 'ORDER_COMPLETION',
+        old_score: 50,
+        new_score: 55,
+        delta: 5,
+      },
+      {
+        source_type: 'ORDER_COMPLETION',
+        old_score: 55,
+        new_score: 60,
+        delta: 5,
+      },
+    ]);
+    expect(await processor.process({} as never)).toBe(0);
+    expect(await shopScore(s.id)).toBe(60);
+    expect(await count('identity.shop_reputation_rewards')).toBe(2);
+    expect(
+      await db.getRepository(OrderStatusHistoryEntity).find({
+        where: { orderId: delivered },
+        order: { createdAt: 'ASC' },
+      }),
+    ).toEqual(history);
+    expect(
       (
         await db.query('SELECT status FROM commerce.orders WHERE id=$1', [
           tooEarly,
         ])
       )[0].status,
     ).toBe('DELIVERED');
+  });
+
+  it('rolls real order, history, ledger and shop writes back on a database failure, then retries', async () => {
+    const s = await shop();
+    const delivered = await order(s.sellerId, 'DELIVERED');
+    const orders = db.getRepository(OrderEntity);
+    const histories = db.getRepository(OrderStatusHistoryEntity);
+    const beforeOrder = await orders.findOneByOrFail({ id: delivered });
+    const beforeHistory = await histories.findBy({ orderId: delivered });
+    const processor = new OrderCompletionProcessor(
+      db,
+      new OrderStateMachineService(),
+      reputation,
+    );
+    // Fail at the final shop UPDATE, after real order/history and ledger INSERTs.
+    // The trigger performs the update before raising, so PostgreSQL must undo all four writes.
+    await db.query(`
+      CREATE FUNCTION identity.fail_completion_reward() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'injected shop reward database failure'; RETURN NEW; END;
+      $$;
+      CREATE TRIGGER fail_completion_reward AFTER UPDATE ON identity.shops
+        FOR EACH ROW EXECUTE FUNCTION identity.fail_completion_reward();
+    `);
+    try {
+      await expect(processor.process({} as never)).rejects.toThrow(
+        'injected shop reward database failure',
+      );
+      expect(await orders.findOneByOrFail({ id: delivered })).toEqual(
+        beforeOrder,
+      );
+      expect(await histories.findBy({ orderId: delivered })).toEqual(
+        beforeHistory,
+      );
+      expect(await shopScore(s.id)).toBe(50);
+      expect(await count('identity.shop_reputation_rewards')).toBe(0);
+    } finally {
+      await db.query(`
+        DROP TRIGGER fail_completion_reward ON identity.shops;
+        DROP FUNCTION identity.fail_completion_reward();
+      `);
+    }
+    expect(await processor.process({} as never)).toBe(1);
+    expect(await orders.findOneByOrFail({ id: delivered })).toMatchObject({
+      status: 'COMPLETED',
+    });
+    expect(await histories.findBy({ orderId: delivered })).toHaveLength(2);
+    expect(await shopScore(s.id)).toBe(55);
+    expect(await count('identity.shop_reputation_rewards')).toBe(1);
+    expect(await processor.process({} as never)).toBe(0);
+    expect(await histories.findBy({ orderId: delivered })).toHaveLength(2);
+    expect(await shopScore(s.id)).toBe(55);
+    expect(await count('identity.shop_reputation_rewards')).toBe(1);
   });
 });

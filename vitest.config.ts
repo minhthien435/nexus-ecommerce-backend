@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
-    include: ['**/*.spec.ts'],
+    // Only this checkout's test roots; ignored nested worktrees are independent suites.
+    include: ['src/**/*.spec.ts', 'test/**/*.spec.ts'],
   },
 });
