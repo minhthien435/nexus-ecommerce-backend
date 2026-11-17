@@ -1841,5 +1841,309 @@ describe('AuctionService', () => {
         endsAt: newEndsAt.toISOString(),
       });
     });
+
+    it('lists auctions for admin monitor with reservePrice, settlement, winner info, and summary KPIs', async () => {
+      const auctionRow = {
+        id: 'auc-adm-1',
+        code: 'AUC-ADM-01',
+        sellerId: 'seller-1',
+        productId: 'prod-1',
+        titleSnapshot: 'Omega Speedmaster',
+        startPrice: '1000000.00',
+        reservePrice: '2000000.00',
+        bidIncrement: '100000.00',
+        currentPrice: '2200000.00',
+        bidCount: 4,
+        extensionCount: 3,
+        maxExtensions: 10,
+        highestBidderId: 'winner-1',
+        winnerId: 'winner-1',
+        startsAt: new Date(Date.now() - 3600_000),
+        endsAt: new Date(Date.now() - 60_000),
+        status: 'SETTLED',
+      } as AuctionEntity;
+
+      const qb = {
+        andWhere: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        addOrderBy: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        take: vi.fn().mockReturnThis(),
+        getManyAndCount: vi.fn().mockResolvedValue([[auctionRow], 1]),
+      };
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes('live_count')) {
+          return [
+            {
+              live_count: 2,
+              upcoming_count: 1,
+              settled_count: 4,
+              payment_timeout_count: 1,
+              ended_count: 0,
+              failed_count: 1,
+              cancelled_count: 0,
+              total_count: 9,
+            },
+          ];
+        }
+        if (sql.includes('FROM auction.auction_settlements')) {
+          return [
+            {
+              auction_id: 'auc-adm-1',
+              winner_id: 'winner-1',
+              status: 'PAYMENT_TIMEOUT',
+              order_id: 'order-1',
+              payment_deadline_at: '2026-11-17T00:00:00.000Z',
+              final_price: '2200000.00',
+            },
+          ];
+        }
+        if (sql.includes('FROM identity.users')) {
+          return [
+            {
+              id: 'winner-1',
+              email: 'winner@nexus.vn',
+              full_name: 'Winner One',
+            },
+          ];
+        }
+        return [];
+      });
+
+      const service = new AuctionService(
+        {
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          manager: {
+            getRepository: vi.fn().mockReturnValue(bidReadRepository()),
+            query,
+          },
+        } as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+        {} as never,
+        { find: vi.fn().mockResolvedValue([]) } as never,
+      );
+
+      const res = await service.listForAdmin({
+        status: 'PAYMENT_TIMEOUT',
+        search: 'Omega',
+        sort: 'extensions_desc',
+        page: 1,
+        limit: 12,
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('searchPattern'),
+        { searchPattern: '%omega%' },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining("st.status = 'PAYMENT_TIMEOUT'"),
+      );
+      expect(res.summary).toEqual({
+        liveCount: 2,
+        upcomingCount: 1,
+        settledCount: 4,
+        paymentTimeoutCount: 1,
+        endedCount: 0,
+        failedCount: 1,
+        cancelledCount: 0,
+        totalCount: 9,
+      });
+      expect(res.items[0]).toMatchObject({
+        auctionId: 'auc-adm-1',
+        reservePrice: 2000000,
+        reserveMet: true,
+        extensionCount: 3,
+        settlementStatus: 'PAYMENT_TIMEOUT',
+        winnerId: 'winner-1',
+        winnerEmail: 'winner@nexus.vn',
+        winnerFullName: 'Winner One',
+        orderId: 'order-1',
+        suspiciousFlags: ['FREQUENT_EXTENSIONS', 'PAYMENT_TIMEOUT'],
+      });
+    });
+
+    it('inspects admin auction detail with unmasked bidders, history, extensions, settlement, and anomaly flags', async () => {
+      const auctionRow = {
+        id: 'auc-adm-2',
+        code: 'AUC-ADM-02',
+        sellerId: 'seller-1',
+        productId: 'prod-1',
+        titleSnapshot: 'Rolex Daytona',
+        startPrice: '5000000.00',
+        reservePrice: '8000000.00',
+        bidIncrement: '200000.00',
+        currentPrice: '7200000.00',
+        bidCount: 6,
+        extensionCount: 4,
+        maxExtensions: 10,
+        highestBidderId: 'bidder-a',
+        winnerId: 'bidder-a',
+        startsAt: new Date(Date.now() - 3600_000),
+        endsAt: new Date(Date.now() - 10_000),
+        status: 'SETTLED',
+      } as AuctionEntity;
+
+      const pingPongBids = [
+        {
+          id: 'b6',
+          bidderId: 'bidder-a',
+          amount: '7200000.00',
+          status: 'WINNING',
+          placedAt: new Date('2026-11-17T10:05:00Z'),
+        },
+        {
+          id: 'b5',
+          bidderId: 'bidder-b',
+          amount: '7000000.00',
+          status: 'OUTBID',
+          placedAt: new Date('2026-11-17T10:04:00Z'),
+        },
+        {
+          id: 'b4',
+          bidderId: 'bidder-a',
+          amount: '6800000.00',
+          status: 'OUTBID',
+          placedAt: new Date('2026-11-17T10:03:00Z'),
+        },
+        {
+          id: 'b3',
+          bidderId: 'bidder-b',
+          amount: '6600000.00',
+          status: 'OUTBID',
+          placedAt: new Date('2026-11-17T10:02:00Z'),
+        },
+        {
+          id: 'b2',
+          bidderId: 'bidder-a',
+          amount: '6400000.00',
+          status: 'OUTBID',
+          placedAt: new Date('2026-11-17T10:01:00Z'),
+        },
+        {
+          id: 'b1',
+          bidderId: 'bidder-b',
+          amount: '6200000.00',
+          status: 'OUTBID',
+          placedAt: new Date('2026-11-17T10:00:00Z'),
+        },
+      ];
+
+      const qb = {
+        where: vi.fn().mockReturnThis(),
+        getOne: vi.fn().mockResolvedValue(auctionRow),
+      };
+      const bidRepo = {
+        find: vi.fn().mockResolvedValue(pingPongBids),
+        createQueryBuilder: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnThis(),
+          addSelect: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          groupBy: vi.fn().mockReturnThis(),
+          getRawMany: vi
+            .fn()
+            .mockResolvedValue([
+              { auctionId: 'auc-adm-2', bidCount: '6', bidderCount: '2' },
+            ]),
+        }),
+      };
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes('FROM auction.auction_status_history')) {
+          return [
+            {
+              id: 'hist-1',
+              from_status: 'SCHEDULED',
+              to_status: 'ACTIVE',
+              actor_id: null,
+              actor_type: 'SYSTEM',
+              reason: 'Scheduled auction activated',
+              created_at: '2026-11-17T09:00:00.000Z',
+            },
+          ];
+        }
+        if (sql.includes('FROM auction.auction_extensions')) {
+          return [
+            {
+              id: 'ext-1',
+              triggered_by_bid_id: 'b6',
+              old_end_at: '2026-11-17T10:04:00.000Z',
+              new_end_at: '2026-11-17T10:05:00.000Z',
+              extension_seconds: 60,
+              created_at: '2026-11-17T10:04:30.000Z',
+            },
+          ];
+        }
+        if (sql.includes('FROM auction.auction_settlements')) {
+          return [
+            {
+              id: 'set-1',
+              winner_id: 'bidder-a',
+              winning_bid_id: 'b6',
+              final_price: '7200000.00',
+              currency: 'VND',
+              status: 'PENDING_PAYMENT',
+              order_id: 'ord-99',
+              payment_deadline_at: '2026-11-18T10:05:00.000Z',
+              settled_at: '2026-11-17T10:06:00.000Z',
+            },
+          ];
+        }
+        if (sql.includes('HAVING COUNT(DISTINCT a.id) >= 3')) {
+          return [{ bidder_id: 'bidder-a' }];
+        }
+        if (sql.includes('FROM identity.users')) {
+          return [
+            { id: 'bidder-a', email: 'a@nexus.vn', full_name: 'Bidder A' },
+            { id: 'bidder-b', email: 'b@nexus.vn', full_name: 'Bidder B' },
+          ];
+        }
+        return [];
+      });
+
+      const service = new AuctionService(
+        {
+          createQueryBuilder: vi.fn().mockReturnValue(qb),
+          manager: {
+            getRepository: vi.fn().mockReturnValue(bidRepo),
+            query,
+          },
+        } as never,
+        { findOne: vi.fn().mockResolvedValue(null) } as never,
+        {} as never,
+        { findOne: vi.fn().mockResolvedValue(null) } as never,
+      );
+
+      const detail = await service.findAdminDetailByIdOrCode('AUC-ADM-02');
+      expect(detail.reservePrice).toBe(8000000);
+      expect(detail.reserveMet).toBe(false);
+      expect(detail.bids[0]).toMatchObject({
+        bidderId: 'bidder-a',
+        bidderEmail: 'a@nexus.vn',
+        bidderFullName: 'Bidder A',
+        amount: 7200000,
+      });
+      expect(detail.statusHistory).toHaveLength(1);
+      expect(detail.extensions).toHaveLength(1);
+      expect(detail.settlement).toMatchObject({
+        id: 'set-1',
+        winnerId: 'bidder-a',
+        winnerEmail: 'a@nexus.vn',
+        orderId: 'ord-99',
+      });
+      expect(detail.suspiciousFlags).toEqual(
+        expect.arrayContaining([
+          'FREQUENT_EXTENSIONS',
+          'REPEATED_SELLER_BIDDER_PAIR',
+          'RAPID_BID_PING_PONG',
+        ]),
+      );
+
+      qb.getOne.mockResolvedValueOnce(null);
+      await expect(
+        service.findAdminDetailByIdOrCode('MISSING'),
+      ).rejects.toMatchObject({
+        status: 404,
+      });
+    });
   });
 });

@@ -325,6 +325,12 @@ export const PRIVILEGE_SEEDS: readonly PrivilegeSeed[] = [
     roles: adminSeller,
   },
   {
+    code: 'AUCTION.ADMIN_LIST',
+    module: 'AUCTION',
+    description: 'List and inspect all auctions for admin monitor',
+    roles: ['ADMIN'],
+  },
+  {
     code: 'AUCTION.ADMIN_CANCEL',
     module: 'AUCTION',
     description: 'Force-cancel auction',
