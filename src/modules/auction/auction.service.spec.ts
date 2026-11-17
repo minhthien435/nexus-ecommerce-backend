@@ -941,6 +941,7 @@ describe('AuctionService', () => {
       const emitBidPlaced = vi.fn();
       const emitAuctionSniped = vi.fn();
       const schedule = vi.fn();
+      const notifyMany = vi.fn().mockResolvedValue(undefined);
       const { auctionRepo, bidRepo } = biddingService(auction);
       const mockManager = {
         getRepository: vi
@@ -948,9 +949,13 @@ describe('AuctionService', () => {
           .mockReturnValueOnce(auctionRepo)
           .mockReturnValueOnce(bidRepo)
           .mockReturnValueOnce({ findOne: vi.fn().mockResolvedValue(null) }),
-        query: vi.fn(async (sql: string) =>
-          sql.includes('ANTI_SNIPING_ENABLED') ? [{ config_value: true }] : [],
-        ),
+        query: vi.fn(async (sql: string) => {
+          if (sql.includes('ANTI_SNIPING_ENABLED'))
+            return [{ config_value: true }];
+          if (sql.includes('SELECT DISTINCT bidder_id'))
+            return [{ bidder_id: 'buyer-2' }, { bidder_id: 'buyer-3' }];
+          return [];
+        }),
       };
       let committed = false;
       const service = new AuctionService(
@@ -967,7 +972,7 @@ describe('AuctionService', () => {
         {} as never,
         {} as never,
         { emitBidPlaced, emitAuctionSniped } as never,
-        undefined,
+        { notifyMany } as never,
         undefined,
         undefined,
         undefined,
@@ -1001,6 +1006,48 @@ describe('AuctionService', () => {
       expect(schedule).toHaveBeenCalledWith(
         expect.objectContaining({ endsAt: expectedEnd }),
       );
+      expect(notifyMany).toHaveBeenCalledWith([
+        expect.objectContaining({
+          userId: 'buyer-2',
+          type: 'AUCTION_SNIPED',
+          sourceEventId: 'new-bid',
+        }),
+        expect.objectContaining({
+          userId: 'buyer-3',
+          actionUrl: '/auctions/auction-1',
+        }),
+      ]);
+    });
+
+    it('does not fail a committed extended bid when anti-sniping notification dispatch fails', async () => {
+      const auction = activeAuction();
+      auction.endsAt = new Date(Date.now() + 30_000);
+      const fixture = biddingService(auction);
+      fixture.manager.query.mockImplementation(async (sql: string) => {
+        if (sql.includes('ANTI_SNIPING_ENABLED'))
+          return [{ config_value: true }];
+        if (sql.includes('SELECT DISTINCT bidder_id'))
+          return [{ bidder_id: 'buyer-2' }];
+        return [];
+      });
+      const service = new AuctionService(
+        {
+          manager: {
+            transaction: vi.fn(async (callback) => callback(fixture.manager)),
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        undefined,
+        {
+          notifyMany: vi.fn().mockRejectedValue(new Error('push down')),
+        } as never,
+      );
+
+      await expect(
+        service.placeBid('AUC-1', 'buyer-1', 110),
+      ).resolves.toMatchObject({ bid: { id: 'new-bid' } });
     });
 
     it.each([

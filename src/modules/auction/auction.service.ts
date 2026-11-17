@@ -501,6 +501,15 @@ export class AuctionService {
         bid.id,
         now,
       );
+      const snipedBidderIds = extended
+        ? (
+            await manager.query<Array<{ bidder_id: string }>>(
+              `SELECT DISTINCT bidder_id FROM auction.bids
+               WHERE auction_id = $1 AND bidder_id <> $2`,
+              [auction.id, bidderId],
+            )
+          ).map((row) => row.bidder_id)
+        : [];
       await auctionRepo.save(auction);
       return {
         bid,
@@ -510,6 +519,7 @@ export class AuctionService {
         bidCount: auction.bidCount,
         previousHighestBidderId,
         extendedAuction: extended ? auction : null,
+        snipedBidderIds,
         wasReplay: false,
       };
     });
@@ -545,6 +555,29 @@ export class AuctionService {
           this.maxExtensions(extendedAuction) - extendedAuction.extensionCount,
         message: `Phiên đấu giá được gia hạn thêm ${ANTI_SNIPING_EXTENSION_SECONDS} giây`,
       });
+
+      try {
+        await this.notifications?.notifyMany(
+          txResult.snipedBidderIds.map((affectedBidderId) => ({
+            userId: affectedBidderId,
+            type: 'AUCTION_SNIPED',
+            title: 'Phiên đấu giá vừa được gia hạn',
+            content: `Một lượt đặt giá trong những giây cuối đã gia hạn phiên đấu giá thêm ${ANTI_SNIPING_EXTENSION_SECONDS} giây.`,
+            actionUrl: `/auctions/${txResult.auctionId}`,
+            metadata: {
+              auctionId: txResult.auctionId,
+              newEndTime: extendedAuction.endsAt.toISOString(),
+              extensionCount: extendedAuction.extensionCount,
+            },
+            sourceEventId: txResult.bid.id,
+          })),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Bid ${txResult.bid.id} committed but anti-sniping notifications failed`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
     }
 
     if (

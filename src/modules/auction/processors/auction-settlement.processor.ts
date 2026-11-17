@@ -9,6 +9,7 @@ import { DelayedError, type Job } from 'bullmq';
 import { DataSource } from 'typeorm';
 
 import {
+  AUCTION_PAYMENT_REMINDER_JOB,
   AUCTION_PAYMENT_TIMEOUT_JOB,
   AUCTION_SETTLEMENT_QUEUE,
   type AuctionPaymentTimeoutJobPayload,
@@ -20,6 +21,7 @@ import { InventoryReservationApi } from '../../fulfillment/inventory-reservation
 import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
 import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import { EmailService } from '../../../common/email/email.service.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 @Processor(AUCTION_SETTLEMENT_QUEUE)
 export class AuctionSettlementProcessor extends WorkerHost {
@@ -32,6 +34,7 @@ export class AuctionSettlementProcessor extends WorkerHost {
     private readonly reputationApi: IdentityReputationApi,
     private readonly identityLookup: IdentitySupportLookupApi,
     private readonly emailService: EmailService,
+    private readonly notifications: NotificationDispatchApi,
   ) {
     super();
   }
@@ -40,6 +43,10 @@ export class AuctionSettlementProcessor extends WorkerHost {
     job: Job<AuctionPaymentTimeoutJobPayload>,
     token?: string,
   ): Promise<void> {
+    if (job.name === AUCTION_PAYMENT_REMINDER_JOB) {
+      await this.processPaymentReminder(job);
+      return;
+    }
     if (job.name !== AUCTION_PAYMENT_TIMEOUT_JOB) {
       return;
     }
@@ -257,6 +264,72 @@ export class AuctionSettlementProcessor extends WorkerHost {
           `Failed to send auction payment timeout email: ${(emailErr as Error).message}`,
         );
       }
+
+      try {
+        await this.notifications.notify({
+          userId: winnerId,
+          type: 'AUCTION_PAYMENT_EXPIRED',
+          title: 'Đã hết hạn thanh toán đấu giá',
+          content:
+            'Đơn hàng thắng đấu giá đã bị hủy do quá hạn thanh toán và điểm uy tín của bạn bị trừ 30 điểm.',
+          actionUrl: orderId ? `/orders/${orderId}` : `/auctions/${auctionId}`,
+          metadata: {
+            auctionId,
+            orderId: orderId ?? null,
+            settlementId,
+            penaltyPoints: 30,
+          },
+          sourceEventId: settlementId,
+        });
+      } catch (notificationErr) {
+        this.logger.error(
+          `Failed to send auction payment expired notification for settlement ${settlementId}: ${(notificationErr as Error).message}`,
+        );
+      }
+    }
+  }
+
+  private async processPaymentReminder(
+    job: Job<AuctionPaymentTimeoutJobPayload>,
+  ): Promise<void> {
+    const { settlementId } = job.data ?? {};
+    if (!settlementId) {
+      throw new BadRequestException('Invalid auction payment reminder payload');
+    }
+
+    const settlement = await this.dataSource.transaction(async (manager) => {
+      const settlement = await manager
+        .getRepository(AuctionSettlementEntity)
+        .findOne({ where: { id: settlementId } });
+      if (settlement?.status !== 'PENDING_PAYMENT' || !settlement.orderId) {
+        return null;
+      }
+      return {
+        auctionId: settlement.auctionId,
+        orderId: settlement.orderId,
+        winnerId: settlement.winnerId,
+      };
+    });
+    if (!settlement) return;
+
+    try {
+      await this.notifications.notify({
+        userId: settlement.winnerId,
+        type: 'AUCTION_PAYMENT_REMINDER',
+        title: 'Sắp hết hạn thanh toán đấu giá',
+        content: 'Bạn còn khoảng 4 giờ để thanh toán đơn hàng thắng đấu giá.',
+        actionUrl: `/orders/${settlement.orderId}`,
+        metadata: {
+          auctionId: settlement.auctionId,
+          orderId: settlement.orderId,
+          settlementId,
+        },
+        sourceEventId: settlementId,
+      });
+    } catch (notificationErr) {
+      this.logger.error(
+        `Failed to send auction payment reminder for settlement ${settlementId}: ${(notificationErr as Error).message}`,
+      );
     }
   }
 }

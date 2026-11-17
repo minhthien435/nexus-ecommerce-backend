@@ -7,13 +7,15 @@ import {
   Optional,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 
 import { AuctionEntity } from '../entities/auction.entity.js';
 import { AuctionSettlementEntity } from '../entities/auction-settlement.entity.js';
 import {
+  AUCTION_PAYMENT_REMINDER_JOB,
+  AUCTION_PAYMENT_REMINDER_LEAD_MS,
   AUCTION_PAYMENT_TIMEOUT_JOB,
   AUCTION_SETTLEMENT_QUEUE,
   type AuctionPaymentTimeoutJobPayload,
@@ -23,6 +25,7 @@ import { InventoryReservationApi } from '../../fulfillment/inventory-reservation
 import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import { EmailService } from '../../../common/email/email.service.js';
 import { AuctionEventsService } from '../ws/auction-events.service.js';
+import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 
 export interface SettleAuctionResult {
   outcome: 'SETTLED' | 'FAILED' | 'ALREADY_SETTLED';
@@ -48,12 +51,15 @@ type PostCommitAction =
       orderId: string;
       orderNumber: string;
       paymentDeadlineAt: Date;
+      settlementId: string;
+      losingBidderIds: string[];
     }
   | {
       type: 'FAILED';
       auctionId: string;
       auctionCode?: string | null;
       finalPrice: number;
+      losingBidderIds: string[];
     };
 
 @Injectable()
@@ -71,6 +77,7 @@ export class AuctionSettlementService {
     private readonly identityLookup: IdentitySupportLookupApi,
     private readonly emailService: EmailService,
     private readonly auctionEventsService: AuctionEventsService,
+    private readonly notifications: NotificationDispatchApi,
     @Optional()
     @InjectQueue(AUCTION_SETTLEMENT_QUEUE)
     private readonly timeoutQueue?: Queue<AuctionPaymentTimeoutJobPayload>,
@@ -151,6 +158,16 @@ export class AuctionSettlementService {
         const existingOrder =
           await this.orderHandoffApi.findOrderByAuctionId(auctionId);
         orderNumber = existingOrder?.orderNumber ?? null;
+      }
+
+      if (orderId && existingSettlement.status === 'PENDING_PAYMENT') {
+        await this.enqueuePaymentReminder(
+          existingSettlement.id,
+          existingSettlement.auctionId,
+          orderId,
+          existingSettlement.winnerId,
+          existingSettlement.paymentDeadlineAt,
+        );
       }
 
       this.logger.log(
@@ -282,6 +299,10 @@ export class AuctionSettlementService {
             auctionId: auction.id,
             auctionCode: auction.code,
             finalPrice: Number(auction.currentPrice),
+            losingBidderIds: await this.findDistinctBidderIds(
+              manager,
+              auction.id,
+            ),
           };
 
           return {
@@ -374,6 +395,14 @@ export class AuctionSettlementService {
               `Failed to enqueue BullMQ payment timeout for settlement ${savedSettlement.id}: ${(queueErr as Error).message}`,
             );
           }
+
+          await this.enqueuePaymentReminder(
+            savedSettlement.id,
+            auction.id,
+            orderResult.orderId,
+            auction.winnerId!,
+            paymentDeadlineAt,
+          );
         }
 
         const action: PostCommitAction = {
@@ -387,6 +416,12 @@ export class AuctionSettlementService {
           orderId: orderResult.orderId,
           orderNumber: orderResult.orderNumber,
           paymentDeadlineAt,
+          settlementId: savedSettlement.id,
+          losingBidderIds: await this.findDistinctBidderIds(
+            manager,
+            auction.id,
+            auction.winnerId!,
+          ),
         };
 
         return {
@@ -416,6 +451,7 @@ export class AuctionSettlementService {
           finalPrice: postCommitAction.finalPrice,
           status: 'FAILED',
         });
+        await this.notifyLosingBidders(postCommitAction, true);
       } else if (postCommitAction.type === 'SETTLED') {
         // Emit socket
         this.auctionEventsService.emitAuctionEnded({
@@ -425,6 +461,28 @@ export class AuctionSettlementService {
           finalPrice: Number(postCommitAction.finalPrice),
           status: 'SETTLED',
         });
+
+        try {
+          await this.notifications.notify({
+            userId: postCommitAction.winnerId,
+            type: 'AUCTION_WON',
+            title: 'Bạn đã thắng phiên đấu giá',
+            content: `Bạn đã thắng phiên đấu giá với giá ${postCommitAction.finalPrice} ${postCommitAction.currency}. Vui lòng thanh toán trước hạn.`,
+            actionUrl: `/orders/${postCommitAction.orderId}`,
+            metadata: {
+              auctionId: postCommitAction.auctionId,
+              orderId: postCommitAction.orderId,
+              finalPrice: postCommitAction.finalPrice,
+              paymentDeadlineAt: postCommitAction.paymentDeadlineAt,
+            },
+            sourceEventId: postCommitAction.settlementId,
+          });
+        } catch (notificationErr) {
+          this.logger.error(
+            `Failed to send winner notification for auction ${postCommitAction.auctionId}: ${(notificationErr as Error).message}`,
+          );
+        }
+        await this.notifyLosingBidders(postCommitAction, false);
 
         // Send Winner email safely
         try {
@@ -454,5 +512,82 @@ export class AuctionSettlementService {
     }
 
     return result;
+  }
+
+  private async enqueuePaymentReminder(
+    settlementId: string,
+    auctionId: string,
+    orderId: string,
+    winnerId: string,
+    paymentDeadlineAt: Date,
+  ): Promise<void> {
+    if (!this.timeoutQueue) return;
+    const delay =
+      new Date(paymentDeadlineAt).getTime() -
+      AUCTION_PAYMENT_REMINDER_LEAD_MS -
+      Date.now();
+    if (delay < 0) return;
+    try {
+      await this.timeoutQueue.add(
+        AUCTION_PAYMENT_REMINDER_JOB,
+        { settlementId, auctionId, orderId, winnerId },
+        {
+          jobId: `auction-reminder-${settlementId}`,
+          delay,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 1000 },
+          removeOnComplete: true,
+        },
+      );
+    } catch (queueErr) {
+      this.logger.error(
+        `Failed to enqueue payment reminder for settlement ${settlementId}: ${(queueErr as Error).message}`,
+      );
+    }
+  }
+
+  private async findDistinctBidderIds(
+    manager: EntityManager,
+    auctionId: string,
+    excludedBidderId?: string,
+  ): Promise<string[]> {
+    const params: string[] = [auctionId];
+    let exclusion = '';
+    if (excludedBidderId) {
+      params.push(excludedBidderId);
+      exclusion = ' AND bidder_id <> $2';
+    }
+    const rows = await manager.query<Array<{ bidder_id: string }>>(
+      `SELECT DISTINCT bidder_id FROM auction.bids WHERE auction_id = $1${exclusion}`,
+      params,
+    );
+    return rows.map((row) => row.bidder_id);
+  }
+
+  private async notifyLosingBidders(
+    action: Extract<PostCommitAction, { type: 'FAILED' | 'SETTLED' }>,
+    failed: boolean,
+  ): Promise<void> {
+    try {
+      await this.notifications.notifyMany(
+        action.losingBidderIds.map((bidderId) => ({
+          userId: bidderId,
+          type: 'AUCTION_LOST',
+          title: failed
+            ? 'Phiên đấu giá không có người thắng'
+            : 'Phiên đấu giá đã kết thúc',
+          content: failed
+            ? 'Phiên đấu giá đã kết thúc nhưng chưa đạt giá sàn.'
+            : 'Một người mua khác đã thắng phiên đấu giá.',
+          actionUrl: `/auctions/${action.auctionId}`,
+          metadata: { auctionId: action.auctionId, status: action.type },
+          sourceEventId: action.auctionId,
+        })),
+      );
+    } catch (notificationErr) {
+      this.logger.error(
+        `Failed to send losing bidder notifications for auction ${action.auctionId}: ${(notificationErr as Error).message}`,
+      );
+    }
   }
 }

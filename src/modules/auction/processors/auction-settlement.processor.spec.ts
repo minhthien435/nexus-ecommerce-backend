@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuctionSettlementProcessor } from './auction-settlement.processor.js';
 import { AUCTION_PAYMENT_TIMEOUT_JOB } from '../auction-settlement.constants.js';
+import { AUCTION_PAYMENT_REMINDER_JOB } from '../auction-settlement.constants.js';
 import { DelayedError } from 'bullmq';
 
 describe('AuctionSettlementProcessor', () => {
@@ -11,6 +12,7 @@ describe('AuctionSettlementProcessor', () => {
   let reputationApiMock: any;
   let identityLookupMock: any;
   let emailServiceMock: any;
+  let notificationMock: any;
   let managerMock: any;
 
   beforeEach(() => {
@@ -61,6 +63,10 @@ describe('AuctionSettlementProcessor', () => {
       sendAuctionPaymentTimeout: vi.fn().mockResolvedValue(undefined),
     };
 
+    notificationMock = {
+      notify: vi.fn().mockResolvedValue(undefined),
+    };
+
     processor = new AuctionSettlementProcessor(
       dataSourceMock as any,
       orderHandoffApiMock as any,
@@ -68,6 +74,7 @@ describe('AuctionSettlementProcessor', () => {
       reputationApiMock as any,
       identityLookupMock as any,
       emailServiceMock as any,
+      notificationMock as any,
     );
   });
 
@@ -152,7 +159,71 @@ describe('AuctionSettlementProcessor', () => {
       orderNumber: 'ORD-AUC-12345',
       penaltyPoints: 30,
     });
+    expect(notificationMock.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'winner-1',
+        type: 'AUCTION_PAYMENT_EXPIRED',
+        actionUrl: '/orders/ord-123',
+        sourceEventId: 'settlement-1',
+        metadata: expect.objectContaining({ penaltyPoints: 30 }),
+      }),
+    );
   });
+
+  it('sends a payment reminder only while settlement is pending', async () => {
+    managerMock.getRepository.mockReturnValue({
+      findOne: vi.fn().mockResolvedValue({
+        id: 'settlement-reminder',
+        status: 'PENDING_PAYMENT',
+        auctionId: 'auc-canonical',
+        orderId: 'ord-canonical',
+        winnerId: 'winner-canonical',
+      }),
+    });
+    const mockJob: any = {
+      name: AUCTION_PAYMENT_REMINDER_JOB,
+      data: {
+        settlementId: 'settlement-reminder',
+        auctionId: 'auc-reminder',
+        orderId: 'ord-reminder',
+        winnerId: 'winner-1',
+      },
+    };
+
+    await processor.process(mockJob);
+
+    expect(notificationMock.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'winner-canonical',
+        type: 'AUCTION_PAYMENT_REMINDER',
+        actionUrl: '/orders/ord-canonical',
+        sourceEventId: 'settlement-reminder',
+        metadata: expect.objectContaining({ auctionId: 'auc-canonical' }),
+      }),
+    );
+  });
+
+  it.each([null, { id: 'settlement-paid', status: 'PAID' }])(
+    'skips payment reminder for missing or non-pending settlement',
+    async (settlement) => {
+      managerMock.getRepository.mockReturnValue({
+        findOne: vi.fn().mockResolvedValue(settlement),
+      });
+      const mockJob: any = {
+        name: AUCTION_PAYMENT_REMINDER_JOB,
+        data: {
+          settlementId: 'settlement-paid',
+          auctionId: 'auc-reminder',
+          orderId: 'ord-reminder',
+          winnerId: 'winner-1',
+        },
+      };
+
+      await processor.process(mockJob);
+
+      expect(notificationMock.notify).not.toHaveBeenCalled();
+    },
+  );
 
   it('skips timeout when settlement is already in PAID status', async () => {
     const mockSettlement = {
