@@ -569,7 +569,7 @@ export class AuctionService {
               newEndTime: extendedAuction.endsAt.toISOString(),
               extensionCount: extendedAuction.extensionCount,
             },
-            sourceEventId: `sniped-${txResult.auctionId}-ext-${extendedAuction.extensionCount}`,
+            sourceEventId: txResult.bid.id,
           })),
         );
       } catch (error) {

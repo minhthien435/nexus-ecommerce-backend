@@ -164,7 +164,7 @@ describe('AuctionSettlementProcessor', () => {
         userId: 'winner-1',
         type: 'AUCTION_PAYMENT_EXPIRED',
         actionUrl: '/orders/ord-123',
-        sourceEventId: 'expired-settlement-1',
+        sourceEventId: 'settlement-1',
         metadata: expect.objectContaining({ penaltyPoints: 30 }),
       }),
     );
@@ -197,7 +197,7 @@ describe('AuctionSettlementProcessor', () => {
         userId: 'winner-canonical',
         type: 'AUCTION_PAYMENT_REMINDER',
         actionUrl: '/orders/ord-canonical',
-        sourceEventId: 'reminder-settlement-reminder',
+        sourceEventId: 'settlement-reminder',
         metadata: expect.objectContaining({ auctionId: 'auc-canonical' }),
       }),
     );

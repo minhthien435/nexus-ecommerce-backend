@@ -475,7 +475,7 @@ export class AuctionSettlementService {
               finalPrice: postCommitAction.finalPrice,
               paymentDeadlineAt: postCommitAction.paymentDeadlineAt,
             },
-            sourceEventId: `won-${postCommitAction.settlementId}`,
+            sourceEventId: postCommitAction.settlementId,
           });
         } catch (notificationErr) {
           this.logger.error(
@@ -581,7 +581,7 @@ export class AuctionSettlementService {
             : 'Một người mua khác đã thắng phiên đấu giá.',
           actionUrl: `/auctions/${action.auctionId}`,
           metadata: { auctionId: action.auctionId, status: action.type },
-          sourceEventId: `lost-${action.auctionId}-${bidderId}`,
+          sourceEventId: action.auctionId,
         })),
       );
     } catch (notificationErr) {

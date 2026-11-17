@@ -1010,7 +1010,7 @@ describe('AuctionService', () => {
         expect.objectContaining({
           userId: 'buyer-2',
           type: 'AUCTION_SNIPED',
-          sourceEventId: 'sniped-auction-1-ext-1',
+          sourceEventId: 'new-bid',
         }),
         expect.objectContaining({
           userId: 'buyer-3',

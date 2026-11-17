@@ -279,7 +279,7 @@ export class AuctionSettlementProcessor extends WorkerHost {
             settlementId,
             penaltyPoints: 30,
           },
-          sourceEventId: `expired-${settlementId}`,
+          sourceEventId: settlementId,
         });
       } catch (notificationErr) {
         this.logger.error(
@@ -324,7 +324,7 @@ export class AuctionSettlementProcessor extends WorkerHost {
           orderId: settlement.orderId,
           settlementId,
         },
-        sourceEventId: `reminder-${settlementId}`,
+        sourceEventId: settlementId,
       });
     } catch (notificationErr) {
       this.logger.error(

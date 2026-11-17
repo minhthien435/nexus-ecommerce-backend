@@ -223,7 +223,7 @@ describe('AuctionSettlementService', () => {
         expect.objectContaining({
           userId: 'bidder-1',
           type: 'AUCTION_LOST',
-          sourceEventId: 'lost-auc-below-reserve-bidder-1',
+          sourceEventId: 'auc-below-reserve',
         }),
         expect.objectContaining({
           userId: 'bidder-2',
@@ -334,7 +334,7 @@ describe('AuctionSettlementService', () => {
           userId: 'winner-1',
           type: 'AUCTION_WON',
           actionUrl: '/orders/order-uuid-123',
-          sourceEventId: 'won-settlement-uuid-1',
+          sourceEventId: 'settlement-uuid-1',
         }),
       );
       expect(notificationMock.notifyMany).toHaveBeenCalledWith([
