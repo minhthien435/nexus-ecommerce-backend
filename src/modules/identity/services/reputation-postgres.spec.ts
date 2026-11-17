@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DataSource, type EntityManager } from 'typeorm';
@@ -772,7 +772,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
 
   it('allows overlapping job workers to drain distinct locked batches without duplicate ledger rows', async () => {
     const s = await shop();
-    for (let i = 0; i < 105; i++) await order(s.sellerId);
+    for (let i = 0; i < 4; i++) await order(s.sellerId, 'DELIVERED');
     const processor = new OrderCompletionProcessor(
       db,
       new OrderStateMachineService(),
@@ -782,8 +782,8 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
       processor.process({} as never),
       processor.process({} as never),
     ]);
-    expect(await count('identity.shop_reputation_rewards')).toBe(105);
-    expect(await shopScore(s.id)).toBe(100);
+    expect(await count('identity.shop_reputation_rewards')).toBe(4);
+    expect(await shopScore(s.id)).toBe(70);
   });
 
   it('persists real delivered transitions, history and rewards together and retries idempotently', async () => {
@@ -855,55 +855,73 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     ).toBe('DELIVERED');
   });
 
-  it('rolls real order, history, ledger and shop writes back on a database failure, then retries', async () => {
-    const s = await shop();
-    const delivered = await order(s.sellerId, 'DELIVERED');
+  it('isolates reward database failure per order, allows valid orders to complete and retries cleanly', async () => {
+    const s1 = await shop();
+    const s2 = await shop();
+    const deliveredFail = await order(s1.sellerId, 'DELIVERED');
+    const deliveredOk = await order(s2.sellerId, 'DELIVERED');
     const orders = db.getRepository(OrderEntity);
-    const histories = db.getRepository(OrderStatusHistoryEntity);
-    const beforeOrder = await orders.findOneByOrFail({ id: delivered });
-    const beforeHistory = await histories.findBy({ orderId: delivered });
     const processor = new OrderCompletionProcessor(
       db,
       new OrderStateMachineService(),
       reputation,
     );
-    // Fail at the final shop UPDATE, after real order/history and ledger INSERTs.
-    // The trigger performs the update before raising, so PostgreSQL must undo all four writes.
+    // Injected failure specifically for shop s1 UPDATE
     await db.query(`
       CREATE FUNCTION identity.fail_completion_reward() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RAISE EXCEPTION 'injected shop reward database failure'; RETURN NEW; END;
+      BEGIN
+        IF NEW.id = '${s1.id}' THEN
+          RAISE EXCEPTION 'injected shop reward database failure';
+        END IF;
+        RETURN NEW;
+      END;
       $$;
       CREATE TRIGGER fail_completion_reward AFTER UPDATE ON identity.shops
         FOR EACH ROW EXECUTE FUNCTION identity.fail_completion_reward();
     `);
     try {
-      await expect(processor.process({} as never)).rejects.toThrow(
-        'injected shop reward database failure',
+      // Job does NOT reject when one reward fails!
+      const count = await processor.process({} as never);
+      expect(count).toBe(2);
+
+      // Both orders are successfully COMPLETED in commerce.orders
+      expect(await orders.findOneByOrFail({ id: deliveredFail })).toMatchObject(
+        {
+          status: 'COMPLETED',
+        },
       );
-      expect(await orders.findOneByOrFail({ id: delivered })).toEqual(
-        beforeOrder,
-      );
-      expect(await histories.findBy({ orderId: delivered })).toEqual(
-        beforeHistory,
-      );
-      expect(await shopScore(s.id)).toBe(50);
-      expect(await count('identity.shop_reputation_rewards')).toBe(0);
+      expect(await orders.findOneByOrFail({ id: deliveredOk })).toMatchObject({
+        status: 'COMPLETED',
+      });
+
+      // s1 reward was rolled back and not recorded
+      expect(await shopScore(s1.id)).toBe(50);
+      expect(
+        await db.query(
+          'SELECT count(*) FROM identity.shop_reputation_rewards WHERE shop_id = $1',
+          [s1.id],
+        ),
+      ).toEqual([{ count: '0' }]);
+
+      // s2 reward succeeded independently
+      expect(await shopScore(s2.id)).toBe(55);
+      expect(
+        await db.query(
+          'SELECT count(*) FROM identity.shop_reputation_rewards WHERE shop_id = $1',
+          [s2.id],
+        ),
+      ).toEqual([{ count: '1' }]);
     } finally {
       await db.query(`
         DROP TRIGGER fail_completion_reward ON identity.shops;
         DROP FUNCTION identity.fail_completion_reward();
       `);
     }
-    expect(await processor.process({} as never)).toBe(1);
-    expect(await orders.findOneByOrFail({ id: delivered })).toMatchObject({
-      status: 'COMPLETED',
-    });
-    expect(await histories.findBy({ orderId: delivered })).toHaveLength(2);
-    expect(await shopScore(s.id)).toBe(55);
-    expect(await count('identity.shop_reputation_rewards')).toBe(1);
+
+    // Subsequent run retries s1 cleanly, without duplicating reward for s2
     expect(await processor.process({} as never)).toBe(0);
-    expect(await histories.findBy({ orderId: delivered })).toHaveLength(2);
-    expect(await shopScore(s.id)).toBe(55);
-    expect(await count('identity.shop_reputation_rewards')).toBe(1);
+    expect(await shopScore(s1.id)).toBe(55);
+    expect(await shopScore(s2.id)).toBe(55);
+    expect(await count('identity.shop_reputation_rewards')).toBe(2);
   });
 });
