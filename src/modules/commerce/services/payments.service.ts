@@ -7,6 +7,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import type { CreatePaymentLinkRequest } from '@payos/node';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, In, type EntityManager } from 'typeorm';
 import { CoinService } from '../../coin/coin.service.js';
@@ -23,6 +24,17 @@ import {
   generatePayosOrderCode,
 } from '../utils/payos-order-code.util.js';
 import { PayosClientService } from './payos-client.service.js';
+
+const AUCTION_LINK_MIN_SECONDS = 60;
+const PAYOS_ATTEMPT_LEASE_MS = 60_000;
+
+type PaymentSetup =
+  | { result: CreatePayosPaymentLinkResult }
+  | {
+      order: OrderEntity;
+      payment: PaymentEntity;
+      request: CreatePaymentLinkRequest & { expiredAt: number };
+    };
 
 @Injectable()
 export class PaymentsService {
@@ -42,16 +54,95 @@ export class PaymentsService {
       throw new ServiceUnavailableException('PayOS service is not available');
     }
 
-    return this.dataSource.transaction((manager) =>
-      this.createLockedPaymentLink(manager, buyerId, dto),
-    );
+    let setup: PaymentSetup;
+    try {
+      setup = await this.dataSource.transaction((manager) =>
+        this.preparePayment(manager, buyerId, dto),
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new ConflictException('Payment attempt already exists');
+      }
+      throw error;
+    }
+    if ('result' in setup) return setup.result;
+
+    const { order, payment, request } = setup;
+    let link;
+    try {
+      link = await this.payosClientService.createPaymentLink(request);
+    } catch (error) {
+      this.logger.error(
+        `PayOS link creation failed for order ${order.id}`,
+        error,
+      );
+      await this.markSetupFailed(payment.id);
+      throw new ServiceUnavailableException(
+        'Failed to create PayOS payment link',
+      );
+    }
+
+    const result = {
+      paymentId: payment.id,
+      orderId: order.id,
+      orderCode: request.orderCode,
+      paymentLinkId: link.paymentLinkId,
+      checkoutUrl: link.checkoutUrl,
+      qrCode: link.qrCode,
+      amount: request.amount,
+      payableAmount: request.amount,
+      coinDiscountAmount: Number(order.discountAmount ?? 0),
+      currency: 'VND',
+      status: 'PENDING',
+    };
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const current = await manager.getRepository(OrderEntity).findOne({
+          where: { id: order.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (
+          current?.status !== 'PENDING_PAYMENT' ||
+          (current.source === 'AUCTION' &&
+            Date.now() >= request.expiredAt * 1000)
+        ) {
+          throw new ConflictException('The order is no longer payable');
+        }
+        const update = await manager
+          .getRepository(PaymentEntity)
+          .update(
+            { id: payment.id, status: 'INITIATED' },
+            { status: 'PENDING', failureReason: JSON.stringify(result) },
+          );
+        if (update.affected !== 1) {
+          throw new ConflictException(
+            'The payment attempt is no longer active',
+          );
+        }
+      });
+    } catch (error) {
+      try {
+        await this.payosClientService.cancelPaymentLink(
+          request.orderCode,
+          'Payment setup failed',
+        );
+      } catch (cancelError) {
+        this.logger.error(
+          `Could not cancel PayOS link ${request.orderCode}`,
+          cancelError,
+        );
+      }
+      await this.markSetupFailed(payment.id);
+      throw error;
+    }
+    return result;
   }
 
-  private async createLockedPaymentLink(
+  private async preparePayment(
     manager: EntityManager,
     buyerId: string,
     dto: CreatePayosPaymentLinkDto,
-  ): Promise<CreatePayosPaymentLinkResult> {
+  ): Promise<PaymentSetup> {
     const orderRepository = manager.getRepository(OrderEntity);
     const paymentRepository = manager.getRepository(PaymentEntity);
     const order = await orderRepository.findOne({
@@ -123,10 +214,7 @@ export class PaymentsService {
         if (existingByKey.status === 'SUCCEEDED') {
           throw new ConflictException('Order has already been paid');
         }
-        if (
-          existingByKey.status === 'FAILED' ||
-          existingByKey.status === 'CANCELLED'
-        ) {
+        if (existingByKey.status === 'CANCELLED') {
           throw new ConflictException(
             `Payment attempt with this idempotency key has already ${existingByKey.status.toLowerCase()}`,
           );
@@ -134,8 +222,12 @@ export class PaymentsService {
 
         this.assertCoinSelection(order, dto.useCoins);
 
-        // Return existing payment link data if cached in failureReason
-        if (existingByKey.failureReason) {
+        // Failed setup never published a link. Free the key for a retry on this order.
+        if (existingByKey.status === 'FAILED') {
+          await paymentRepository.update(existingByKey.id, {
+            idempotencyKey: null,
+          });
+        } else if (existingByKey.failureReason) {
           try {
             const cached = JSON.parse(existingByKey.failureReason) as {
               orderCode: number;
@@ -145,17 +237,19 @@ export class PaymentsService {
             };
             if (cached.checkoutUrl && cached.orderCode) {
               return {
-                paymentId: existingByKey.id,
-                orderId: order.id,
-                orderCode: cached.orderCode,
-                paymentLinkId: cached.paymentLinkId,
-                checkoutUrl: cached.checkoutUrl,
-                qrCode: cached.qrCode,
-                amount: payosAmount,
-                payableAmount: payosAmount,
-                coinDiscountAmount: Number(order.discountAmount ?? 0),
-                currency: 'VND',
-                status: existingByKey.status,
+                result: {
+                  paymentId: existingByKey.id,
+                  orderId: order.id,
+                  orderCode: cached.orderCode,
+                  paymentLinkId: cached.paymentLinkId,
+                  checkoutUrl: cached.checkoutUrl,
+                  qrCode: cached.qrCode,
+                  amount: payosAmount,
+                  payableAmount: payosAmount,
+                  coinDiscountAmount: Number(order.discountAmount ?? 0),
+                  currency: 'VND',
+                  status: existingByKey.status,
+                },
               };
             }
           } catch {
@@ -166,7 +260,7 @@ export class PaymentsService {
     }
 
     // 6. Check for active PayOS payment attempt on this order
-    const activePayment = await paymentRepository.findOne({
+    let activePayment = await paymentRepository.findOne({
       where: {
         orderId: order.id,
         provider: 'PAYOS',
@@ -176,6 +270,25 @@ export class PaymentsService {
     });
 
     if (activePayment) this.assertCoinSelection(order, dto.useCoins);
+    if (activePayment?.status === 'INITIATED') {
+      if (
+        Date.now() - activePayment.createdAt.getTime() <
+        PAYOS_ATTEMPT_LEASE_MS
+      ) {
+        throw new ConflictException({
+          errorCode: 'PAYOS_LINK_IN_PROGRESS',
+          message: 'A PayOS payment link is already being created',
+        });
+      }
+      // A timed-out reservation never published a URL. Keep its provider code
+      // for reconciliation if a delayed callback still arrives.
+      await paymentRepository.update(activePayment.id, {
+        status: 'FAILED',
+        idempotencyKey: null,
+        failureReason: 'Link setup reservation expired',
+      });
+      activePayment = null;
+    }
 
     if (
       activePayment?.providerPaymentId &&
@@ -191,22 +304,42 @@ export class PaymentsService {
         };
         if (cached.checkoutUrl && cached.orderCode) {
           return {
-            paymentId: activePayment.id,
-            orderId: order.id,
-            orderCode: cached.orderCode,
-            paymentLinkId: cached.paymentLinkId,
-            checkoutUrl: cached.checkoutUrl,
-            qrCode: cached.qrCode,
-            amount: payosAmount,
-            payableAmount: payosAmount,
-            coinDiscountAmount: Number(order.discountAmount ?? 0),
-            currency: 'VND',
-            status: activePayment.status,
+            result: {
+              paymentId: activePayment.id,
+              orderId: order.id,
+              orderCode: cached.orderCode,
+              paymentLinkId: cached.paymentLinkId,
+              checkoutUrl: cached.checkoutUrl,
+              qrCode: cached.qrCode,
+              amount: payosAmount,
+              payableAmount: payosAmount,
+              coinDiscountAmount: Number(order.discountAmount ?? 0),
+              currency: 'VND',
+              status: activePayment.status,
+            },
           };
         }
       } catch {
         // Fall through to create a new link
       }
+    }
+
+    if (
+      order.source === 'AUCTION' &&
+      holdExpiresSeconds > 0 &&
+      holdExpiresSeconds - Math.floor(Date.now() / 1000) <
+        AUCTION_LINK_MIN_SECONDS
+    ) {
+      throw new ConflictException({
+        errorCode: 'AUCTION_PAYMENT_DEADLINE_TOO_CLOSE',
+        message: 'At least 60 seconds must remain to create a new PayOS link',
+      });
+    }
+
+    if (activePayment) {
+      throw new ConflictException(
+        'An active PayOS link already exists for this order',
+      );
     }
 
     // 7. Calculate attempt number
@@ -263,81 +396,47 @@ export class PaymentsService {
           ? holdExpiresSeconds
           : nowInSeconds + 15 * 60;
 
-    let payosResponse;
-    try {
-      payosResponse = await this.payosClientService.createPaymentLink({
+    const payment = await paymentRepository.save(
+      paymentRepository.create({
+        orderId: order.id,
+        checkoutSessionId: order.checkoutSessionId,
+        provider: 'PAYOS',
+        providerPaymentId: String(orderCode),
+        amount: String(payosAmount),
+        currency: 'VND',
+        status: 'INITIATED',
+        attemptNo,
+        idempotencyKey: dto.idempotencyKey ?? null,
+      }),
+    );
+
+    return {
+      order,
+      payment,
+      request: {
         orderCode,
         amount: payosAmount,
         description,
         cancelUrl,
         returnUrl,
         expiredAt,
-      });
-    } catch (payosError) {
-      const errorMsg = (payosError as Error)?.message || 'PayOS API error';
-      this.logger.error(
-        `Failed to create PayOS payment link for order ${order.id}: ${errorMsg}`,
-      );
-      throw new ServiceUnavailableException(
-        `Failed to create PayOS payment link: ${errorMsg}`,
-      );
-    }
-
-    // 10. Persist payment record
-    const payment = paymentRepository.create({
-      orderId: order.id,
-      checkoutSessionId: order.checkoutSessionId,
-      provider: 'PAYOS',
-      providerPaymentId: String(orderCode),
-      amount: String(payosAmount),
-      currency: 'VND',
-      status: 'PENDING',
-      attemptNo,
-      idempotencyKey: dto.idempotencyKey ?? null,
-      failureReason: JSON.stringify({
-        orderCode,
-        paymentLinkId: payosResponse.paymentLinkId,
-        checkoutUrl: payosResponse.checkoutUrl,
-        qrCode: payosResponse.qrCode,
-      }),
-    });
-
-    try {
-      await paymentRepository.save(payment);
-    } catch (error) {
-      this.logger.error(
-        `PayOS link ${orderCode} was created but its payment record could not be saved: ${(error as Error).message}`,
-      );
-      try {
-        await this.payosClientService.cancelPaymentLink(
-          orderCode,
-          'Payment setup failed',
-        );
-      } catch (cancelError) {
-        this.logger.error(
-          `Could not cancel PayOS link ${orderCode}: ${(cancelError as Error).message}`,
-        );
-      }
-      if ((error as { code?: string }).code === '23505') {
-        throw new ConflictException('Payment attempt already exists');
-      }
-      throw error;
-    }
-
-    return {
-      paymentId: payment.id,
-      orderId: order.id,
-      orderCode,
-      paymentLinkId: payosResponse.paymentLinkId,
-      checkoutUrl: payosResponse.checkoutUrl,
-      qrCode: payosResponse.qrCode,
-      amount: payosAmount,
-      payableAmount: payosAmount,
-      coinDiscountAmount: Number(order.discountAmount ?? 0),
-      currency: 'VND',
-      status: payment.status,
+      },
     };
   }
+
+  private async markSetupFailed(paymentId: string): Promise<void> {
+    try {
+      await this.dataSource
+        .getRepository(PaymentEntity)
+        .update(
+          { id: paymentId, status: 'INITIATED' },
+          { status: 'FAILED', failureReason: 'PayOS link setup failed' },
+        );
+    } catch (error) {
+      this.logger.error(`Could not mark payment ${paymentId} as failed`, error);
+    }
+  }
+
   private assertCoinSelection(order: OrderEntity, useCoins?: number): void {
     if (
       useCoins !== undefined &&

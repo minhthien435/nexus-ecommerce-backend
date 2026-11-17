@@ -517,6 +517,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       const payments = {
         findOne: vi.fn().mockResolvedValue(null),
         count: vi.fn().mockResolvedValue(0),
+        update: vi.fn().mockResolvedValue({ affected: 1 }),
         create: vi.fn((value) => value),
         save: vi.fn(async (value) => value),
       };

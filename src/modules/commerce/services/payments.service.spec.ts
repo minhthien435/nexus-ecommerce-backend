@@ -21,6 +21,7 @@ describe('PaymentsService', () => {
   let payosClientService: PayosClientService;
   let configService: ConfigService;
   const coinQuery = vi.fn();
+  let transactionActive: boolean;
 
   const buyerId = '11111111-1111-4111-8111-111111111111';
   const otherBuyerId = '22222222-2222-4222-8222-222222222222';
@@ -66,6 +67,7 @@ describe('PaymentsService', () => {
   };
 
   beforeEach(() => {
+    transactionActive = false;
     orderRepository = {
       findOne: vi.fn(),
       save: vi.fn(),
@@ -74,6 +76,7 @@ describe('PaymentsService', () => {
     paymentRepository = {
       findOne: vi.fn(),
       count: vi.fn(),
+      update: vi.fn().mockResolvedValue({ affected: 1 }),
       create: vi
         .fn()
         .mockImplementation((dto) => ({ id: 'pay_uuid_1', ...dto })),
@@ -81,7 +84,11 @@ describe('PaymentsService', () => {
     } as unknown as Repository<PaymentEntity>;
 
     payosClientService = {
-      createPaymentLink: vi.fn().mockResolvedValue(mockPayosResponse),
+      createPaymentLink: vi.fn(async () => {
+        expect(transactionActive).toBe(false);
+        return mockPayosResponse;
+      }),
+      cancelPaymentLink: vi.fn(),
     } as unknown as PayosClientService;
 
     configService = {
@@ -95,12 +102,19 @@ describe('PaymentsService', () => {
     coinQuery.mockReset().mockResolvedValue([{ applied: true }]);
     service = new PaymentsService(
       {
-        transaction: (run: (manager: unknown) => unknown) =>
-          run({
-            getRepository: (entity: unknown) =>
-              entity === OrderEntity ? orderRepository : paymentRepository,
-            query: coinQuery,
-          }),
+        getRepository: () => paymentRepository,
+        transaction: async (run: (manager: unknown) => unknown) => {
+          transactionActive = true;
+          try {
+            return await run({
+              getRepository: (entity: unknown) =>
+                entity === OrderEntity ? orderRepository : paymentRepository,
+              query: coinQuery,
+            });
+          } finally {
+            transactionActive = false;
+          }
+        },
       } as never,
       payosClientService,
       configService,
@@ -137,10 +151,14 @@ describe('PaymentsService', () => {
         orderId,
         provider: 'PAYOS',
         currency: 'VND',
-        status: 'PENDING',
+        status: 'INITIATED',
       }),
     );
     expect(paymentRepository.save).toHaveBeenCalled();
+    expect(paymentRepository.update).toHaveBeenCalledWith(
+      { id: 'pay_uuid_1', status: 'INITIATED' },
+      expect.objectContaining({ status: 'PENDING' }),
+    );
   });
 
   it('throws NotFoundException when order does not exist', async () => {
@@ -281,6 +299,110 @@ describe('PaymentsService', () => {
     ).rejects.toThrow(ConflictException);
     expect(coinQuery).not.toHaveBeenCalled();
     expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
+  });
+
+  it('rejects new auction links when fewer than 60 seconds remain', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue({
+      ...mockOrder,
+      source: 'AUCTION',
+      holdExpiresAt: new Date(Date.now() + 30_000),
+    });
+
+    await expect(
+      service.createPayosPaymentLink(buyerId, { orderId, useCoins: 100 }),
+    ).rejects.toMatchObject({
+      response: { errorCode: 'AUCTION_PAYMENT_DEADLINE_TOO_CLOSE' },
+    });
+    expect(coinQuery).not.toHaveBeenCalled();
+    expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing auction link available in the final minute', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue({
+      ...mockOrder,
+      source: 'AUCTION',
+      holdExpiresAt: new Date(Date.now() + 30_000),
+    });
+    vi.mocked(paymentRepository.findOne).mockResolvedValue({
+      id: 'pay-existing',
+      providerPaymentId: '123',
+      amount: mockOrder.total,
+      status: 'PENDING',
+      failureReason: JSON.stringify({
+        orderCode: 123,
+        paymentLinkId: 'existing-link',
+        checkoutUrl: mockPayosResponse.checkoutUrl,
+        qrCode: mockPayosResponse.qrCode,
+      }),
+    } as PaymentEntity);
+
+    await expect(
+      service.createPayosPaymentLink(buyerId, { orderId }),
+    ).resolves.toMatchObject({
+      paymentId: 'pay-existing',
+    });
+    expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
+  });
+
+  it('replaces an abandoned setup attempt without debiting Coin again', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue({
+      ...mockOrder,
+      source: 'AUCTION',
+      holdExpiresAt: new Date(Date.now() + 3_600_000),
+      total: '520000.00',
+      discountAmount: '30000.00',
+    });
+    vi.mocked(paymentRepository.findOne).mockResolvedValue({
+      id: 'abandoned-payment',
+      orderId,
+      status: 'INITIATED',
+      createdAt: new Date(Date.now() - 120_000),
+    } as PaymentEntity);
+    vi.mocked(paymentRepository.count).mockResolvedValue(1);
+
+    await expect(
+      service.createPayosPaymentLink(buyerId, {
+        orderId,
+        useCoins: 30_000,
+        idempotencyKey: 'same-key',
+      }),
+    ).resolves.toMatchObject({ amount: 520_000 });
+    expect(paymentRepository.update).toHaveBeenCalledWith(
+      'abandoned-payment',
+      expect.objectContaining({ status: 'FAILED', idempotencyKey: null }),
+    );
+    expect(coinQuery).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second gateway request while an attempt is being created', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue(mockOrder);
+    vi.mocked(paymentRepository.findOne).mockResolvedValue({
+      status: 'INITIATED',
+      createdAt: new Date(),
+    } as PaymentEntity);
+    await expect(
+      service.createPayosPaymentLink(buyerId, { orderId }),
+    ).rejects.toMatchObject({
+      response: { errorCode: 'PAYOS_LINK_IN_PROGRESS' },
+    });
+    expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
+  });
+
+  it('cancels the new PayOS link when the order was cancelled during creation', async () => {
+    vi.mocked(orderRepository.findOne)
+      .mockResolvedValueOnce(mockOrder)
+      .mockResolvedValueOnce({ ...mockOrder, status: 'CANCELLED' });
+    await expect(
+      service.createPayosPaymentLink(buyerId, { orderId }),
+    ).rejects.toThrow(ConflictException);
+    expect(payosClientService.cancelPaymentLink).toHaveBeenCalledWith(
+      expect.any(Number),
+      'Payment setup failed',
+    );
+    expect(paymentRepository.update).toHaveBeenCalledWith(
+      { id: 'pay_uuid_1', status: 'INITIATED' },
+      expect.objectContaining({ status: 'FAILED' }),
+    );
   });
 
   it('handles PayOS SDK failure by throwing ServiceUnavailableException', async () => {

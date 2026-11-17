@@ -80,6 +80,13 @@ describe('AuthService', () => {
 
       const result = await service.register(dto);
 
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "identity.record_coin_change($1, 'REGISTER_BONUS'",
+        ),
+        [result.id],
+      );
+
       expect(userRepo.findOne).toHaveBeenCalledWith({
         where: [{ email: dto.email }, { phone: dto.phone }],
       });
@@ -430,6 +437,12 @@ describe('AuthService', () => {
         }),
       );
       expect(result.user).not.toHaveProperty('passwordHash');
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "identity.record_coin_change($1, 'REGISTER_BONUS'",
+        ),
+        [result.user.id],
+      );
     });
 
     it('links an existing eligible account by verified email', async () => {

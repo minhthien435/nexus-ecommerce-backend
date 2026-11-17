@@ -191,7 +191,10 @@ describe('PayosClientService', () => {
       });
 
       const result = await service.createPaymentLink(mockPayload);
-      expect(mockPaymentRequests.create).toHaveBeenCalledWith(mockPayload);
+      expect(mockPaymentRequests.create).toHaveBeenCalledWith(mockPayload, {
+        timeout: 15_000,
+        maxRetries: 0,
+      });
       expect(result.checkoutUrl).toBe('https://pay.payos.vn/web/123');
     });
 
