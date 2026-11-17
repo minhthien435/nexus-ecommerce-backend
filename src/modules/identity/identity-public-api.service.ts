@@ -28,11 +28,9 @@ export class IdentityPublicApiService extends IdentityPublicApi {
 
     const [roles, trustRows] = await Promise.all([
       this.rbac.getRoles(userId),
-      this.dataSource.query<Array<{ trust_level: string }>>(
-        `SELECT trust_level
-           FROM identity.reputation_scores
-          WHERE user_id = $1
-          LIMIT 1`,
+      this.dataSource.query<Array<{ trust_level: string; rewarded: boolean }>>(
+        `SELECT (SELECT trust_level FROM identity.reputation_scores WHERE user_id = $1) AS trust_level,
+          EXISTS (SELECT 1 FROM identity.profile_completion_rewards WHERE user_id = $1) AS rewarded`,
         [userId],
       ),
     ]);
@@ -42,6 +40,7 @@ export class IdentityPublicApiService extends IdentityPublicApi {
       status: user.status,
       roles,
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
+      profileCompletionRewarded: trustRows[0]?.rewarded ?? false,
     };
   }
 

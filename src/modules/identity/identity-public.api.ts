@@ -6,6 +6,7 @@ export type PublicIdentityUser = {
   status: UserStatus;
   roles: string[];
   trustLevel: string;
+  profileCompletionRewarded: boolean;
 };
 
 export abstract class IdentityPublicApi {

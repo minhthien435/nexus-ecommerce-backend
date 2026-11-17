@@ -1,8 +1,8 @@
-import { Logger } from '@nestjs/common';
+﻿import { Logger } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { DataSource } from 'typeorm';
-import { OrderEntity } from '../domain/entities/order.entity.js';
+import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
 import { ORDER_COMPLETION_QUEUE } from '../order-completion.constants.js';
 import { OrderStateMachineService } from '../services/order-state-machine.service.js';
 
@@ -13,64 +13,53 @@ export class OrderCompletionProcessor extends WorkerHost {
   constructor(
     private readonly dataSource: DataSource,
     private readonly orderStateMachine: OrderStateMachineService,
+    private readonly reputation: IdentityReputationApi,
   ) {
     super();
   }
 
   async process(_job: Job): Promise<number> {
-    this.logger.log(
-      'Bắt đầu quét các đơn hàng DELIVERED quá 72h để tự động hoàn tất COMPLETED...',
-    );
-
     return this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const orderRepo = manager.getRepository(OrderEntity);
-
-      // 1. Lọc theo delivered_at <= 72h và loại bỏ các đơn có bất kỳ khiếu nại nào trong commerce.order_disputes
-      const eligibleOrders = await manager.query<
-        Array<{ id: string; order_number: string }>
-      >(`
-        SELECT o.id, o.order_number
-          FROM "commerce"."orders" o
-         WHERE o.status = 'DELIVERED'
-           AND o.delivered_at IS NOT NULL
-           AND o.delivered_at <= NOW() - INTERVAL '72 hours'
-           AND o.id NOT IN (
-             SELECT order_id FROM "commerce"."order_disputes"
-           )
-         LIMIT 100
+      const eligibleOrders = await manager.query<Array<{ id: string }>>(`
+        SELECT o.id FROM commerce.orders o
+        WHERE o.status = 'DELIVERED'
+          AND (SELECT MAX(h.created_at) FROM commerce.order_status_history h
+            WHERE h.order_id = o.id AND h.to_status = 'DELIVERED') < NOW() - INTERVAL '72 hours'
+          AND NOT EXISTS (SELECT 1 FROM commerce.order_disputes d WHERE d.order_id = o.id)
+        ORDER BY o.id LIMIT 100 FOR UPDATE OF o SKIP LOCKED
       `);
-
-      if (eligibleOrders.length === 0) {
-        this.logger.log('Không có đơn hàng nào cần tự động hoàn tất đợt này.');
-        return 0;
-      }
-
-      let completedCount = 0;
       for (const row of eligibleOrders) {
-        try {
-          const completed = await this.orderStateMachine.transition(manager, {
-            orderId: row.id,
-            toStatus: 'COMPLETED',
-            actorId: null,
-            reason:
-              'Hệ thống tự động hoàn tất đơn hàng sau 72 giờ không có khiếu nại',
-          });
-          await orderRepo.save(completed);
-          completedCount++;
-          this.logger.log(
-            `Tự động COMPLETED đơn hàng #${row.order_number} (${row.id})`,
-          );
-        } catch (err) {
-          this.logger.error(
-            `Lỗi khi tự động hoàn tất đơn ${row.id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+        await this.orderStateMachine.transition(manager, {
+          orderId: row.id,
+          toStatus: 'COMPLETED',
+          actorId: null,
+          reason: 'Automatically completed after the 72 hour complaint window',
+        });
       }
 
+      // Independent scan includes buyer confirmations and rejected disputes already COMPLETED.
+      // Exclude consumed and ineligible rows before LIMIT to prevent head-of-batch starvation.
+      const rewardOrders = await manager.query<Array<{ id: string }>>(`
+        SELECT o.id FROM commerce.orders o
+        JOIN identity.shops s ON s.seller_id = o.seller_id AND s.deleted_at IS NULL
+        WHERE o.status = 'COMPLETED'
+          AND (SELECT MAX(h.created_at) FROM commerce.order_status_history h
+            WHERE h.order_id = o.id AND h.to_status = 'DELIVERED') < NOW() - INTERVAL '72 hours'
+          AND NOT EXISTS (SELECT 1 FROM commerce.order_disputes d
+            WHERE d.order_id = o.id AND d.status != 'REJECTED_PAY_SELLER')
+          AND NOT EXISTS (SELECT 1 FROM commerce.order_refunds r WHERE r.order_id = o.id
+            AND r.status IN ('REQUESTED','PROCESSING','COMPLETED') AND r.amount >= o.total)
+          AND NOT EXISTS (SELECT 1 FROM identity.shop_reputation_rewards r
+            WHERE r.source_type = 'ORDER_COMPLETION' AND r.reference_id = o.id)
+        ORDER BY o.id LIMIT 100 FOR UPDATE OF o SKIP LOCKED
+      `);
+      for (const row of rewardOrders) {
+        await this.reputation.rewardCompletedOrder(row.id, manager);
+      }
       this.logger.log(
-        `Hoàn tất quét: Đã chuyển ${completedCount}/${eligibleOrders.length} đơn sang COMPLETED.`,
+        `Completed ${eligibleOrders.length} orders; checked ${rewardOrders.length} shop rewards`,
       );
-      return completedCount;
+      return eligibleOrders.length;
     });
   }
 }

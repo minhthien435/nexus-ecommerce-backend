@@ -18,6 +18,7 @@ const publicProfile = {
   avatarUrl: null,
   roles: ['CUSTOMER'],
   trustLevel: 'STANDARD',
+  profileCompletionRewarded: false,
 };
 
 describe('Profile API (e2e)', () => {

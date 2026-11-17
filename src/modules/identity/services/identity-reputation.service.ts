@@ -1,10 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { UpdateProfileDto } from '../users/dtos/update-profile.dto.js';
+import { RegisterSellerShopDto } from '../dtos/seller-shop.dto.js';
 import {
   IdentityReputationApi,
   type ReputationPenaltyResult,
   type ReputationRewardResult,
+  type ShopReputationRewardResult,
 } from '../identity-reputation.api.js';
 
 @Injectable()
@@ -13,6 +18,196 @@ export class IdentityReputationService extends IdentityReputationApi {
 
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {
     super();
+  }
+
+  async rewardProfileCompletion(
+    userId: string,
+    externalManager?: EntityManager,
+  ): Promise<ReputationRewardResult | null> {
+    const run = async (
+      manager: EntityManager,
+    ): Promise<ReputationRewardResult | null> => {
+      const id = userId.toLowerCase();
+      const users = await manager.query(
+        `SELECT full_name AS "fullName", phone, avatar_url AS "avatarUrl"
+        FROM identity.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [id],
+      );
+      const profile = users[0];
+      if (
+        !profile ||
+        !profile.fullName ||
+        !profile.phone ||
+        !profile.avatarUrl ||
+        validateSync(plainToInstance(UpdateProfileDto, profile)).length
+      )
+        return null;
+      const current = await this.getOrCreateScoreWithLock(manager, id);
+      const claim = await manager.query(
+        `INSERT INTO identity.profile_completion_rewards(user_id)
+        VALUES ($1) ON CONFLICT (user_id) DO NOTHING RETURNING user_id`,
+        [id],
+      );
+      if (!claim.length)
+        return {
+          userId: id,
+          oldScore: current.score,
+          newScore: current.score,
+          trustLevel: current.trustLevel,
+          alreadyRewarded: true,
+        };
+      const newScore = Math.min(100, current.score + 15);
+      const trustLevel = this.calculateTrustLevel(newScore);
+      await manager.query(
+        `UPDATE identity.reputation_scores SET score = $1, trust_level = $2,
+        version = version + 1, updated_at = clock_timestamp() WHERE user_id = $3`,
+        [newScore, trustLevel, id],
+      );
+      await manager.query(
+        `INSERT INTO identity.reputation_history
+        (user_id, old_score, new_score, old_trust_level, new_trust_level, delta, reason, source_type, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,'Personal profile completed','PROFILE_COMPLETION',clock_timestamp())`,
+        [
+          id,
+          current.score,
+          newScore,
+          current.trustLevel,
+          trustLevel,
+          newScore - current.score,
+        ],
+      );
+      await manager.query(
+        `INSERT INTO auction.bidder_eligibility
+        (user_id, reputation_score, trust_level, is_restricted, updated_at)
+        VALUES ($1,$2,$3,$4,clock_timestamp()) ON CONFLICT (user_id) DO UPDATE SET
+        reputation_score = EXCLUDED.reputation_score, trust_level = EXCLUDED.trust_level,
+        is_restricted = EXCLUDED.is_restricted, updated_at = clock_timestamp()`,
+        [id, newScore, trustLevel, newScore < 50],
+      );
+      return {
+        userId: id,
+        oldScore: current.score,
+        newScore,
+        trustLevel,
+        alreadyRewarded: false,
+      };
+    };
+    return externalManager
+      ? run(externalManager)
+      : this.dataSource.transaction(run);
+  }
+
+  async rewardShopProfileCompletion(
+    shopId: string,
+    externalManager?: EntityManager,
+  ): Promise<ShopReputationRewardResult | null> {
+    const run = async (manager: EntityManager) => {
+      const shops = await manager.query(
+        `SELECT id, reputation_score, name, phone,
+        warehouse_address AS "warehouseAddress", identity_number AS "identityNumber"
+        FROM identity.shops WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [shopId],
+      );
+      const shop = shops[0];
+      if (
+        !shop ||
+        validateSync(
+          plainToInstance(RegisterSellerShopDto, {
+            name: shop.name,
+            phone: shop.phone,
+            warehouseAddress: shop.warehouseAddress,
+            identityNumber: shop.identityNumber,
+          }),
+        ).length
+      )
+        return null;
+      return this.creditShop(
+        manager,
+        shopId,
+        Number(shop.reputation_score),
+        'SHOP_PROFILE_COMPLETION',
+        shopId,
+        10,
+      );
+    };
+    return externalManager
+      ? run(externalManager)
+      : this.dataSource.transaction(run);
+  }
+
+  async rewardCompletedOrder(
+    orderId: string,
+    externalManager?: EntityManager,
+  ): Promise<ShopReputationRewardResult | null> {
+    const run = async (manager: EntityManager) => {
+      // Serialize with order transitions/refund requests, then recheck all policy after locking.
+      const orders = await manager.query(
+        `SELECT id, seller_id FROM commerce.orders WHERE id = $1 FOR UPDATE`,
+        [orderId],
+      );
+      if (!orders.length) return null;
+      const eligible = await manager.query(
+        `SELECT o.id FROM commerce.orders o WHERE o.id = $1
+        AND o.status = 'COMPLETED'
+        AND (SELECT MAX(h.created_at) FROM commerce.order_status_history h
+          WHERE h.order_id = o.id AND h.to_status = 'DELIVERED') < NOW() - INTERVAL '72 hours'
+        AND NOT EXISTS (SELECT 1 FROM commerce.order_disputes d WHERE d.order_id = o.id
+          AND d.status != 'REJECTED_PAY_SELLER')
+        AND NOT EXISTS (SELECT 1 FROM commerce.order_refunds r WHERE r.order_id = o.id
+          AND r.status IN ('REQUESTED','PROCESSING','COMPLETED') AND r.amount >= o.total)`,
+        [orderId],
+      );
+      if (!eligible.length) return null;
+      const shops = await manager.query(
+        `SELECT id, reputation_score FROM identity.shops
+        WHERE seller_id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [orders[0].seller_id],
+      );
+      if (!shops.length) return null;
+      return this.creditShop(
+        manager,
+        shops[0].id,
+        Number(shops[0].reputation_score),
+        'ORDER_COMPLETION',
+        orderId,
+        5,
+      );
+    };
+    return externalManager
+      ? run(externalManager)
+      : this.dataSource.transaction(run);
+  }
+
+  private async creditShop(
+    manager: EntityManager,
+    shopId: string,
+    oldScore: number,
+    source: 'ORDER_COMPLETION' | 'SHOP_PROFILE_COMPLETION',
+    referenceId: string,
+    points: number,
+  ): Promise<ShopReputationRewardResult> {
+    const newScore = Math.min(100, oldScore + points);
+    const claim = await manager.query(
+      `INSERT INTO identity.shop_reputation_rewards
+      (shop_id, source_type, reference_id, order_id, old_score, new_score, delta)
+      VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING id`,
+      [
+        shopId,
+        source,
+        referenceId,
+        source === 'ORDER_COMPLETION' ? referenceId : null,
+        oldScore,
+        newScore,
+        newScore - oldScore,
+      ],
+    );
+    if (!claim.length)
+      return { shopId, oldScore, newScore: oldScore, alreadyRewarded: true };
+    await manager.query(
+      `UPDATE identity.shops SET reputation_score = $1, updated_at = clock_timestamp() WHERE id = $2`,
+      [newScore, shopId],
+    );
+    return { shopId, oldScore, newScore, alreadyRewarded: false };
   }
 
   private calculateTrustLevel(
@@ -33,6 +228,12 @@ export class IdentityReputationService extends IdentityReputationApi {
       manager: EntityManager,
     ): Promise<ReputationRewardResult> => {
       const normalizedUserId = userId.toLowerCase();
+
+      // Match profile PATCH lock order before touching scores or user-FK history.
+      await manager.query(
+        'SELECT id FROM identity.users WHERE id = $1 FOR UPDATE',
+        [normalizedUserId],
+      );
 
       // 1. Idempotency check: did we already reward this auction?
       const existingHistory = await manager.query(
@@ -136,6 +337,12 @@ export class IdentityReputationService extends IdentityReputationApi {
       manager: EntityManager,
     ): Promise<ReputationPenaltyResult> => {
       const normalizedUserId = userId.toLowerCase();
+
+      // Match profile PATCH lock order before touching scores or user-FK history.
+      await manager.query(
+        'SELECT id FROM identity.users WHERE id = $1 FOR UPDATE',
+        [normalizedUserId],
+      );
 
       // 1. Idempotency check: did we already penalize for this auction timeout?
       const existingPenalty = await manager.query(
