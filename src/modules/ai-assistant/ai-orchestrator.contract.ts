@@ -5,12 +5,14 @@ import {
   type ExecutionContext,
 } from '@nestjs/common';
 import type { AiChatDto } from './dtos/ai-chat.dto.js';
+import type { AiAuctionCard } from './contracts/ai-assistant.types.js';
 import type { AiProduct } from './tools/search-products.tool.js';
 import type { UiAction } from './tools/ui-action.handler.js';
 
 export type AiChatResult = {
   reply: string;
   products: AiProduct[];
+  auctions?: AiAuctionCard[];
   action: UiAction | null;
   suggestions: string[];
 };

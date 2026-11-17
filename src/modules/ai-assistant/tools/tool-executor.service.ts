@@ -5,6 +5,12 @@ import {
   Optional,
 } from '@nestjs/common';
 import { aiUnavailable } from '../ai-errors.js';
+import type { AiAuctionCard } from '../contracts/ai-assistant.types.js';
+import {
+  AI_AUCTION_TOOLS,
+  AuctionReadToolsService,
+  type AiAuctionToolName,
+} from './auction-read-tools.service.js';
 import { SearchProductsTool, type AiProduct } from './search-products.tool.js';
 import { TrackMyOrderTool } from './track-my-order.tool.js';
 import { UiActionHandler } from './ui-action.handler.js';
@@ -25,6 +31,7 @@ export type AiToolTurn = {
   readonly verifiedUserId?: string;
   readonly userMessage: string;
   products: AiProduct[];
+  auctions?: AiAuctionCard[];
 };
 @Injectable()
 export class ToolExecutorService {
@@ -33,6 +40,9 @@ export class ToolExecutorService {
     @Inject(TrackMyOrderTool) private readonly orders: TrackMyOrderTool,
     @Inject(UiActionHandler) private readonly actions: UiActionHandler,
     @Optional() @Inject(AiReadTools) private readonly readTools?: AiReadTools,
+    @Optional()
+    @Inject(AuctionReadToolsService)
+    private readonly auctionTools?: AuctionReadToolsService,
   ) {}
   /** Allocate a new turn on every request. Never seed products from history/client/model. */
   async execute(
@@ -48,7 +58,12 @@ export class ToolExecutorService {
     if (name === 'track_my_order')
       return this.orders.execute(args, turn.verifiedUserId);
     if (name === 'ui_action')
-      return this.actions.execute(args, turn.products, turn.userMessage);
+      return this.actions.execute(
+        args,
+        turn.products,
+        turn.userMessage,
+        turn.auctions ?? [],
+      );
     if (KHOA_TOOLS.includes(name as (typeof KHOA_TOOLS)[number])) {
       if (!this.readTools) throw aiUnavailable();
       const response = await this.readTools.execute(
@@ -56,6 +71,16 @@ export class ToolExecutorService {
         args,
       );
       turn.products = response.products.slice(0, 5);
+      return response.result;
+    }
+    if (AI_AUCTION_TOOLS.includes(name as AiAuctionToolName)) {
+      if (!this.auctionTools) throw aiUnavailable();
+      const response = await this.auctionTools.execute(
+        name as AiAuctionToolName,
+        args,
+        turn.verifiedUserId,
+      );
+      turn.auctions = response.auctions.slice(0, 5);
       return response.result;
     }
     throw new BadRequestException('Unsupported AI tool');

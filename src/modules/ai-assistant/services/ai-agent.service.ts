@@ -13,6 +13,7 @@ import {
   AiUiActionGuardApi,
   type AiAgentChatInput,
   type AiAgentChatOutput,
+  type AiAuctionCard,
   type AiChatContext,
   type AiFunctionCall,
   type AiImageInput,
@@ -28,12 +29,15 @@ import { AiSessionService } from './ai-session.service.js';
 const MAX_MESSAGE_LENGTH = 1000;
 const MAX_PRODUCTS_RETURNED = 5;
 const MAX_OBSERVED_PRODUCTS = 20;
+const MAX_AUCTIONS_RETURNED = 5;
+const MAX_OBSERVED_AUCTIONS = 20;
 const MAX_SUGGESTIONS_RETURNED = 3;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_IMAGE_QUERY = 'Tìm sản phẩm tương tự trong ảnh này';
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 const PRODUCT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const AUCTION_ID_OR_CODE_PATTERN = /^[a-zA-Z0-9_-]{2,100}$/;
 const AI_STORAGE_KEY_PATTERN = /^ai\/[a-zA-Z0-9/_.-]+$/;
 
 @Injectable()
@@ -60,12 +64,21 @@ export class AiAgentService {
       6,
       DEFAULT_MAX_TOOL_ROUNDS,
     );
+    const configuredAiTimeout = this.config.get<number>('AI_TIMEOUT_MS');
+    const configuredGeminiTimeout =
+      this.config.get<number>('GEMINI_TIMEOUT_MS');
+    const rawOuterTimeout =
+      configuredAiTimeout !== undefined && configuredAiTimeout !== null
+        ? configuredAiTimeout
+        : configuredGeminiTimeout !== undefined &&
+            configuredGeminiTimeout !== null
+          ? Number(configuredGeminiTimeout) + 2_000
+          : DEFAULT_TIMEOUT_MS + 2_000;
     this.timeoutMs = this.clampInt(
-      this.config.get<number>('GEMINI_TIMEOUT_MS') ??
-        this.config.get<number>('AI_TIMEOUT_MS'),
+      rawOuterTimeout,
       1000,
-      60_000,
-      DEFAULT_TIMEOUT_MS,
+      65_000,
+      DEFAULT_TIMEOUT_MS + 2_000,
     );
 
     const supabaseUrl = (this.config.get<string>('SUPABASE_URL') ?? '')
@@ -125,23 +138,32 @@ export class AiAgentService {
     const hasReadTools = toolDeclarations.some(
       (decl) => decl.name === 'get_product_detail',
     );
+    const hasAuctionTools = toolDeclarations.some(
+      (decl) => decl.name === 'search_auctions',
+    );
     const systemPrompt = buildAiAssistantSystemPrompt({
       currentPath: context.currentPath,
       currentUrl: context.currentUrl,
       currentProductSlug: context.currentProductSlug,
+      currentAuctionIdOrCode: context.currentAuctionIdOrCode,
       isAuthenticated: input.isAuthenticated,
       hasReadTools,
+      hasAuctionTools,
     });
 
     const observedProducts: AiProductCard[] = [];
+    const observedAuctions: AiAuctionCard[] = [];
     const allowedShopSlugs = new Set<string>();
     const toolRoundMessages: AiToolRoundMessage[] = [];
     let verifiedAction: AiUiAction | null = null;
     let selectedProductSlugs: string[] | null = null;
     let suppressProducts = false;
+    let selectedAuctionIds: string[] | null = null;
+    let suppressAuctions = false;
     let latestSuggestions: string[] = [];
     let finalReply = '';
     let finalProducts: AiProductCard[] = [];
+    let finalAuctions: AiAuctionCard[] = [];
 
     try {
       for (let round = 0; round < this.maxToolRounds; round++) {
@@ -192,6 +214,14 @@ export class AiAgentService {
                 selectedProductSlugs = null;
                 suppressProducts = false;
               }
+              const addedAuctionCount = this.mergeAuctions(
+                observedAuctions,
+                execution.auctions ?? [],
+              );
+              if (addedAuctionCount > 0) {
+                selectedAuctionIds = null;
+                suppressAuctions = false;
+              }
               for (const shopSlug of execution.observedShopSlugs ?? []) {
                 const normalizedShop = shopSlug?.trim().toLowerCase();
                 if (normalizedShop) allowedShopSlugs.add(normalizedShop);
@@ -213,6 +243,7 @@ export class AiAgentService {
             observedProducts,
             {
               allowedShopSlugs: [...allowedShopSlugs],
+              observedAuctions,
               userMessage: effectiveMessage,
             },
           );
@@ -220,6 +251,18 @@ export class AiAgentService {
             suppressProducts = true;
             selectedProductSlugs = [];
             if (verifiedAction?.type === 'SHOW_PRODUCTS') {
+              verifiedAction = null;
+            }
+            resultMap.set(uiCall, {
+              name: uiCall.name,
+              response: { accepted: true, shownCount: 0, action: null },
+            });
+            continue;
+          }
+          if (this.isEmptyShowAuctionsSelection(uiCall)) {
+            suppressAuctions = true;
+            selectedAuctionIds = [];
+            if (verifiedAction?.type === 'SHOW_AUCTIONS') {
               verifiedAction = null;
             }
             resultMap.set(uiCall, {
@@ -241,6 +284,19 @@ export class AiAgentService {
               if (matchedSlugs.length > 0) {
                 selectedProductSlugs = matchedSlugs;
                 suppressProducts = false;
+              }
+            }
+            if (
+              action.type === 'SHOW_AUCTIONS' &&
+              Array.isArray(uiCall.args?.auctionIds)
+            ) {
+              const matchedAuctionIds = this.matchObservedAuctionIds(
+                uiCall.args.auctionIds,
+                observedAuctions,
+              );
+              if (matchedAuctionIds.length > 0) {
+                selectedAuctionIds = matchedAuctionIds;
+                suppressAuctions = false;
               }
             }
           }
@@ -283,33 +339,71 @@ export class AiAgentService {
         selectedProductSlugs,
         suppressProducts,
       );
+      finalAuctions = this.resolveFinalAuctions(
+        observedAuctions,
+        selectedAuctionIds,
+        suppressAuctions,
+      );
 
       if (!finalReply) {
-        finalReply = this.synthesizeMaxRoundReply(finalProducts);
+        finalReply = this.synthesizeMaxRoundReply(finalProducts, finalAuctions);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`AI agent failed: ${reason}`);
+      const isUpstreamTransient =
+        !(error instanceof HttpException) ||
+        error instanceof ServiceUnavailableException;
 
-      if (error instanceof HttpException) {
-        throw error;
+      if (
+        isUpstreamTransient &&
+        (observedProducts.length > 0 || observedAuctions.length > 0)
+      ) {
+        this.logger.warn(
+          `AI agent degraded after tool retrieval (${reason}); returning grounded DB results`,
+        );
+        finalProducts = this.resolveFinalProducts(
+          observedProducts,
+          selectedProductSlugs,
+          suppressProducts,
+        );
+        finalAuctions = this.resolveFinalAuctions(
+          observedAuctions,
+          selectedAuctionIds,
+          suppressAuctions,
+        );
+        finalReply = this.synthesizeMaxRoundReply(finalProducts, finalAuctions);
+      } else {
+        this.logger.warn(`AI agent failed: ${reason}`);
+
+        if (error instanceof HttpException) {
+          throw error;
+        }
+
+        throw new ServiceUnavailableException({
+          errorCode: 'AI_UNAVAILABLE',
+          message:
+            'Trợ lý AI hiện đang tạm gián đoạn. Bạn vui lòng thử lại sau ít phút hoặc tìm kiếm trực tiếp trên Nexus nhé!',
+        });
       }
-
-      throw new ServiceUnavailableException({
-        errorCode: 'AI_UNAVAILABLE',
-        message:
-          'Trợ lý AI hiện đang tạm gián đoạn. Bạn vui lòng thử lại sau ít phút hoặc tìm kiếm trực tiếp trên Nexus nhé!',
-      });
     }
 
     if (!verifiedAction && finalProducts.length > 0) {
       verifiedAction = { type: 'SHOW_PRODUCTS' };
+    } else if (!verifiedAction && finalAuctions.length > 0) {
+      verifiedAction = { type: 'SHOW_AUCTIONS' };
     }
 
     const suggestions =
       latestSuggestions.length > 0
         ? latestSuggestions
-        : this.defaultSuggestions(finalProducts);
+        : this.defaultSuggestions(finalProducts, finalAuctions, context);
+
+    const persistedModelReply =
+      finalAuctions.length > 0
+        ? `${finalReply}\n[Phiên đấu giá vừa hiển thị: ${finalAuctions
+            .map((a) => `${a.title} (mã: ${a.id}, trạng thái: ${a.status})`)
+            .join('; ')}]`
+        : finalReply;
 
     await this.safePersistTurns(
       sessionId,
@@ -322,7 +416,7 @@ export class AiAgentService {
         },
         {
           role: 'model',
-          text: finalReply,
+          text: persistedModelReply,
           timestamp: Date.now(),
         },
       ],
@@ -332,6 +426,7 @@ export class AiAgentService {
     return {
       reply: finalReply,
       products: finalProducts,
+      ...(finalAuctions.length > 0 ? { auctions: finalAuctions } : {}),
       action: verifiedAction,
       suggestions: suggestions.slice(0, MAX_SUGGESTIONS_RETURNED),
     };
@@ -343,6 +438,7 @@ export class AiAgentService {
   ): Promise<{
     toolResult: Record<string, unknown>;
     products?: AiProductCard[];
+    auctions?: AiAuctionCard[];
     observedShopSlugs?: string[];
   }> {
     try {
@@ -350,6 +446,7 @@ export class AiAgentService {
       return {
         toolResult: result.toolResult ?? {},
         products: result.products ?? [],
+        auctions: result.auctions ?? [],
         observedShopSlugs: result.observedShopSlugs ?? [],
       };
     } catch (error) {
@@ -358,6 +455,7 @@ export class AiAgentService {
       return {
         toolResult: { error: 'TOOL_EXECUTION_FAILED', message },
         products: [],
+        auctions: [],
         observedShopSlugs: [],
       };
     }
@@ -470,7 +568,15 @@ export class AiAgentService {
       currentProductSlug = undefined;
     }
 
-    if (!currentProductSlug && currentPath) {
+    let currentAuctionIdOrCode = raw?.currentAuctionIdOrCode?.trim();
+    if (
+      currentAuctionIdOrCode &&
+      !AUCTION_ID_OR_CODE_PATTERN.test(currentAuctionIdOrCode)
+    ) {
+      currentAuctionIdOrCode = undefined;
+    }
+
+    if ((!currentProductSlug || !currentAuctionIdOrCode) && currentPath) {
       let pathname: string | undefined = currentPath;
       if (/^https?:\/\//i.test(currentPath)) {
         try {
@@ -479,29 +585,184 @@ export class AiAgentService {
           pathname = undefined;
         }
       }
-      const match = pathname?.match(
-        /^\/products\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\/|\?|#|$)/i,
-      );
-      if (match) {
-        currentProductSlug = match[1].toLowerCase();
+      if (!currentProductSlug) {
+        const match = pathname?.match(
+          /^\/products\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\/|\?|#|$)/i,
+        );
+        if (match) {
+          currentProductSlug = match[1].toLowerCase();
+        }
+      }
+      if (!currentAuctionIdOrCode) {
+        const auctionMatch = pathname?.match(
+          /^\/auctions\/([a-zA-Z0-9_-]{2,100})(?:\/|\?|#|$)/i,
+        );
+        if (auctionMatch) {
+          currentAuctionIdOrCode = auctionMatch[1];
+        }
       }
     }
 
     return {
       ...(currentPath ? { currentPath, currentUrl: currentPath } : {}),
       ...(currentProductSlug ? { currentProductSlug } : {}),
+      ...(currentAuctionIdOrCode ? { currentAuctionIdOrCode } : {}),
       ...(isAuthenticated && raw?.userId ? { userId: raw.userId } : {}),
     };
   }
 
-  private synthesizeMaxRoundReply(products: AiProductCard[]): string {
+  private mergeAuctions(
+    target: AiAuctionCard[],
+    incoming: AiAuctionCard[],
+  ): number {
+    let added = 0;
+    const seen = new Set(target.map((a) => a.auctionId.toLowerCase()));
+    for (const auction of incoming) {
+      if (!auction?.auctionId) continue;
+      if (target.length >= MAX_OBSERVED_AUCTIONS) break;
+      const key = auction.auctionId.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.push(auction);
+      added++;
+    }
+    return added;
+  }
+
+  private isEmptyShowAuctionsSelection(uiCall: AiFunctionCall): boolean {
+    const rawType =
+      typeof uiCall.args?.type === 'string'
+        ? uiCall.args.type.trim().toUpperCase()
+        : '';
+    return (
+      rawType === 'SHOW_AUCTIONS' &&
+      Array.isArray(uiCall.args?.auctionIds) &&
+      uiCall.args.auctionIds.length === 0
+    );
+  }
+
+  private matchObservedAuctionIds(
+    rawIds: unknown[],
+    observedAuctions: readonly AiAuctionCard[],
+  ): string[] {
+    const byKey = new Map<string, string>();
+    for (const auction of observedAuctions) {
+      byKey.set(auction.id.toLowerCase(), auction.auctionId);
+      byKey.set(auction.auctionId.toLowerCase(), auction.auctionId);
+      if (auction.code) {
+        byKey.set(auction.code.toLowerCase(), auction.auctionId);
+      }
+    }
+    const matched: string[] = [];
+    const seen = new Set<string>();
+    for (const item of rawIds) {
+      if (typeof item !== 'string') continue;
+      const canonical = byKey.get(item.trim().toLowerCase());
+      if (!canonical || seen.has(canonical)) continue;
+      seen.add(canonical);
+      matched.push(canonical);
+      if (matched.length >= MAX_AUCTIONS_RETURNED) break;
+    }
+    return matched;
+  }
+
+  private resolveFinalAuctions(
+    observedAuctions: readonly AiAuctionCard[],
+    selectedAuctionIds: readonly string[] | null,
+    suppressAuctions: boolean,
+  ): AiAuctionCard[] {
+    if (suppressAuctions) return [];
+    if (selectedAuctionIds && selectedAuctionIds.length > 0) {
+      const byId = new Map(
+        observedAuctions.map((a) => [a.auctionId.toLowerCase(), a]),
+      );
+      return selectedAuctionIds
+        .map((id) => byId.get(id.toLowerCase()))
+        .filter((a): a is AiAuctionCard => Boolean(a))
+        .slice(0, MAX_AUCTIONS_RETURNED);
+    }
+    return observedAuctions.slice(0, MAX_AUCTIONS_RETURNED);
+  }
+
+  private synthesizeMaxRoundReply(
+    products: AiProductCard[],
+    auctions: AiAuctionCard[],
+  ): string {
     if (products.length > 0) {
       return `Mình đã tìm thấy ${products.length} sản phẩm phù hợp trên Nexus. Bạn xem thông tin chi tiết ở các thẻ sản phẩm bên dưới nhé!`;
+    }
+    if (auctions.length === 1) {
+      return this.formatSingleAuctionSummary(auctions[0]);
+    }
+    if (auctions.length > 1) {
+      const topList = auctions
+        .slice(0, 3)
+        .map(
+          (a) =>
+            `${a.title} (${a.id}, ${this.formatAuctionRemainingText(a)}, giá hiện tại ${this.formatVnd(a.currentPrice)})`,
+        )
+        .join('; ');
+      return `Mình tìm thấy ${auctions.length} phiên đấu giá: ${topList}. Bạn muốn hỏi chi tiết phiên nào không?`;
     }
     return 'Mình chưa tìm được sản phẩm nào thật sự khớp với mô tả của bạn. Bạn có thể mô tả rõ hơn hoặc thử từ khóa khác không?';
   }
 
-  private defaultSuggestions(products: AiProductCard[]): string[] {
+  private formatSingleAuctionSummary(auction: AiAuctionCard): string {
+    const timingText = this.formatAuctionRemainingText(auction);
+    const currentPrice = this.formatVnd(auction.currentPrice);
+    const minNextBid = this.formatVnd(auction.minNextBid);
+    return `Phiên "${auction.title}" (mã ${auction.id}) ${timingText}. Giá hiện tại là ${currentPrice}, mức đặt tiếp theo tối thiểu ${minNextBid} (${auction.bidCount} lượt đặt giá).`;
+  }
+
+  private formatAuctionRemainingText(auction: AiAuctionCard): string {
+    if (auction.status === 'ENDED' || auction.status === 'SETTLED') {
+      return 'đã kết thúc';
+    }
+    if (auction.status === 'CANCELLED' || auction.status === 'FAILED') {
+      return 'đã đóng';
+    }
+    const targetIso =
+      auction.status === 'SCHEDULED' && auction.startTime
+        ? auction.startTime
+        : auction.endTime;
+    const diffMs = new Date(targetIso).getTime() - Date.now();
+    if (!Number.isFinite(diffMs) || diffMs <= 0) {
+      return auction.status === 'SCHEDULED'
+        ? 'sắp bắt đầu'
+        : 'vừa đến hạn kết thúc';
+    }
+    const totalMinutes = Math.floor(diffMs / 60_000);
+    const days = Math.floor(totalMinutes / (24 * 60));
+    const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+    const minutes = totalMinutes % 60;
+    const parts: string[] = [];
+    if (days > 0) parts.push(`${days} ngày`);
+    if (hours > 0) parts.push(`${hours} giờ`);
+    if (minutes > 0 || parts.length === 0)
+      parts.push(`${Math.max(1, minutes)} phút`);
+    const prefix =
+      auction.status === 'SCHEDULED'
+        ? 'sắp mở sau khoảng'
+        : 'đang diễn ra, còn khoảng';
+    return `${prefix} ${parts.join(' ')}`;
+  }
+
+  private formatVnd(amount: number): string {
+    return `${new Intl.NumberFormat('vi-VN').format(Math.round(amount))}đ`;
+  }
+
+  private defaultSuggestions(
+    products: AiProductCard[],
+    auctions: AiAuctionCard[],
+    context?: AiChatContext,
+  ): string[] {
+    if (auctions.length > 0 || context?.currentAuctionIdOrCode) {
+      return [
+        'Phiên này còn bao lâu?',
+        'Bước giá và luật gia hạn 60s thế nào?',
+        'Mình đang tham gia phiên nào?',
+      ];
+    }
     if (products.length > 0) {
       return [
         'Sản phẩm này còn hàng không?',
@@ -509,7 +770,11 @@ export class AiAgentService {
         'So sánh giá các sản phẩm',
       ];
     }
-    return ['Đang có sản phẩm nào bán chạy?', 'Gợi ý sản phẩm giá dưới 300k'];
+    return [
+      'Đang có phiên đấu giá nào live?',
+      'Đang có sản phẩm nào bán chạy?',
+      'Gợi ý sản phẩm giá dưới 300k',
+    ];
   }
 
   private async safePersistTurns(

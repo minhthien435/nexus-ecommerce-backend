@@ -39,4 +39,20 @@ describe('buildAiAssistantSystemPrompt', () => {
 
     expect(prompt).toContain('KHÁCH VÃNG LAI');
   });
+
+  it('injects auction context, rules, and SHOW_AUCTIONS instructions when viewing an auction', () => {
+    const prompt = buildAiAssistantSystemPrompt({
+      currentPath: '/auctions/AUC-088618-PPBI',
+      currentAuctionIdOrCode: 'AUC-088618-PPBI',
+      isAuthenticated: true,
+      hasAuctionTools: true,
+    });
+
+    expect(prompt).toContain('AUC-088618-PPBI');
+    expect(prompt).toContain('get_auction_detail');
+    expect(prompt).toContain('get_my_auction_participations');
+    expect(prompt).toContain('SHOW_AUCTIONS');
+    expect(prompt).toContain('60 giây cuối');
+    expect(prompt).toContain('reservePrice');
+  });
 });

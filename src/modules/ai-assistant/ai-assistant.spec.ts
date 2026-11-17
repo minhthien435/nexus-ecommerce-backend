@@ -252,6 +252,55 @@ describe('grounded tools', () => {
       handler.execute({ type: 'SHOW_PRODUCTS', slugs: [] }, [product]),
     ).toBeNull();
     expect(handler.execute({ type: 'SHOW_PRODUCTS' }, [])).toBeNull();
+    const auctionCard = {
+      id: 'AUC-088618-PPBI',
+      auctionId: 'c9c7ba7e-5c86-4363-8dd6-5f0cdf3811b4',
+      code: 'AUC-088618-PPBI',
+      title: 'Coffee Maker',
+      status: 'LIVE',
+      currentPrice: 70000,
+      bidStep: 10000,
+      minNextBid: 80000,
+      bidCount: 2,
+      startTime: '2026-11-16T01:35:00.000Z',
+      endTime: '2026-11-17T01:35:00.000Z',
+      has3dModel: true,
+    };
+    expect(
+      handler.execute({ type: 'SHOW_AUCTIONS' }, [], '', [auctionCard]),
+    ).toEqual({ type: 'SHOW_AUCTIONS' });
+    expect(
+      handler.execute(
+        { type: 'SHOW_AUCTIONS', auctionIds: ['AUC-088618-PPBI'] },
+        [],
+        '',
+        [auctionCard],
+      ),
+    ).toEqual({ type: 'SHOW_AUCTIONS' });
+    expect(
+      handler.execute(
+        { type: 'SHOW_AUCTIONS', auctionIds: ['AUC-HALLUCINATED'] },
+        [],
+        '',
+        [auctionCard],
+      ),
+    ).toBeNull();
+    expect(
+      handler.execute(
+        { type: 'NAVIGATE', auctionIdOrCode: 'AUC-088618-PPBI' },
+        [],
+        'Mở phiên đấu giá này giúp mình',
+        [auctionCard],
+      ),
+    ).toEqual({ type: 'NAVIGATE', url: '/auctions/AUC-088618-PPBI' });
+    expect(
+      handler.execute(
+        { type: 'NAVIGATE', auctionIdOrCode: 'AUC-088618-PPBI' },
+        [],
+        'Phiên này giá bao nhiêu?',
+        [auctionCard],
+      ),
+    ).toBeNull();
     expect(
       handler.execute({ type: 'OPEN_SEARCH', searchQuery: 'shoe & bag' }, []),
     ).toEqual({ type: 'OPEN_SEARCH', url: '/search?q=shoe%20%26%20bag' });
