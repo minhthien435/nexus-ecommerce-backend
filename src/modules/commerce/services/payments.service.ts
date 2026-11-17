@@ -8,8 +8,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, type EntityManager } from 'typeorm';
+import { CoinService } from '../../coin/coin.service.js';
+import { coinDiscountCents, coinLimit } from '../../coin/coin-policy.js';
+import { centsToMoney, moneyToCents } from './cart-money.js';
 import {
   CreatePayosPaymentLinkDto,
   CreatePayosPaymentLinkResult,
@@ -27,10 +29,7 @@ export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
 
   constructor(
-    @InjectRepository(OrderEntity)
-    private readonly orderRepository: Repository<OrderEntity>,
-    @InjectRepository(PaymentEntity)
-    private readonly paymentRepository: Repository<PaymentEntity>,
+    private readonly dataSource: DataSource,
     private readonly payosClientService: PayosClientService,
     private readonly configService: ConfigService,
   ) {}
@@ -43,9 +42,21 @@ export class PaymentsService {
       throw new ServiceUnavailableException('PayOS service is not available');
     }
 
-    // 1. Authoritative order retrieval
-    const order = await this.orderRepository.findOne({
+    return this.dataSource.transaction((manager) =>
+      this.createLockedPaymentLink(manager, buyerId, dto),
+    );
+  }
+
+  private async createLockedPaymentLink(
+    manager: EntityManager,
+    buyerId: string,
+    dto: CreatePayosPaymentLinkDto,
+  ): Promise<CreatePayosPaymentLinkResult> {
+    const orderRepository = manager.getRepository(OrderEntity);
+    const paymentRepository = manager.getRepository(PaymentEntity);
+    const order = await orderRepository.findOne({
       where: { id: dto.orderId },
+      lock: { mode: 'pessimistic_write' },
     });
 
     if (!order) {
@@ -74,7 +85,7 @@ export class PaymentsService {
     if (isNaN(numericTotal) || numericTotal <= 0) {
       throw new BadRequestException('Order total must be greater than 0');
     }
-    const payosAmount = Math.round(numericTotal);
+    let payosAmount = Math.round(numericTotal);
 
     const currency = order.currency?.toUpperCase().trim();
     if (currency !== 'VND') {
@@ -83,9 +94,23 @@ export class PaymentsService {
       );
     }
 
+    if (order.source !== 'AUCTION' && dto.useCoins !== undefined) {
+      throw new BadRequestException('For cart orders, select Coin at checkout');
+    }
+    const holdExpiresSeconds = order.holdExpiresAt
+      ? Math.floor(new Date(order.holdExpiresAt).getTime() / 1000)
+      : 0;
+    if (
+      order.source === 'AUCTION' &&
+      holdExpiresSeconds &&
+      holdExpiresSeconds <= Math.floor(Date.now() / 1000)
+    ) {
+      throw new ConflictException('The auction payment deadline has passed');
+    }
+
     // 5. Client Idempotency Key check
     if (dto.idempotencyKey) {
-      const existingByKey = await this.paymentRepository.findOne({
+      const existingByKey = await paymentRepository.findOne({
         where: { idempotencyKey: dto.idempotencyKey },
       });
 
@@ -107,6 +132,8 @@ export class PaymentsService {
           );
         }
 
+        this.assertCoinSelection(order, dto.useCoins);
+
         // Return existing payment link data if cached in failureReason
         if (existingByKey.failureReason) {
           try {
@@ -125,6 +152,8 @@ export class PaymentsService {
                 checkoutUrl: cached.checkoutUrl,
                 qrCode: cached.qrCode,
                 amount: payosAmount,
+                payableAmount: payosAmount,
+                coinDiscountAmount: Number(order.discountAmount ?? 0),
                 currency: 'VND',
                 status: existingByKey.status,
               };
@@ -137,7 +166,7 @@ export class PaymentsService {
     }
 
     // 6. Check for active PayOS payment attempt on this order
-    const activePayment = await this.paymentRepository.findOne({
+    const activePayment = await paymentRepository.findOne({
       where: {
         orderId: order.id,
         provider: 'PAYOS',
@@ -145,6 +174,8 @@ export class PaymentsService {
       },
       order: { createdAt: 'DESC' },
     });
+
+    if (activePayment) this.assertCoinSelection(order, dto.useCoins);
 
     if (
       activePayment?.providerPaymentId &&
@@ -167,6 +198,8 @@ export class PaymentsService {
             checkoutUrl: cached.checkoutUrl,
             qrCode: cached.qrCode,
             amount: payosAmount,
+            payableAmount: payosAmount,
+            coinDiscountAmount: Number(order.discountAmount ?? 0),
             currency: 'VND',
             status: activePayment.status,
           };
@@ -177,10 +210,38 @@ export class PaymentsService {
     }
 
     // 7. Calculate attempt number
-    const previousAttempts = await this.paymentRepository.count({
+    const previousAttempts = await paymentRepository.count({
       where: { orderId: order.id },
     });
     const attemptNo = previousAttempts + 1;
+    if (
+      dto.useCoins !== undefined &&
+      !activePayment &&
+      previousAttempts === 0
+    ) {
+      const totalCents = moneyToCents(order.total);
+      if (dto.useCoins > coinLimit(moneyToCents(order.subtotal), totalCents)) {
+        throw new BadRequestException({
+          errorCode: 'COIN_DISCOUNT_LIMIT_EXCEEDED',
+          message: 'The requested Coin discount exceeds the order limit',
+        });
+      }
+      if (dto.useCoins > 0) {
+        const discount = coinDiscountCents(dto.useCoins);
+        await CoinService.redeem(
+          manager,
+          order.buyerId,
+          order.id,
+          dto.useCoins,
+        );
+        order.discountAmount = centsToMoney(discount);
+        order.total = centsToMoney(totalCents - discount);
+        await orderRepository.save(order);
+        payosAmount = Math.round(Number(order.total));
+      }
+    } else {
+      this.assertCoinSelection(order, dto.useCoins);
+    }
 
     // 8. Generate unique safe integer orderCode
     const orderCode = generatePayosOrderCode();
@@ -195,13 +256,12 @@ export class PaymentsService {
       'http://localhost:5173/checkout/payment-result';
 
     const nowInSeconds = Math.floor(Date.now() / 1000);
-    const holdExpiresSeconds = order.holdExpiresAt
-      ? Math.floor(new Date(order.holdExpiresAt).getTime() / 1000)
-      : 0;
     const expiredAt =
-      holdExpiresSeconds > nowInSeconds + 60
+      order.source === 'AUCTION' && holdExpiresSeconds
         ? holdExpiresSeconds
-        : nowInSeconds + 15 * 60;
+        : holdExpiresSeconds > nowInSeconds + 60
+          ? holdExpiresSeconds
+          : nowInSeconds + 15 * 60;
 
     let payosResponse;
     try {
@@ -224,12 +284,12 @@ export class PaymentsService {
     }
 
     // 10. Persist payment record
-    const payment = this.paymentRepository.create({
+    const payment = paymentRepository.create({
       orderId: order.id,
       checkoutSessionId: order.checkoutSessionId,
       provider: 'PAYOS',
       providerPaymentId: String(orderCode),
-      amount: order.total,
+      amount: String(payosAmount),
       currency: 'VND',
       status: 'PENDING',
       attemptNo,
@@ -243,41 +303,25 @@ export class PaymentsService {
     });
 
     try {
-      await this.paymentRepository.save(payment);
-    } catch (dbError) {
-      const pgCode = (dbError as { code?: string })?.code;
-      if (pgCode === '23505') {
-        this.logger.warn(
-          `Unique constraint violation (23505) on PayOS payment persistence for order ${order.id}. Recovering record.`,
-        );
-        const recovered = await this.paymentRepository.findOne({
-          where: [
-            { providerPaymentId: String(orderCode) },
-            ...(dto.idempotencyKey
-              ? [{ idempotencyKey: dto.idempotencyKey }]
-              : []),
-          ],
-        });
-        if (recovered) {
-          return {
-            paymentId: recovered.id,
-            orderId: order.id,
-            orderCode,
-            paymentLinkId: payosResponse.paymentLinkId,
-            checkoutUrl: payosResponse.checkoutUrl,
-            qrCode: payosResponse.qrCode,
-            amount: payosAmount,
-            currency: 'VND',
-            status: recovered.status,
-          };
-        }
-      }
-
+      await paymentRepository.save(payment);
+    } catch (error) {
       this.logger.error(
-        `PayOS paymentLink created (${orderCode}), but DB save failed: ${(dbError as Error).message}`,
-        (dbError as Error).stack,
+        `PayOS link ${orderCode} was created but its payment record could not be saved: ${(error as Error).message}`,
       );
-      throw dbError;
+      try {
+        await this.payosClientService.cancelPaymentLink(
+          orderCode,
+          'Payment setup failed',
+        );
+      } catch (cancelError) {
+        this.logger.error(
+          `Could not cancel PayOS link ${orderCode}: ${(cancelError as Error).message}`,
+        );
+      }
+      if ((error as { code?: string }).code === '23505') {
+        throw new ConflictException('Payment attempt already exists');
+      }
+      throw error;
     }
 
     return {
@@ -288,8 +332,21 @@ export class PaymentsService {
       checkoutUrl: payosResponse.checkoutUrl,
       qrCode: payosResponse.qrCode,
       amount: payosAmount,
+      payableAmount: payosAmount,
+      coinDiscountAmount: Number(order.discountAmount ?? 0),
       currency: 'VND',
       status: payment.status,
     };
+  }
+  private assertCoinSelection(order: OrderEntity, useCoins?: number): void {
+    if (
+      useCoins !== undefined &&
+      coinDiscountCents(useCoins) !== moneyToCents(order.discountAmount)
+    ) {
+      throw new ConflictException({
+        errorCode: 'COIN_SELECTION_LOCKED',
+        message: 'The Coin selection is locked after creating the PayOS link',
+      });
+    }
   }
 }

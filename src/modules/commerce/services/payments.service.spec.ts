@@ -20,6 +20,7 @@ describe('PaymentsService', () => {
   let paymentRepository: Repository<PaymentEntity>;
   let payosClientService: PayosClientService;
   let configService: ConfigService;
+  const coinQuery = vi.fn();
 
   const buyerId = '11111111-1111-4111-8111-111111111111';
   const otherBuyerId = '22222222-2222-4222-8222-222222222222';
@@ -67,6 +68,7 @@ describe('PaymentsService', () => {
   beforeEach(() => {
     orderRepository = {
       findOne: vi.fn(),
+      save: vi.fn(),
     } as unknown as Repository<OrderEntity>;
 
     paymentRepository = {
@@ -90,9 +92,16 @@ describe('PaymentsService', () => {
       }),
     } as unknown as ConfigService;
 
+    coinQuery.mockReset().mockResolvedValue([{ applied: true }]);
     service = new PaymentsService(
-      orderRepository,
-      paymentRepository,
+      {
+        transaction: (run: (manager: unknown) => unknown) =>
+          run({
+            getRepository: (entity: unknown) =>
+              entity === OrderEntity ? orderRepository : paymentRepository,
+            query: coinQuery,
+          }),
+      } as never,
       payosClientService,
       configService,
     );
@@ -223,6 +232,54 @@ describe('PaymentsService', () => {
 
     expect(result.checkoutUrl).toBe('https://pay.payos.vn/web/123456');
     expect(result.orderCode).toBe(1793584893952001);
+    expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
+  });
+
+  it('applies auction Coin before creating a link for the reduced amount', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue({
+      ...mockOrder,
+      source: 'AUCTION',
+      holdExpiresAt: new Date(Date.now() + 3_600_000),
+    });
+    vi.mocked(paymentRepository.count).mockResolvedValue(0);
+
+    const result = await service.createPayosPaymentLink(buyerId, {
+      orderId,
+      useCoins: 30_000,
+    });
+
+    expect(coinQuery).toHaveBeenCalledWith(expect.any(String), [
+      buyerId,
+      orderId,
+      -30_000,
+    ]);
+    expect(orderRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        discountAmount: '30000.00',
+        total: '520000.00',
+      }),
+    );
+    expect(payosClientService.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 520_000 }),
+    );
+    expect(result).toMatchObject({
+      amount: 520_000,
+      coinDiscountAmount: 30_000,
+    });
+  });
+
+  it('rejects changes to the auction Coin selection once a payment exists', async () => {
+    vi.mocked(orderRepository.findOne).mockResolvedValue({
+      ...mockOrder,
+      source: 'AUCTION',
+      holdExpiresAt: new Date(Date.now() + 3_600_000),
+    });
+    vi.mocked(paymentRepository.count).mockResolvedValue(1);
+
+    await expect(
+      service.createPayosPaymentLink(buyerId, { orderId, useCoins: 30_000 }),
+    ).rejects.toThrow(ConflictException);
+    expect(coinQuery).not.toHaveBeenCalled();
     expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
   });
 

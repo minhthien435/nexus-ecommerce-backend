@@ -123,6 +123,7 @@ export class PaymentWebhookService {
         // Locate OrderEntity
         const order = await manager.findOne(OrderEntity, {
           where: { id: payment.orderId! },
+          lock: { mode: 'pessimistic_write' },
         });
 
         if (!order) {
