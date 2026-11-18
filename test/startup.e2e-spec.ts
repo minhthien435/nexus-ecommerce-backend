@@ -1,4 +1,5 @@
 import { AppModule } from '../src/app.module.js';
+import { BullRegistrar, getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import request from 'supertest';
@@ -17,6 +18,10 @@ import { ProductSearchService } from '../src/modules/catalog/services/product-se
 import { ProductSkuService } from '../src/modules/catalog/services/product-sku.service.js';
 import { ProductController } from '../src/modules/catalog/controllers/product.controller.js';
 import { ProductSkuController } from '../src/modules/catalog/controllers/product-sku.controller.js';
+import { ORDER_EXPIRY_QUEUE } from '../src/modules/commerce/order-expiry.constants.js';
+import { ORDER_COMPLETION_QUEUE } from '../src/modules/commerce/order-completion.constants.js';
+import { AUCTION_SETTLEMENT_QUEUE } from '../src/modules/auction/auction-settlement.constants.js';
+import { AUCTION_LIFECYCLE_QUEUE } from '../src/modules/auction/auction-lifecycle.constants.js';
 
 describe('Application startup module graph (e2e)', () => {
   it('loads the complete AppModule without circular initialization errors', () => {
@@ -39,12 +44,27 @@ describe('Application startup module graph (e2e)', () => {
     const source = {
       options: { type: 'postgres' },
       entityMetadatas: [],
+      transaction: vi.fn().mockResolvedValue(undefined),
       getRepository: (entity: unknown) =>
         entity === UserEntity ? users : entity === CartEntity ? carts : {},
+    };
+    const queue = {
+      add: vi.fn().mockResolvedValue(undefined),
+      upsertJobScheduler: vi.fn().mockResolvedValue(undefined),
     };
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DataSource)
       .useValue(source)
+      .overrideProvider(BullRegistrar)
+      .useValue({ register: vi.fn() })
+      .overrideProvider(getQueueToken(ORDER_EXPIRY_QUEUE))
+      .useValue(queue)
+      .overrideProvider(getQueueToken(ORDER_COMPLETION_QUEUE))
+      .useValue(queue)
+      .overrideProvider(getQueueToken(AUCTION_SETTLEMENT_QUEUE))
+      .useValue(queue)
+      .overrideProvider(getQueueToken(AUCTION_LIFECYCLE_QUEUE))
+      .useValue(queue)
       .overrideProvider(RbacService)
       .useValue({ hasAllPermissions: vi.fn().mockResolvedValue(true) })
       .overrideProvider(AuthService)
