@@ -6,6 +6,7 @@ import request from 'supertest';
 import { SellerProductController } from '../src/modules/catalog/controllers/seller-product.controller.js';
 import { ProductStatus } from '../src/modules/catalog/domain/entities/product.entity.js';
 import { SellerProductService } from '../src/modules/catalog/services/seller-product.service.js';
+import { SellerBulkImportService } from '../src/modules/catalog/services/seller-bulk-import.service.js';
 import { AccessTokenGuard } from '../src/modules/identity/auth/guards/access-token.guard.js';
 import { UserEntity } from '../src/modules/identity/domain/user.entity.js';
 import { RbacService } from '../src/modules/identity/rbac/rbac.service.js';
@@ -27,6 +28,10 @@ describe('Seller product API guards and ownership context (e2e)', () => {
   const rbac = {
     hasAnyRole: vi.fn(),
     hasAllPermissions: vi.fn(),
+  };
+  const bulkImport = {
+    template: vi.fn(),
+    import: vi.fn(),
   };
 
   beforeEach(async () => {
@@ -50,6 +55,7 @@ describe('Seller product API guards and ownership context (e2e)', () => {
       providers: [
         AccessTokenGuard,
         { provide: SellerProductService, useValue: products },
+        { provide: SellerBulkImportService, useValue: bulkImport },
         { provide: RbacService, useValue: rbac },
         {
           provide: getRepositoryToken(UserEntity),

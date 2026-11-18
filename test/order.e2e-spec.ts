@@ -6,6 +6,7 @@ import request from 'supertest';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter.js';
 import { TransformInterceptor } from '../src/common/interceptors/transform.interceptor.js';
 import { OrderController } from '../src/modules/commerce/controllers/order.controller.js';
+import { OrderRefundService } from '../src/modules/commerce/services/order-refund.service.js';
 import { OrderService } from '../src/modules/commerce/services/order.service.js';
 import { AccessTokenGuard } from '../src/modules/identity/auth/guards/access-token.guard.js';
 import { UserEntity } from '../src/modules/identity/domain/user.entity.js';
@@ -26,6 +27,10 @@ describe('Buyer order detail and cancellation (HTTP)', () => {
     getOrderById: vi.fn(),
     cancelOrder: vi.fn(),
   };
+  const refunds = {
+    getBuyerRefundForOrder: vi.fn(),
+    updateBuyerRefundAccount: vi.fn(),
+  };
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -37,6 +42,7 @@ describe('Buyer order detail and cancellation (HTTP)', () => {
         { provide: getRepositoryToken(UserEntity), useValue: users },
         { provide: RbacService, useValue: rbac },
         { provide: OrderService, useValue: orders },
+        { provide: OrderRefundService, useValue: refunds },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -64,6 +70,7 @@ describe('Buyer order detail and cancellation (HTTP)', () => {
       id: orderId,
       status: 'CANCELLED',
     });
+    refunds.getBuyerRefundForOrder.mockResolvedValue(null);
   });
 
   afterAll(async () => app.close());
