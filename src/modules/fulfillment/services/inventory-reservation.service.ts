@@ -107,7 +107,10 @@ SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
     }
     if (context) {
       for (const row of rows) {
-        const key = `cancel:${createHash('sha256').update(`${context.operationId}:${row.warehouse_id}:${row.sku_id}`).digest('hex')}`;
+        const fingerprint = createHash('sha256')
+          .update(`${context.operationId}:${row.warehouse_id}:${row.sku_id}`)
+          .digest('hex');
+        const key = `cancel:${fingerprint}`;
         await manager.query(
           `INSERT INTO fulfillment.seller_inventory_adjustments
              (inventory_item_id, sku_id, warehouse_id, actor_id, type,
@@ -115,7 +118,7 @@ SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
               unavailable_after, available_after, idempotency_key, request_fingerprint)
            VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid,
                    'ORDER_CANCELLATION_RELEASE', $5::int, $6::int, $6::int,
-                   $7::int, $8::int, $9::int, $10, $10)`,
+                   $7::int, $8::int, $9::int, $10, $11)`,
           [
             row.inventory_item_id,
             row.sku_id,
@@ -127,6 +130,7 @@ SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
             Number(row.unavailable_qty),
             Number(row.available_qty),
             key,
+            fingerprint,
           ],
         );
       }
