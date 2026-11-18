@@ -165,6 +165,11 @@ describe('InventoryReservationService', () => {
     expect(s.manager.query.mock.calls[1][1][3]).toBe(
       '66666666-6666-4666-8666-666666666666',
     );
+    const idempotencyKey = s.manager.query.mock.calls[1][1][9] as string;
+    const requestFingerprint = s.manager.query.mock.calls[1][1][10] as string;
+    expect(idempotencyKey).toBe(`cancel:${requestFingerprint}`);
+    expect(idempotencyKey.length).toBeLessThanOrEqual(100);
+    expect(requestFingerprint).toHaveLength(64);
   });
 
   it('rejects a missing release row', async () => {
