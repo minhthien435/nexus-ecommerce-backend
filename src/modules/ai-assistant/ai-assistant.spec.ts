@@ -576,6 +576,33 @@ describe('Gemini', () => {
       expect(generate).toHaveBeenCalledTimes(1);
     }
   });
+  it('never sends httpOptions.timeout below 10s to Gemini when totalTimeout >= 10s with fallbacks', async () => {
+    const prodConfig = new ConfigService({
+      GEMINI_MODEL: 'primary-model',
+      GEMINI_FALLBACK_MODELS: 'fallback-1',
+      GEMINI_API_KEY: 'fake',
+      GEMINI_TIMEOUT_MS: '15000',
+      SUPABASE_URL: 'https://project.supabase.co',
+      SUPABASE_STORAGE_BUCKET: 'media',
+    });
+    const generate = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 503 })
+      .mockResolvedValueOnce({ text: 'ok' });
+    const client = new GeminiClientService(
+      prodConfig,
+      { generate },
+      new AiImageService(prodConfig),
+    );
+    await expect(client.generate([])).resolves.toEqual({ text: 'ok' });
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(
+      generate.mock.calls[0][0].config.httpOptions.timeout,
+    ).toBeGreaterThanOrEqual(10_000);
+    expect(
+      generate.mock.calls[1][0].config.httpOptions.timeout,
+    ).toBeGreaterThanOrEqual(10_000);
+  });
 });
 
 const verifyAsync = vi.fn();

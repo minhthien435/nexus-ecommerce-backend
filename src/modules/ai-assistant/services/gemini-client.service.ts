@@ -20,7 +20,8 @@ import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 
 const DEFAULT_FALLBACK_COOLDOWN_MS = 30_000;
 const NOT_FOUND_COOLDOWN_MS = 300_000;
-const MAX_FALLBACK_ATTEMPT_TIMEOUT_MS = 8_000;
+const MIN_GOOGLE_DEADLINE_MS = 10_000;
+const MAX_FALLBACK_ATTEMPT_TIMEOUT_MS = 12_000;
 const MAX_COOLDOWN_ENTRIES = 50;
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const FALLBACK_ONLY_STATUSES = new Set([404]);
@@ -267,6 +268,12 @@ export class GeminiClientService {
           MAX_FALLBACK_ATTEMPT_TIMEOUT_MS,
           Math.max(1, Math.floor(remainingMs * 0.65)),
         );
+    // Google Gemini API rejects any server deadline < 10s with HTTP 400 INVALID_ARGUMENT.
+    // Keep attemptDeadline for client-side fallback timing, while clamping httpOptions.timeout >= 10s.
+    const httpTimeoutMs =
+      params.totalTimeout >= MIN_GOOGLE_DEADLINE_MS
+        ? Math.max(MIN_GOOGLE_DEADLINE_MS, attemptTimeoutMs)
+        : attemptTimeoutMs;
 
     const attemptController = new AbortController();
     const onOuterAbort = () => attemptController.abort();
@@ -294,7 +301,7 @@ export class GeminiClientService {
             ...params.requestBaseConfig,
             abortSignal: attemptController.signal,
             httpOptions: {
-              timeout: attemptTimeoutMs,
+              timeout: httpTimeoutMs,
               retryOptions: { attempts: 1 },
             },
           },
