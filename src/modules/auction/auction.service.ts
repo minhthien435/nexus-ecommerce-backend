@@ -1141,7 +1141,7 @@ export class AuctionService {
           OR LOWER(auction.titleSnapshot) LIKE :searchPattern
           OR EXISTS (
             SELECT 1 FROM catalog.products p
-            WHERE p.id = auction.productId
+            WHERE p.id = auction.product_id
               AND p.deleted_at IS NULL
               AND LOWER(p.name) LIKE :searchPattern
           ))`,
