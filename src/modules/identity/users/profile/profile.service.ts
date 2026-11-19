@@ -18,6 +18,7 @@ export type PublicProfile = {
   phone: string | null;
   avatarUrl: string | null;
   roles: string[];
+  reputationScore: number;
   trustLevel: string;
   profileCompletionRewarded: boolean;
   addresses: UserAddressEntity[];
@@ -55,13 +56,29 @@ export class ProfileService {
           ORDER BY r.code`,
         [userId],
       ),
-      this.dataSource.query<{ trust_level: string; rewarded: boolean }[]>(
-        `SELECT (SELECT trust_level FROM identity.reputation_scores WHERE user_id = $1) AS trust_level,
-          EXISTS (SELECT 1 FROM identity.profile_completion_rewards WHERE user_id = $1) AS rewarded`,
+      this.dataSource.query<
+        {
+          trust_level: string | null;
+          score: number | string | null;
+          rewarded: boolean;
+        }[]
+      >(
+        `SELECT r.trust_level, r.score,
+          EXISTS (SELECT 1 FROM identity.profile_completion_rewards WHERE user_id = $1) AS rewarded
+         FROM (SELECT 1) AS _
+         LEFT JOIN identity.reputation_scores r ON r.user_id = $1`,
         [userId],
       ),
       this.addresses.list(userId),
     ]);
+
+    const rawScore = trustRows[0]?.score;
+    const reputationScore =
+      rawScore !== undefined &&
+      rawScore !== null &&
+      Number.isFinite(Number(rawScore))
+        ? Number(rawScore)
+        : 50;
 
     return {
       id: user.id,
@@ -70,6 +87,7 @@ export class ProfileService {
       phone: user.phone,
       avatarUrl: user.avatarUrl,
       roles: roleRows.map(({ code }) => code),
+      reputationScore,
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
       profileCompletionRewarded: trustRows[0]?.rewarded ?? false,
       addresses: addresses.map((addr) => {
