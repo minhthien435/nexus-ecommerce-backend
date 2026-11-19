@@ -2216,7 +2216,7 @@ describe('AuctionService', () => {
       });
 
       expect(qb.andWhere).toHaveBeenCalledWith(
-        expect.stringContaining('searchPattern'),
+        expect.stringContaining('p.id = auction.product_id'),
         { searchPattern: '%omega%' },
       );
       expect(qb.andWhere).toHaveBeenCalledWith(
