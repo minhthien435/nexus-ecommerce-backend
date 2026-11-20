@@ -22,6 +22,7 @@ import { ORDER_EXPIRY_QUEUE } from '../src/modules/commerce/order-expiry.constan
 import { ORDER_COMPLETION_QUEUE } from '../src/modules/commerce/order-completion.constants.js';
 import { AUCTION_SETTLEMENT_QUEUE } from '../src/modules/auction/auction-settlement.constants.js';
 import { AUCTION_LIFECYCLE_QUEUE } from '../src/modules/auction/auction-lifecycle.constants.js';
+import { FLASH_DEAL_LIFECYCLE_QUEUE } from '../src/modules/catalog/flash-deal-lifecycle.constants.js';
 
 describe('Application startup module graph (e2e)', () => {
   it('loads the complete AppModule without circular initialization errors', () => {
@@ -64,6 +65,8 @@ describe('Application startup module graph (e2e)', () => {
       .overrideProvider(getQueueToken(AUCTION_SETTLEMENT_QUEUE))
       .useValue(queue)
       .overrideProvider(getQueueToken(AUCTION_LIFECYCLE_QUEUE))
+      .useValue(queue)
+      .overrideProvider(getQueueToken(FLASH_DEAL_LIFECYCLE_QUEUE))
       .useValue(queue)
       .overrideProvider(RbacService)
       .useValue({ hasAllPermissions: vi.fn().mockResolvedValue(true) })
