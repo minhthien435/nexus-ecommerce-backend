@@ -28,6 +28,9 @@ export class FlashDealCampaignEntity {
     default: FlashDealCampaignStatus.DRAFT,
   })
   status: FlashDealCampaignStatus;
+  // Campaigns created before creator tracking have no recorded author.
+  @Column({ name: 'created_by', type: 'uuid', nullable: true }) createdBy:
+    string | null;
   @Column({ name: 'starts_at', type: 'timestamptz' }) startsAt: Date;
   @Column({ name: 'ends_at', type: 'timestamptz' }) endsAt: Date;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

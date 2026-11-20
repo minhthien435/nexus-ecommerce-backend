@@ -75,7 +75,7 @@ describe('FlashDealService', () => {
       totalPages: 2,
     });
     const sql = dataSource.query.mock.calls[1][0] as string;
-    expect(sql).toContain('fdi.is_active = true');
+    expect(sql).toContain("fdi.status = 'ACTIVE'");
     expect(sql).toContain('HAVING SUM(ii.available_qty) > 0');
     expect(sql).toContain("p.status = 'ACTIVE' AND p.deleted_at IS NULL");
     expect(sql).toContain("shop.status = 'ACTIVE' AND shop.deleted_at IS NULL");

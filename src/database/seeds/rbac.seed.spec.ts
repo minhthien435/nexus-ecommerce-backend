@@ -31,6 +31,18 @@ describe('RBAC seed', () => {
     ]);
   });
 
+  it('grants the three flash deal privileges exclusively to admins', () => {
+    expect(
+      PRIVILEGE_SEEDS.filter(({ code }) => code.startsWith('FLASH_DEAL.')).map(
+        ({ code, roles }) => [code, roles],
+      ),
+    ).toEqual([
+      ['FLASH_DEAL.LIST', ['ADMIN']],
+      ['FLASH_DEAL.MANAGE', ['ADMIN']],
+      ['FLASH_DEAL.CANCEL', ['ADMIN']],
+    ]);
+  });
+
   it('reuses an existing admin and assigns ADMIN idempotently', async () => {
     const query = vi
       .fn()

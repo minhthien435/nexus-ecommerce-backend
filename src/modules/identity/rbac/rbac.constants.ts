@@ -211,6 +211,24 @@ export const PRIVILEGE_SEEDS: readonly PrivilegeSeed[] = [
     roles: all,
   },
   {
+    code: 'FLASH_DEAL.LIST',
+    module: 'CATALOG',
+    description: 'List flash deal campaigns',
+    roles: ['ADMIN'],
+  },
+  {
+    code: 'FLASH_DEAL.MANAGE',
+    module: 'CATALOG',
+    description: 'Manage flash deal campaigns and items',
+    roles: ['ADMIN'],
+  },
+  {
+    code: 'FLASH_DEAL.CANCEL',
+    module: 'CATALOG',
+    description: 'Cancel flash deal campaigns',
+    roles: ['ADMIN'],
+  },
+  {
     code: 'CATEGORY.CREATE',
     module: 'CATALOG',
     description: 'Create category',
