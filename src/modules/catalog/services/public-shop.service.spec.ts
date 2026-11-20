@@ -35,12 +35,12 @@ describe('PublicShopService', () => {
   );
 
   it.each([
-    [49, 'STANDARD'],
-    [50, 'SILVER'],
-    [74, 'SILVER'],
-    [75, 'GOLD'],
-    [89, 'GOLD'],
-    [90, 'VIP'],
+    [49, 'NEW'],
+    [50, 'STANDARD'],
+    [69, 'STANDARD'],
+    [70, 'TRUSTED'],
+    [89, 'TRUSTED'],
+    [90, 'TOP_SELLER'],
   ] as const)('maps trust threshold %i to %s', async (score, level) => {
     const dataSource = {
       query: vi
@@ -57,12 +57,61 @@ describe('PublicShopService', () => {
       totalProducts: 2,
       activeAuctionsCount: 1,
       ratingAvg: 4.5,
+      positiveRate: null,
+      responseRate: null,
     });
     expect(result).not.toHaveProperty('productCount');
     expect(result).not.toHaveProperty('liveAuctionCount');
     expect(result).not.toHaveProperty('sellerId');
     expect(dataSource.query.mock.calls[0][0]).not.toMatch(
       /phone|email|identity_number/,
+    );
+  });
+
+  it('lists only trusted active shops with canonical tiers and nullable rates', async () => {
+    const dataSource = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce([
+          {
+            id: 'top',
+            reputationScore: 90,
+            ratingAvg: '4.9',
+            reviewCount: 2,
+            followerCount: 3,
+          },
+          {
+            id: 'trusted',
+            reputationScore: 70,
+            ratingAvg: '4.0',
+            reviewCount: 1,
+            followerCount: 0,
+          },
+        ])
+        .mockResolvedValueOnce([{ total: 2 }]),
+    };
+    const result = await new PublicShopService(dataSource as never).trusted({
+      page: 1,
+      limit: 10,
+    });
+    expect(result.items.map((item) => item.trustLevel)).toEqual([
+      'TOP_SELLER',
+      'TRUSTED',
+    ]);
+    expect(result.items[0]).toMatchObject({
+      positiveRate: null,
+      responseRate: null,
+      ratingAvg: 4.9,
+    });
+    expect(result).toMatchObject({
+      page: 1,
+      limit: 10,
+      total: 2,
+      totalPages: 1,
+    });
+    expect(result).not.toHaveProperty('meta');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "status = 'ACTIVE' AND deleted_at IS NULL AND reputation_score >= 70",
     );
   });
 

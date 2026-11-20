@@ -122,7 +122,23 @@ export type ProductDetail = {
     originalPrice: string | null;
     currency: string;
     availableQuantity: number;
+    activeFlashDeal: ActiveFlashDeal | null;
   }>;
+};
+
+export type ActiveFlashDeal = {
+  id: string;
+  campaignId: string;
+  skuId: string;
+  dealPrice: string;
+  originalPrice: string;
+  currency: string;
+  productId: string;
+  productName: string;
+  productSlug: string;
+  imageUrl: string | null;
+  availableQuantity: number;
+  endTime: Date | string;
 };
 
 const SORT_SQL: Record<ProductSort, string> = {
@@ -176,7 +192,7 @@ export class ProductSearchService {
     const normalizedSlug = slug.trim().toLowerCase();
     const cacheKey = this.cache.detailKey(normalizedSlug);
     const cached = await this.cache.get<ProductDetail>(cacheKey);
-    if (cached) return cached;
+    if (cached) return this.attachActiveFlashDeals(cached);
 
     const products = await this.dataSource.query<
       Array<{
@@ -348,10 +364,68 @@ export class ProductSearchService {
         originalPrice: sku.original_price,
         currency: sku.currency,
         availableQuantity: Number(sku.available_quantity),
+        activeFlashDeal: null,
       })),
     };
     await this.cache.set(cacheKey, detail);
-    return detail;
+    return this.attachActiveFlashDeals(detail);
+  }
+
+  private async attachActiveFlashDeals(
+    detail: ProductDetail,
+  ): Promise<ProductDetail> {
+    if (detail.skus.length === 0) return detail;
+    const deals = await this.dataSource.query<
+      Array<{
+        id: string;
+        campaignId: string;
+        skuId: string;
+        dealPrice: string;
+        originalPrice: string;
+        currency: string;
+        productId: string;
+        productName: string;
+        productSlug: string;
+        imageUrl: string | null;
+        availableQuantity: string | number;
+        endTime: Date | string;
+      }>
+    >(
+      `SELECT fdi.id, fdi.campaign_id AS "campaignId", s.id AS "skuId",
+              fdi.deal_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
+              p.id AS "productId", p.name AS "productName", p.slug AS "productSlug", image.url AS "imageUrl",
+              LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity",
+              fdc.ends_at AS "endTime"
+         FROM catalog.flash_deal_items fdi
+         JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
+          AND fdc.status = 'ACTIVE' AND fdc.starts_at <= now() AND fdc.ends_at > now()
+         JOIN catalog.product_skus s ON s.id = fdi.sku_id AND s.is_active = true
+         JOIN catalog.products p ON p.id = s.product_id AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
+         LEFT JOIN LATERAL (SELECT pi.url FROM catalog.product_images pi WHERE pi.product_id = p.id
+           ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
+         JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
+           WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
+        WHERE fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity
+          AND fdi.sku_id = ANY($1::uuid[])
+        ORDER BY fdc.ends_at ASC, fdi.id ASC`,
+      [detail.skus.map((sku) => sku.id)],
+    );
+    const bySku = new Map<string, ActiveFlashDeal>();
+    for (const deal of deals) {
+      if (!bySku.has(deal.skuId)) {
+        bySku.set(deal.skuId, {
+          ...deal,
+          availableQuantity: Number(deal.availableQuantity),
+        });
+      }
+    }
+    return {
+      ...detail,
+      skus: detail.skus.map((sku) => ({
+        ...sku,
+        activeFlashDeal: bySku.get(sku.id) ?? null,
+      })),
+    };
   }
 
   private async runSearch(

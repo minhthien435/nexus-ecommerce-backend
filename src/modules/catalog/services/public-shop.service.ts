@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ShopProductQueryDto } from '../dtos/shop-product-query.dto.js';
+import { TrustedShopQueryDto } from '../dtos/flash-deal-query.dto.js';
 
 type ShopRow = {
   id: string;
@@ -53,9 +54,46 @@ export class PublicShopService {
       reputationScore: Number(shop.reputationScore),
       warehouseAddress: shop.warehouseAddress,
       trustLevel: this.trustLevel(Number(shop.reputationScore)),
+      positiveRate: null,
+      responseRate: null,
       totalProducts: Number(counts?.productCount ?? 0),
       activeAuctionsCount: Number(counts?.liveAuctionCount ?? 0),
       createdAt: shop.createdAt,
+    };
+  }
+
+  async trusted(query: TrustedShopQueryDto) {
+    const params = [query.limit, (query.page - 1) * query.limit];
+    const where = `status = 'ACTIVE' AND deleted_at IS NULL AND reputation_score >= 70`;
+    const [rows, counts] = await Promise.all([
+      this.dataSource.query<Array<Record<string, unknown>>>(
+        `SELECT id, name, slug, headline, logo_url AS "logoUrl", banner_url AS "bannerUrl",
+                rating_avg AS "ratingAvg", review_count AS "reviewCount", follower_count AS "followerCount",
+                reputation_score AS "reputationScore", created_at AS "createdAt"
+           FROM identity.shops WHERE ${where}
+          ORDER BY reputation_score DESC, rating_avg DESC, id ASC LIMIT $1 OFFSET $2`,
+        params,
+      ),
+      this.dataSource.query<Array<{ total: string | number }>>(
+        `SELECT COUNT(*)::int AS total FROM identity.shops WHERE ${where}`,
+      ),
+    ]);
+    const total = Number(counts[0]?.total ?? 0);
+    return {
+      items: rows.map((row) => ({
+        ...row,
+        ratingAvg: Number(row.ratingAvg ?? 0),
+        reviewCount: Number(row.reviewCount ?? 0),
+        followerCount: Number(row.followerCount ?? 0),
+        reputationScore: Number(row.reputationScore),
+        trustLevel: this.trustLevel(Number(row.reputationScore)),
+        positiveRate: null,
+        responseRate: null,
+      })),
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
     };
   }
 
@@ -192,10 +230,10 @@ export class PublicShopService {
   }
 
   private trustLevel(score: number) {
-    if (score >= 90) return 'VIP';
-    if (score >= 75) return 'GOLD';
-    if (score >= 50) return 'SILVER';
-    return 'STANDARD';
+    if (score >= 90) return 'TOP_SELLER';
+    if (score >= 70) return 'TRUSTED';
+    if (score >= 50) return 'STANDARD';
+    return 'NEW';
   }
 
   private escapeLike(value: string) {
