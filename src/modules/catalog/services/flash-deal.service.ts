@@ -40,13 +40,13 @@ export class FlashDealService {
         ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
       JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
         WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
-      WHERE fdi.campaign_id = $1 AND fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity`;
+      WHERE fdi.campaign_id = $1 AND fdi.status = 'ACTIVE' AND fdi.sold_qty < fdi.quota_qty`;
     const [rows, counts] = await Promise.all([
       this.dataSource.query<Array<Record<string, unknown>>>(
         `SELECT fdi.id, fdi.campaign_id AS "campaignId", s.id AS "skuId", s.sku_code AS "skuCode",
-                fdi.deal_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
+                fdi.flash_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
                 p.id AS "productId", p.name AS "productName", p.slug AS "productSlug", image.url AS "imageUrl",
-                LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity"
+                LEAST(inventory.quantity, fdi.quota_qty - fdi.sold_qty)::int AS "availableQuantity"
            ${common} ORDER BY fdi.created_at ASC, fdi.id ASC LIMIT $2 OFFSET $3`,
         params,
       ),

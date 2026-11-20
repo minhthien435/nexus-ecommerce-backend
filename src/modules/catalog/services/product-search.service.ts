@@ -392,9 +392,9 @@ export class ProductSearchService {
       }>
     >(
       `SELECT fdi.id, fdi.campaign_id AS "campaignId", s.id AS "skuId",
-              fdi.deal_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
+              fdi.flash_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
               p.id AS "productId", p.name AS "productName", p.slug AS "productSlug", image.url AS "imageUrl",
-              LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity",
+              LEAST(inventory.quantity, fdi.quota_qty - fdi.sold_qty)::int AS "availableQuantity",
               fdc.ends_at AS "endTime"
          FROM catalog.flash_deal_items fdi
          JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
@@ -405,7 +405,7 @@ export class ProductSearchService {
            ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
          JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
            WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
-        WHERE fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity
+        WHERE fdi.status = 'ACTIVE' AND fdi.sold_qty < fdi.quota_qty
           AND fdi.sku_id = ANY($1::uuid[])
         ORDER BY fdc.ends_at ASC, fdi.id ASC`,
       [detail.skus.map((sku) => sku.id)],

@@ -393,6 +393,87 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     expect(s.dataSource.transaction).not.toHaveBeenCalled();
   });
 
+  describe('Coin checkout limits', () => {
+    function checkoutAtPrice(
+      price: number,
+      shipping: number,
+      useCoins: number,
+      cartSnapshot = price,
+    ) {
+      const s = setup();
+      s.shippingQuotes.quoteNewAddress.mockResolvedValue({ fee: shipping });
+      s.cartItemRepo.find.mockResolvedValue([
+        {
+          id: 'item-1',
+          cartId,
+          skuId: 'sku-1',
+          quantity: 1,
+          unitPriceSnapshot: cartSnapshot.toFixed(2),
+        },
+      ]);
+      s.catalogApi.getCartSkus.mockResolvedValue([
+        {
+          id: 'sku-1',
+          productId: 'product-1',
+          sellerId: seller1,
+          productName: 'Product',
+          price: price.toFixed(2),
+          currency: 'VND',
+          weightGrams: 250,
+          isActive: true,
+          productStatus: 'ACTIVE',
+          productDeletedAt: null,
+        },
+      ]);
+      return s.service.checkout(userId, { useCoins, paymentMethod: 'PAYOS' });
+    }
+
+    it('caps Coin on the supplied Flash price even if the cart snapshot still has the regular price', async () => {
+      const regularPrice = 100_000;
+      const flashPrice = 60_000;
+      // BE-FD-04 supplies the effective price; this test covers checkout from that boundary.
+      const checkout = (coins: number) =>
+        checkoutAtPrice(flashPrice, 30_000, coins, regularPrice);
+      const result = await checkout(18_000);
+      expect(Number(result.totalAmount)).toBe(72_000);
+      await expect(checkout(18_001)).rejects.toMatchObject({
+        status: 400,
+        response: { errorCode: 'COIN_DISCOUNT_LIMIT_EXCEEDED' },
+      });
+    });
+
+    it.each([
+      { price: 100_000, shipping: 30_000, coins: 30_000, payable: 100_000 },
+      { price: 12_000, shipping: 0, coins: 2_000, payable: 10_000 },
+      { price: 10_000, shipping: 0, coins: 0, payable: 10_000 },
+    ])(
+      'charges $payable VND for $price VND of items, $shipping VND shipping and $coins Coin',
+      async ({ price, shipping, coins, payable }) => {
+        const result = await checkoutAtPrice(price, shipping, coins);
+        expect(Number(result.coinDiscountAmount)).toBe(coins);
+        expect(Number(result.totalAmount)).toBe(payable);
+      },
+    );
+
+    it.each([
+      { price: 100_000, shipping: 30_000, coins: 100_000 },
+      { price: 100_000, shipping: 30_000, coins: 30_001 },
+      { price: 12_000, shipping: 0, coins: 2_001 },
+      { price: 10_000, shipping: 0, coins: 1 },
+      { price: 9_999, shipping: 0, coins: 1 },
+    ])(
+      'rejects $coins Coin on $price VND of items plus $shipping VND shipping',
+      async ({ price, shipping, coins }) => {
+        await expect(
+          checkoutAtPrice(price, shipping, coins),
+        ).rejects.toMatchObject({
+          status: 400,
+          response: { errorCode: 'COIN_DISCOUNT_LIMIT_EXCEEDED' },
+        });
+      },
+    );
+  });
+
   it.each([
     { useCoins: undefined, expected: [380_000, 640_000] },
     { useCoins: 110_000, expected: [275_000, 635_000] },
