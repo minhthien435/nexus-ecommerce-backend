@@ -31,6 +31,10 @@ import { ShopEntity } from '../identity/domain/shop.entity.js';
 import { AuctionEntity } from '../auction/entities/auction.entity.js';
 import { WarehouseEntity } from '../fulfillment/domain/entities/warehouse.entity.js';
 import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-item.entity.js';
+import { FlashDealCampaignEntity } from './domain/entities/flash-deal-campaign.entity.js';
+import { FlashDealItemEntity } from './domain/entities/flash-deal-item.entity.js';
+import { FlashDealController } from './controllers/flash-deal.controller.js';
+import { FlashDealService } from './services/flash-deal.service.js';
 
 @Module({
   imports: [
@@ -44,6 +48,8 @@ import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-it
       AuctionEntity,
       WarehouseEntity,
       InventoryItemEntity,
+      FlashDealCampaignEntity,
+      FlashDealItemEntity,
     ]),
     IdentityModule,
     JwtModule,
@@ -55,6 +61,7 @@ import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-it
     ProductSkuController,
     SellerProductController,
     PublicShopController,
+    FlashDealController,
   ],
   providers: [
     CatalogCacheService,
@@ -65,6 +72,7 @@ import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-it
     SellerProductService,
     PublicShopService,
     SellerBulkImportService,
+    FlashDealService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,

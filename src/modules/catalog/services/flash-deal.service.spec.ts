@@ -1,0 +1,134 @@
+import { describe, expect, it, vi } from 'vitest';
+import { FlashDealService } from './flash-deal.service.js';
+
+describe('FlashDealService', () => {
+  it('returns the stable empty active shape when no live campaign exists', async () => {
+    const dataSource = { query: vi.fn().mockResolvedValue([]) };
+    const result = await new FlashDealService(dataSource as never).active({
+      page: 2,
+      limit: 5,
+    });
+    expect(result).toEqual({
+      items: [],
+      campaign: null,
+      endTime: null,
+      page: 2,
+      limit: 5,
+      total: 0,
+      totalPages: 0,
+    });
+    expect(dataSource.query.mock.calls[0][0]).toContain("status = 'ACTIVE'");
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      'starts_at <= now() AND ends_at > now()',
+    );
+  });
+
+  it('returns the same empty page for an unknown valid campaign identifier', async () => {
+    const dataSource = { query: vi.fn().mockResolvedValue([]) };
+    const result = await new FlashDealService(dataSource as never).active({
+      campaignId: '00000000-0000-4000-8000-000000000000',
+      page: 1,
+      limit: 20,
+    });
+    expect(result).toEqual({
+      items: [],
+      campaign: null,
+      endTime: null,
+      page: 1,
+      limit: 20,
+      total: 0,
+      totalPages: 0,
+    });
+    expect(dataSource.query.mock.calls[0][1]).toEqual([
+      '00000000-0000-4000-8000-000000000000',
+    ]);
+  });
+
+  it('returns live in-stock items with exact pagination', async () => {
+    const campaign = {
+      id: 'campaign',
+      title: 'Lunch',
+      slug: 'lunch',
+      status: 'ACTIVE',
+      startsAt: 'start',
+      endsAt: 'end',
+    };
+    const dataSource = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce([campaign])
+        .mockResolvedValueOnce([{ id: 'item' }])
+        .mockResolvedValueOnce([{ total: '6' }]),
+    };
+    const result = await new FlashDealService(dataSource as never).active({
+      campaignId: 'campaign',
+      page: 2,
+      limit: 5,
+    });
+    expect(result).toEqual({
+      items: [{ id: 'item' }],
+      campaign,
+      endTime: 'end',
+      page: 2,
+      limit: 5,
+      total: 6,
+      totalPages: 2,
+    });
+    const sql = dataSource.query.mock.calls[1][0] as string;
+    expect(sql).toContain('fdi.is_active = true');
+    expect(sql).toContain('HAVING SUM(ii.available_qty) > 0');
+    expect(sql).toContain("p.status = 'ACTIVE' AND p.deleted_at IS NULL");
+    expect(sql).toContain("shop.status = 'ACTIVE' AND shop.deleted_at IS NULL");
+    expect(sql).not.toContain('fdc.starts_at <= now()');
+  });
+
+  it('allows a selected upcoming scheduled campaign to preview its items', async () => {
+    const campaign = {
+      id: 'future',
+      title: 'Tonight',
+      slug: 'tonight',
+      status: 'SCHEDULED',
+      startsAt: 'future',
+      endsAt: 'later',
+    };
+    const dataSource = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce([campaign])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ total: '0' }]),
+    };
+    const result = await new FlashDealService(dataSource as never).active({
+      campaignId: 'future',
+      page: 1,
+      limit: 20,
+    });
+    expect(result.campaign).toBe(campaign);
+    const selectionSql = dataSource.query.mock.calls[0][0] as string;
+    expect(selectionSql).toContain("status IN ('ACTIVE', 'SCHEDULED')");
+    expect(selectionSql).toContain('ends_at > now()');
+  });
+
+  it('projects every campaign in deterministic order', async () => {
+    const campaign = {
+      id: 'id',
+      title: 'Title',
+      slug: 'title',
+      status: 'DRAFT',
+      startsAt: 'start',
+      endsAt: 'end',
+    };
+    const dataSource = { query: vi.fn().mockResolvedValueOnce([campaign]) };
+    await expect(
+      new FlashDealService(dataSource as never).campaigns(),
+    ).resolves.toEqual([campaign]);
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      'ORDER BY starts_at ASC, id ASC',
+    );
+    expect(dataSource.query.mock.calls[0][0]).not.toContain('WHERE status');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      'SELECT id, title, slug, status',
+    );
+    expect(dataSource.query.mock.calls[0][0]).not.toContain('LIMIT');
+  });
+});
