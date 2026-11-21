@@ -38,7 +38,6 @@ export class FlashDealService {
       (query.page - 1) * query.limit,
     ];
     const common = `FROM catalog.flash_deal_items fdi
-      JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
       JOIN catalog.product_skus s ON s.id = fdi.sku_id AND s.is_active = true
       JOIN catalog.products p ON p.id = s.product_id AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
       JOIN identity.shops shop ON (shop.id = p.shop_id OR (p.shop_id IS NULL AND shop.seller_id = p.seller_id))
@@ -67,7 +66,16 @@ export class FlashDealService {
         [campaign.id, query.categoryId ?? null],
       ),
     ]);
-    return this.page(query, rows, campaign, Number(counts[0]?.total ?? 0));
+    return this.page(
+      query,
+      rows.map((row) => ({
+        ...row,
+        price: Number(row.price),
+        originalPrice: Number(row.originalPrice),
+      })),
+      campaign,
+      Number(counts[0]?.total ?? 0),
+    );
   }
 
   async campaigns() {

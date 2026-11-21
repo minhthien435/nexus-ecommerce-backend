@@ -406,9 +406,10 @@ export class ProductSearchService {
     );
     const bySku = new Map<string, ActiveFlashDeal>();
     for (const deal of deals) {
-      if (!bySku.has(deal.skuId)) {
-        bySku.set(deal.skuId, {
-          ...deal,
+      const { skuId, ...rest } = deal;
+      if (!bySku.has(skuId)) {
+        bySku.set(skuId, {
+          ...rest,
           flashPrice: Number(deal.flashPrice),
           originalPrice: Number(deal.originalPrice),
           remainingQuota: Number(deal.remainingQuota),

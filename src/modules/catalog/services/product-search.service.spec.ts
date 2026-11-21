@@ -395,6 +395,7 @@ describe('ProductSearchService', () => {
       originalPrice: 100,
       remainingQuota: 2,
     });
+    expect(detail.skus[0].activeFlashDeal).not.toHaveProperty('skuId');
     expect(cache.set).not.toHaveBeenCalled();
     expect(query.mock.calls[0][0]).toContain(
       "fdc.status IN ('ACTIVE', 'SCHEDULED')",

@@ -62,7 +62,9 @@ describe('FlashDealService', () => {
       query: vi
         .fn()
         .mockResolvedValueOnce([campaign])
-        .mockResolvedValueOnce([{ id: 'item' }])
+        .mockResolvedValueOnce([
+          { id: 'item', price: '80.00', originalPrice: '100.00' },
+        ])
         .mockResolvedValueOnce([{ total: '6' }]),
     };
     const result = await new FlashDealService(dataSource as never).active({
@@ -71,7 +73,7 @@ describe('FlashDealService', () => {
       limit: 5,
     });
     expect(result).toEqual({
-      items: [{ id: 'item' }],
+      items: [{ id: 'item', price: 80, originalPrice: 100 }],
       campaign,
       endTime: 'end',
       page: 2,
@@ -84,6 +86,7 @@ describe('FlashDealService', () => {
     expect(sql).toContain('HAVING SUM(ii.available_qty) > 0');
     expect(sql).toContain("p.status = 'ACTIVE' AND p.deleted_at IS NULL");
     expect(sql).toContain("shop.status = 'ACTIVE' AND shop.deleted_at IS NULL");
+    expect(sql).not.toContain('JOIN catalog.flash_deal_campaigns fdc');
     expect(sql).not.toContain('fdc.starts_at <= now()');
   });
 
