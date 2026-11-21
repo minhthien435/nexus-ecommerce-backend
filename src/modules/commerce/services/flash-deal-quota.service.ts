@@ -115,7 +115,7 @@ export class FlashDealQuotaService {
         (deal) =>
           deal.skuId === cartItem.skuId &&
           deal.status === 'ACTIVE' &&
-          deal.campaignStatus === 'ACTIVE' &&
+          ['ACTIVE', 'SCHEDULED'].includes(deal.campaignStatus) &&
           deal.startsAt <= now &&
           deal.endsAt > now,
       );
@@ -424,7 +424,14 @@ export class FlashDealQuotaService {
         )
       : new Map<string, number>();
     for (const sku of skus) {
-      const candidates = deals.filter((deal) => deal.skuId === sku.id);
+      const candidates = deals.filter(
+        (deal) =>
+          deal.skuId === sku.id &&
+          deal.startsAt <= now &&
+          deal.endsAt > now &&
+          !['ENDED', 'CANCELLED', 'DRAFT'].includes(deal.campaignStatus) &&
+          !['CANCELLED', 'DRAFT'].includes(deal.status),
+      );
       if (!candidates.length) continue;
       const eligible = candidates.filter(
         (deal) =>
@@ -478,10 +485,12 @@ export class FlashDealQuotaService {
   }
   private unavailableReason(deal: Deal, now: Date): string | null {
     if (deal.endsAt <= now || deal.campaignStatus === 'ENDED') return 'ENDED';
-    if (deal.startsAt > now || deal.campaignStatus === 'SCHEDULED')
-      return 'UPCOMING';
+    if (deal.startsAt > now) return 'UPCOMING';
     if (deal.status === 'PAUSED') return 'PAUSED';
-    if (deal.status !== 'ACTIVE' || deal.campaignStatus !== 'ACTIVE')
+    if (
+      deal.status !== 'ACTIVE' ||
+      !['ACTIVE', 'SCHEDULED'].includes(deal.campaignStatus)
+    )
       return 'INVALID';
     try {
       if (

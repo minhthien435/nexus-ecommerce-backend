@@ -158,7 +158,6 @@ describe('FlashDealQuotaService focused contracts', () => {
     { flashPrice: 'oops' },
     { productId: 'other' },
     { sellerId: 'other' },
-    { campaignStatus: 'CANCELLED' },
   ])('rejects invalid price or product mapping %j', async (overrides) => {
     const s = setup([deal(overrides)]);
     const projection = (
@@ -211,6 +210,106 @@ describe('FlashDealQuotaService focused contracts', () => {
       ),
     ).toEqual(new Map());
     expect(s.query).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { campaignStatus: 'ENDED' },
+    { campaignStatus: 'CANCELLED' },
+    { campaignStatus: 'DRAFT' },
+    { status: 'CANCELLED' },
+    { status: 'DRAFT' },
+    { endsAt: new Date(now.getTime() - 1000) },
+    { startsAt: new Date(now.getTime() + 1000) },
+  ])(
+    'bypasses deals outside current window or with ended/cancelled/draft in projectForCart %j',
+    async (overrides) => {
+      const s = setup([deal(overrides)]);
+      const projection = (
+        await s.service.projectForCart(
+          [sku],
+          new Map([['sku', 1]]),
+          'buyer',
+          s.manager as never,
+        )
+      ).get('sku');
+      expect(projection).toBeUndefined();
+    },
+  );
+  it('allows SCHEDULED campaign in current window for resolveForCheckout and projectForCart', async () => {
+    const s = setup([deal({ campaignStatus: 'SCHEDULED' })]);
+    const manager = {
+      ...s.manager,
+      queryRunner: { isTransactionActive: true },
+    } as never;
+    const checkoutResult = await s.service.resolveForCheckout(
+      manager,
+      [{ id: 'cart-item', skuId: 'sku', quantity: 1 }],
+      [sku],
+    );
+    expect(checkoutResult.get('cart-item')).toMatchObject({
+      itemId: 'item',
+      unitPrice: '80.00',
+    });
+    const cartProjection = (
+      await s.service.projectForCart(
+        [sku],
+        new Map([['sku', 1]]),
+        'buyer',
+        s.manager as never,
+      )
+    ).get('sku');
+    expect(cartProjection?.flashDeal?.itemId).toBe('item');
+    expect(cartProjection?.warningCode).toBeNull();
+  });
+  it('reports UPCOMING only when startsAt > now regardless of campaign status', async () => {
+    const futureDeal = deal({
+      startsAt: new Date(now.getTime() + 10000),
+      endsAt: new Date(now.getTime() + 20000),
+      campaignStatus: 'SCHEDULED',
+    });
+    const s = setup([futureDeal]);
+    const manager = {
+      ...s.manager,
+      queryRunner: { isTransactionActive: true },
+    } as never;
+    await expect(
+      s.service.resolveForCheckout(
+        manager,
+        [{ id: 'cart-item', skuId: 'sku', quantity: 1 }],
+        [sku],
+        [
+          {
+            cartItemId: 'cart-item',
+            flashDealItemId: 'item',
+            expectedUnitPrice: '80.00',
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({
+      response: { errorCode: 'FLASH_DEAL_UPCOMING' },
+    });
+  });
+  it('rejects cancelled campaign in resolveForCheckout with INVALID', async () => {
+    const s = setup([deal({ campaignStatus: 'CANCELLED' })]);
+    const manager = {
+      ...s.manager,
+      queryRunner: { isTransactionActive: true },
+    } as never;
+    await expect(
+      s.service.resolveForCheckout(
+        manager,
+        [{ id: 'cart-item', skuId: 'sku', quantity: 1 }],
+        [sku],
+        [
+          {
+            cartItemId: 'cart-item',
+            flashDealItemId: 'item',
+            expectedUnitPrice: '80.00',
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({
+      response: { errorCode: 'FLASH_DEAL_INVALID' },
+    });
   });
   it.each([
     { buyerId: '', orders: [] },
