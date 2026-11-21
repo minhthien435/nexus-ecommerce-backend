@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from './flash-deal-quota.service.js';
+const flashDeals = {
+  projectForCart: async () => new Map(),
+} as unknown as FlashDealQuotaService;
 import { ServiceUnavailableException } from '@nestjs/common';
 import { CartEntity } from '../domain/entities/cart.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
@@ -155,6 +159,7 @@ function setup() {
     forbidden as never,
     catalog,
     inventory,
+    flashDeals,
   );
   const service = new CartWriteService(
     source as never,

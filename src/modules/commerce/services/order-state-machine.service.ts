@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
+import { FlashDealQuotaService } from './flash-deal-quota.service.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import type { InventoryReservationReceipt } from '../../fulfillment/inventory-reservation.api.js';
 import {
@@ -17,6 +18,7 @@ import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import {
   OrderExpiryTransitionApi,
   type OrderExpiryTransitionResult,
@@ -32,6 +34,17 @@ export interface OrderTransitionInput {
 
 @Injectable()
 export class OrderStateMachineService extends OrderExpiryTransitionApi {
+  constructor(private readonly flashDeals: FlashDealQuotaService) {
+    super();
+  }
+
+  async prelockFlashDealOrders(
+    manager: EntityManager,
+    orderIds: string[],
+  ): Promise<void> {
+    this.requireActiveTransaction(manager);
+    await this.flashDeals.prelockByOrderIds(manager, orderIds);
+  }
   async transition(
     manager: EntityManager,
     input: OrderTransitionInput,
@@ -180,6 +193,18 @@ export class OrderStateMachineService extends OrderExpiryTransitionApi {
       });
     }
     const fromStatus = order.status;
+    if (toStatus === 'REFUNDED') {
+      await this.flashDeals.releaseByOrderId(manager, order.id);
+    } else if (toStatus === 'CANCELLED') {
+      const successfulPayments = await manager
+        .getRepository(PaymentEntity)
+        .count({
+          where: { orderId: order.id, status: 'SUCCEEDED' },
+        });
+      if (successfulPayments === 0) {
+        await this.flashDeals.releaseByOrderId(manager, order.id);
+      }
+    }
     order.status = toStatus;
     await manager.getRepository(OrderEntity).save(order);
 

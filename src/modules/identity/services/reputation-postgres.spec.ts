@@ -1,6 +1,18 @@
+import type { FlashDealQuotaService } from '../../commerce/services/flash-deal-quota.service.js';
+const flashDeals = {
+  releaseByOrderId: vi.fn().mockResolvedValue(undefined),
+} as unknown as FlashDealQuotaService;
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { DataSource, type EntityManager } from 'typeorm';
 import { OrderStateMachineService } from '../../commerce/services/order-state-machine.service.js';
 import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
@@ -759,7 +771,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     for (let i = 0; i < 105; i++) await order(s.sellerId);
     const processor = new OrderCompletionProcessor(
       db,
-      new OrderStateMachineService(),
+      new OrderStateMachineService(flashDeals),
       reputation,
     );
     expect(await processor.process({} as never)).toBe(0);
@@ -775,7 +787,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     for (let i = 0; i < 4; i++) await order(s.sellerId, 'DELIVERED');
     const processor = new OrderCompletionProcessor(
       db,
-      new OrderStateMachineService(),
+      new OrderStateMachineService(flashDeals),
       reputation,
     );
     await Promise.all([
@@ -793,7 +805,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     const completed = await order(s.sellerId);
     const processor = new OrderCompletionProcessor(
       db,
-      new OrderStateMachineService(),
+      new OrderStateMachineService(flashDeals),
       reputation,
     );
     expect(await processor.process({} as never)).toBe(1);
@@ -863,7 +875,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     const orders = db.getRepository(OrderEntity);
     const processor = new OrderCompletionProcessor(
       db,
-      new OrderStateMachineService(),
+      new OrderStateMachineService(flashDeals),
       reputation,
     );
     // Injected failure specifically for shop s1 UPDATE

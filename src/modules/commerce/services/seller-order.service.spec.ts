@@ -78,6 +78,7 @@ function setup(options?: { ghnClientService?: unknown }) {
     orderHistoryRepo as never,
     {} as never,
     catalogApi as never,
+    {} as never,
     orderStateMachine as never,
     {} as never,
     {} as never,

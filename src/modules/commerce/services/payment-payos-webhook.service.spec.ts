@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from './flash-deal-quota.service.js';
+const flashDeals = {
+  commitByOrderId: vi.fn().mockResolvedValue(undefined),
+} as unknown as FlashDealQuotaService;
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource, EntityManager } from 'typeorm';
@@ -108,6 +112,7 @@ describe('PaymentWebhookService - PayOS Integration', () => {
     service = new PaymentWebhookService(
       dataSource,
       payosClientService,
+      flashDeals,
       expiryQueue,
     );
   });

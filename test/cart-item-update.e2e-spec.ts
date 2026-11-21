@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from '../src/modules/commerce/services/flash-deal-quota.service.js';
+const flashDeals = {
+  projectForCart: async () => new Map(),
+} as unknown as FlashDealQuotaService;
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
@@ -128,6 +132,7 @@ describe('PATCH commerce cart items (HTTP with transactional mock persistence)',
       items as never,
       catalog,
       inventory,
+      flashDeals,
     );
     const writer = new CartWriteService(
       source as never,

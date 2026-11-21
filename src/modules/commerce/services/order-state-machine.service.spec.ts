@@ -1,8 +1,14 @@
+import type { FlashDealQuotaService } from './flash-deal-quota.service.js';
+const flashDeals = {
+  prelockByOrderIds: vi.fn().mockResolvedValue(undefined),
+  releaseByOrderId: vi.fn().mockResolvedValue(undefined),
+} as unknown as FlashDealQuotaService;
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import { OrderStatusHistoryEntity } from '../domain/entities/order-status-history.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { CheckoutSessionEntity } from '../domain/entities/checkout-session.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
 import type { EntityManager } from 'typeorm';
 
@@ -52,6 +58,9 @@ function setup(current: OrderEntity | null = order()) {
     createQueryBuilder: vi.fn().mockReturnValue(sessionQueryBuilder),
     update: vi.fn().mockResolvedValue({ affected: 1 }),
   };
+  const paymentRepository = {
+    count: vi.fn().mockResolvedValue(current?.status === 'PAID' ? 1 : 0),
+  };
   const manager = {
     queryRunner: { isTransactionActive: true },
     query: vi.fn().mockResolvedValue([{ observedTime: now }]),
@@ -61,6 +70,7 @@ function setup(current: OrderEntity | null = order()) {
       if (entity === OrderStatusHistoryEntity) return historyRepository;
       if (entity === CartItemEntity) return cartItemRepository;
       if (entity === CheckoutSessionEntity) return sessionRepository;
+      if (entity === PaymentEntity) return paymentRepository;
       throw new Error('unexpected repository');
     }),
   };
@@ -73,11 +83,63 @@ function setup(current: OrderEntity | null = order()) {
     queryBuilder,
     sessionQueryBuilder,
     sessionRepository,
-    service: new OrderStateMachineService(),
+    service: new OrderStateMachineService(flashDeals),
   };
 }
 
 describe('OrderStateMachineService', () => {
+  it('delegates the complete order batch lock with the same caller transaction', async () => {
+    const s = setup();
+    const ids = [orderId, 'other-order'];
+    await s.service.prelockFlashDealOrders(s.manager as never, ids);
+    expect(flashDeals.prelockByOrderIds).toHaveBeenCalledWith(s.manager, ids);
+    vi.mocked(flashDeals.prelockByOrderIds).mockClear();
+    await expect(
+      s.service.prelockFlashDealOrders(
+        { queryRunner: { isTransactionActive: false } } as never,
+        ids,
+      ),
+    ).rejects.toMatchObject({ status: 500 });
+    expect(flashDeals.prelockByOrderIds).not.toHaveBeenCalled();
+  });
+  beforeEach(() =>
+    vi
+      .mocked(flashDeals.releaseByOrderId)
+      .mockReset()
+      .mockResolvedValue(undefined),
+  );
+  it.each(['CANCELLED', 'REFUNDED'] as const)(
+    'releases quota in the caller transaction for %s and propagates failure',
+    async (toStatus) => {
+      const s = setup(
+        order(toStatus === 'REFUNDED' ? 'CANCELLED' : 'PENDING_PAYMENT'),
+      );
+      const failure = new Error('quota release failed');
+      vi.mocked(flashDeals.releaseByOrderId).mockRejectedValueOnce(failure);
+      await expect(
+        s.service.transition(s.manager as never, {
+          orderId,
+          toStatus,
+          actorId: buyerId,
+        }),
+      ).rejects.toThrow(failure);
+      expect(flashDeals.releaseByOrderId).toHaveBeenCalledWith(
+        s.manager,
+        orderId,
+      );
+      expect(s.orderRepository.save).not.toHaveBeenCalled();
+      expect(s.historyRepository.save).not.toHaveBeenCalled();
+    },
+  );
+  it('keeps committed quota on paid cancellation while policy is pending', async () => {
+    const s = setup(order('PAID'));
+    await s.service.transition(s.manager as never, {
+      orderId,
+      toStatus: 'CANCELLED',
+      actorId: buyerId,
+    });
+    expect(flashDeals.releaseByOrderId).not.toHaveBeenCalled();
+  });
   it('allows a cancelled order to become refunded and records history', async () => {
     const { service, orderRepository, historyRepository, manager } = setup(
       order('CANCELLED'),
@@ -205,6 +267,10 @@ describe('OrderStateMachineService', () => {
       reason: 'PAYMENT_HOLD_EXPIRED',
       changedBy: null,
     });
+    expect(flashDeals.releaseByOrderId).toHaveBeenCalledWith(
+      s.manager,
+      orderId,
+    );
   });
 
   it('returns NOT_DUE for an early job without mutation or inventory items', async () => {

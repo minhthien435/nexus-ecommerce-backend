@@ -122,8 +122,13 @@ function setup(
   const catalogApi = {
     getCartSkus: vi.fn().mockResolvedValue([]),
   };
+  const flashDeals = {
+    resolveForCheckout: vi.fn().mockResolvedValue(new Map()),
+    reserve: vi.fn().mockResolvedValue(undefined),
+  };
 
   const orderStateMachine = {
+    prelockFlashDealOrders: vi.fn().mockResolvedValue(undefined),
     transition: vi.fn(),
     expire: vi.fn().mockResolvedValue({ outcome: 'SKIPPED' }),
     finalizeExpiry: vi.fn().mockResolvedValue(undefined),
@@ -216,6 +221,7 @@ function setup(
     orderHistoryRepo as never,
     addressRepo as never,
     catalogApi as never,
+    flashDeals as never,
     orderStateMachine as never,
     inventoryReservation as never,
     expiryOutbox as never,
@@ -239,6 +245,7 @@ function setup(
     orderHistoryRepo,
     addressRepo,
     catalogApi,
+    flashDeals,
     orderStateMachine,
     inventoryReservation,
     expiryOutbox,
@@ -394,6 +401,66 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
   });
 
   describe('Coin checkout limits', () => {
+    it('uses the resolved Flash price for snapshots, totals and quota reservation', async () => {
+      const s = setup();
+      s.shippingQuotes.quoteNewAddress.mockResolvedValue({ fee: 30_000 });
+      s.cartItemRepo.find.mockResolvedValue([
+        { id: 'item-1', cartId, skuId: 'sku-1', quantity: 1 },
+      ]);
+      s.catalogApi.getCartSkus.mockResolvedValue([
+        {
+          id: 'sku-1',
+          productId: 'product-1',
+          sellerId: seller1,
+          productName: 'Product',
+          price: '100000.00',
+          currency: 'VND',
+          weightGrams: 250,
+          isActive: true,
+          productStatus: 'ACTIVE',
+          productDeletedAt: null,
+        },
+      ]);
+      s.flashDeals.resolveForCheckout.mockResolvedValue(
+        new Map([
+          [
+            'item-1',
+            {
+              cartItemId: 'item-1',
+              itemId: 'deal-item-1',
+              skuId: 'sku-1',
+              quantity: 1,
+              unitPrice: '60000.00',
+            },
+          ],
+        ]),
+      );
+      const result = await s.service.checkout(userId, {
+        useCoins: 18_000,
+        paymentMethod: 'PAYOS',
+      });
+      expect(Number(result.totalAmount)).toBe(72_000);
+      expect(s.flashDeals.reserve).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          buyerId: userId,
+          orders: [
+            expect.objectContaining({
+              items: [{ itemId: 'deal-item-1', skuId: 'sku-1', quantity: 1 }],
+            }),
+          ],
+        }),
+      );
+      expect(s.manager.save).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            unitPrice: '60000.00',
+            lineTotal: '60000.00',
+          }),
+        ]),
+      );
+    });
+
     function checkoutAtPrice(
       price: number,
       shipping: number,
@@ -1352,6 +1419,13 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     await s.service.cancelOrder(userId, pendingA.id);
 
     expect(
+      s.orderStateMachine.prelockFlashDealOrders,
+    ).toHaveBeenCalledExactlyOnceWith(s.manager, ['order-b', 'order-a']);
+    expect(
+      s.orderStateMachine.prelockFlashDealOrders.mock.invocationCallOrder[0],
+    ).toBeLessThan(s.orderStateMachine.transition.mock.invocationCallOrder[0]);
+
+    expect(
       s.orderStateMachine.transition.mock.calls.map((call) => call[1].orderId),
     ).toEqual(['order-b', 'order-a']);
     expect(
@@ -1371,6 +1445,19 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       { id: 'session-1' },
       { status: 'CANCELLED' },
     );
+  });
+
+  it('propagates batch prelock failure before any cancellation or inventory release', async () => {
+    const s = setup();
+    s.orderStateMachine.prelockFlashDealOrders.mockRejectedValueOnce(
+      new Error('batch lock failed'),
+    );
+    await expect(s.service.cancelOrder(userId, 'order-1')).rejects.toThrow(
+      'batch lock failed',
+    );
+    expect(s.orderStateMachine.transition).not.toHaveBeenCalled();
+    expect(s.inventoryReservation.release).not.toHaveBeenCalled();
+    expect(s.manager.update).not.toHaveBeenCalled();
   });
 
   it('rejects repeat cancellation when the session has no pending siblings', async () => {

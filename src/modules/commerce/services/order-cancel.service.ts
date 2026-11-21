@@ -14,6 +14,7 @@ import {
   type OrderStatus,
 } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import { OrderRefundRequestApi } from '../order-refund-request.api.js';
 import { orderInventoryReceipts } from './order-inventory-receipts.js';
 import { OrderStateMachineService } from './order-state-machine.service.js';
@@ -83,7 +84,13 @@ export class OrderCancelService {
       await this.stateMachine.finalizeExpiry(orderId, manager);
       let refundRequestId: string | null = null;
       let refundStatus: string | null = null;
-      if (previousStatus === 'PAID' || previousStatus === 'PROCESSING') {
+      const hasSuccessfulPayment =
+        previousStatus === 'PAID' ||
+        (previousStatus === 'PROCESSING' &&
+          (await manager.getRepository(PaymentEntity).count({
+            where: { orderId, status: 'SUCCEEDED' },
+          })) > 0);
+      if (hasSuccessfulPayment) {
         try {
           const refund = await this.refunds.requestFullRefund(
             orderId,

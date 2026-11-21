@@ -5,6 +5,7 @@ import {
   type OrderStatus,
 } from '../domain/entities/order.entity.js';
 import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
+import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import type { OrderRefundRequestApi } from '../order-refund-request.api.js';
 import type { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
 import type { OrderStateMachineService } from './order-state-machine.service.js';
@@ -15,7 +16,10 @@ const actorId = '22222222-2222-4222-8222-222222222222';
 const skuId = '33333333-3333-4333-8333-333333333333';
 const warehouseId = '44444444-4444-4444-8444-444444444444';
 
-function setup(status: OrderStatus = 'PENDING_PAYMENT') {
+function setup(
+  status: OrderStatus = 'PENDING_PAYMENT',
+  successfulPayments = 1,
+) {
   const cancellationRepository = {
     findOne: vi.fn().mockResolvedValue(null),
     create: vi.fn((value) => value),
@@ -36,12 +40,16 @@ function setup(status: OrderStatus = 'PENDING_PAYMENT') {
   const itemRepository = {
     find: vi.fn().mockResolvedValue([{ skuId, warehouseId, quantity: 2 }]),
   };
+  const paymentRepository = {
+    count: vi.fn().mockResolvedValue(successfulPayments),
+  };
   const manager = {
     query: vi.fn().mockResolvedValue([]),
     getRepository: vi.fn((entity) => {
       if (entity === OrderCancellationEntity) return cancellationRepository;
       if (entity === OrderEntity) return orderRepository;
       if (entity === OrderItemEntity) return itemRepository;
+      if (entity === PaymentEntity) return paymentRepository;
       throw new Error('unexpected repository');
     }),
   };
@@ -118,6 +126,18 @@ describe('OrderCancelService', () => {
       );
     },
   );
+
+  it('cancels an unpaid COD PROCESSING order without creating a refund', async () => {
+    const context = setup('PROCESSING', 0);
+    await expect(
+      context.service.cancel(actorId, orderId, dto),
+    ).resolves.toMatchObject({
+      status: 'CANCELLED',
+      previousStatus: 'PROCESSING',
+      refund: null,
+    });
+    expect(context.refunds.requestFullRefund).not.toHaveBeenCalled();
+  });
 
   it('returns the durable result for an identical replay without side effects', async () => {
     const context = setup();

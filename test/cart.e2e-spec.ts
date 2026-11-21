@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from '../src/modules/commerce/services/flash-deal-quota.service.js';
+const flashDeals = {
+  projectForCart: async () => new Map(),
+} as unknown as FlashDealQuotaService;
 import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
@@ -40,7 +44,13 @@ describe('GET commerce cart (HTTP)', () => {
         {
           provide: CartService,
           useFactory: () =>
-            new CartService(carts as never, items as never, catalog, inventory),
+            new CartService(
+              carts as never,
+              items as never,
+              catalog,
+              inventory,
+              flashDeals,
+            ),
         },
       ],
     }).compile();

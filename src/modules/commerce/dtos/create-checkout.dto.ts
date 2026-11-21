@@ -38,12 +38,30 @@ export class CustomShippingAddressDto {
   wardCode?: string;
 }
 
+export class ExpectedFlashDealDto {
+  @IsUUID('4')
+  cartItemId: string;
+
+  @IsUUID('4')
+  flashDealItemId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  expectedUnitPrice: string;
+}
+
 export class CreateCheckoutDto {
   @IsOptional()
   @IsInt()
   @Min(0)
   @Max(2_147_483_647)
   useCoins?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ExpectedFlashDealDto)
+  expectedFlashDeals?: ExpectedFlashDealDto[];
 
   @IsOptional()
   @IsArray()

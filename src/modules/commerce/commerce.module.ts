@@ -22,6 +22,7 @@ import { PaymentEntity } from './domain/entities/payment.entity.js';
 import { PaymentCallbackEntity } from './domain/entities/payment-callback.entity.js';
 import { OrderRefundEntity } from './domain/entities/order-refund.entity.js';
 import { CartService } from './services/cart.service.js';
+import { FlashDealQuotaService } from './services/flash-deal-quota.service.js';
 import { CartWriteService } from './services/cart-write.service.js';
 import { OrderService } from './services/order.service.js';
 import { OrderStateMachineService } from './services/order-state-machine.service.js';
@@ -93,6 +94,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     SupportDisputeController,
   ],
   providers: [
+    FlashDealQuotaService,
     CartService,
     CartWriteService,
     OrderService,
