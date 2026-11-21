@@ -15,10 +15,7 @@ export class CreateFlashDeals1794960000000 implements MigrationInterface {
       CREATE TABLE catalog.flash_deal_items (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), campaign_id uuid NOT NULL REFERENCES catalog.flash_deal_campaigns(id) ON DELETE CASCADE,
         sku_id uuid NOT NULL REFERENCES catalog.product_skus(id), deal_price numeric(18,2) NOT NULL CHECK (deal_price > 0),
-        original_price_snapshot numeric(18,2) NOT NULL CHECK (original_price_snapshot > deal_price),
-        max_per_buyer integer NOT NULL DEFAULT 2 CHECK (max_per_buyer > 0),
         deal_quantity integer NOT NULL CHECK (deal_quantity > 0), sold_quantity integer NOT NULL DEFAULT 0,
-        sort_order integer NOT NULL DEFAULT 0,
         is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
         updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
         CONSTRAINT flash_deal_item_sold_check CHECK (sold_quantity >= 0 AND sold_quantity <= deal_quantity),

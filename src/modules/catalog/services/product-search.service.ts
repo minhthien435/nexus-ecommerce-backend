@@ -385,10 +385,10 @@ export class ProductSearchService {
       }>
     >(
       `SELECT fdi.id AS "flashDealItemId", fdi.campaign_id AS "campaignId", s.id AS "skuId",
-              fdi.deal_price::text AS "flashPrice",
+              fdi.flash_price::text AS "flashPrice",
               GREATEST(COALESCE(s.original_price, s.price), s.price)::text AS "originalPrice",
-              LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "remainingQuota",
-              LEAST(100, ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100))::int AS "soldPercent",
+              LEAST(inventory.quantity, fdi.quota_qty - fdi.sold_qty)::int AS "remainingQuota",
+              LEAST(100, ROUND((fdi.sold_qty::numeric / fdi.quota_qty) * 100))::int AS "soldPercent",
               fdi.max_per_buyer AS "maxPerBuyer", fdc.ends_at AS "endsAt"
          FROM catalog.flash_deal_items fdi
          JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
@@ -399,7 +399,7 @@ export class ProductSearchService {
            ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
          JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
            WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
-        WHERE fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity
+        WHERE fdi.status = 'ACTIVE' AND fdi.sold_qty < fdi.quota_qty
           AND fdi.sku_id = ANY($1::uuid[])
         ORDER BY fdc.ends_at ASC, fdi.id ASC`,
       [detail.skus.map((sku) => sku.id)],

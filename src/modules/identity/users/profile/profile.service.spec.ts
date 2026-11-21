@@ -28,7 +28,9 @@ function setup() {
     query: vi
       .fn()
       .mockResolvedValueOnce([{ code: 'CUSTOMER' }, { code: 'SELLER' }])
-      .mockResolvedValueOnce([{ trust_level: 'TRUSTED' }]),
+      .mockResolvedValueOnce([
+        { trust_level: 'TRUSTED', score: 85, rewarded: false },
+      ]),
   };
   const manager = { getRepository: () => users };
   dataSource.transaction = vi.fn(async (work) => work(manager));
@@ -63,6 +65,7 @@ describe('ProfileService', () => {
     expect(result).toEqual({
       ...user,
       roles: ['CUSTOMER', 'SELLER'],
+      reputationScore: 85,
       trustLevel: 'TRUSTED',
       profileCompletionRewarded: false,
       addresses: [{ addressLine: 'Updated street' }],
@@ -82,6 +85,7 @@ describe('ProfileService', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     await expect(fallback.service.getProfile(userId)).resolves.toMatchObject({
+      reputationScore: 50,
       trustLevel: 'STANDARD',
       roles: [],
     });

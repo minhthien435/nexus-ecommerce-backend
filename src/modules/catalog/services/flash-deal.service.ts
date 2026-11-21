@@ -47,16 +47,16 @@ export class FlashDealService {
         ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
       JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
         WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
-      WHERE fdi.campaign_id = $1 AND fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity
+      WHERE fdi.campaign_id = $1 AND fdi.status = 'ACTIVE' AND fdi.sold_qty < fdi.quota_qty
         AND ($2::uuid IS NULL OR p.category_id = $2::uuid)`;
     const [rows, counts] = await Promise.all([
       this.dataSource.query<Array<Record<string, unknown>>>(
         `SELECT p.id, p.slug, p.name, image.url AS "imageUrl", trim(s.currency) AS currency,
-                fdi.deal_price::text AS price,
+                fdi.flash_price::text AS price,
                 GREATEST(COALESCE(s.original_price, s.price), s.price)::text AS "originalPrice",
-                ROUND((1 - fdi.deal_price / NULLIF(GREATEST(COALESCE(s.original_price, s.price), s.price), 0)) * 100)::int AS "discountPercent",
-                LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity",
-                LEAST(100, ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100))::int AS "dealSoldPercent",
+                ROUND((1 - fdi.flash_price / NULLIF(GREATEST(COALESCE(s.original_price, s.price), s.price), 0)) * 100)::int AS "discountPercent",
+                LEAST(inventory.quantity, fdi.quota_qty - fdi.sold_qty)::int AS "availableQuantity",
+                LEAST(100, ROUND((fdi.sold_qty::numeric / fdi.quota_qty) * 100))::int AS "dealSoldPercent",
                 true AS "isDeal", s.id AS "defaultSkuId", fdi.id AS "flashDealItemId",
                 fdi.max_per_buyer AS "maxPerBuyer"
            ${common} ORDER BY fdi.sort_order ASC, fdi.created_at ASC, fdi.id ASC LIMIT $3 OFFSET $4`,

@@ -296,7 +296,10 @@ describe('PaymentsService', () => {
 
     await expect(
       service.createPayosPaymentLink(buyerId, { orderId, useCoins: 30_000 }),
-    ).rejects.toThrow(ConflictException);
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { errorCode: 'COIN_SELECTION_LOCKED' },
+    });
     expect(coinQuery).not.toHaveBeenCalled();
     expect(payosClientService.createPaymentLink).not.toHaveBeenCalled();
   });

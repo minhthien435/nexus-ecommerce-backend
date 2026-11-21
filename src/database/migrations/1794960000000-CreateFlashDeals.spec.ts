@@ -12,9 +12,6 @@ describe('CreateFlashDeals1794960000000', () => {
     expect(sql).toContain('ends_at > starts_at');
     expect(sql).toContain('UNIQUE (campaign_id, sku_id)');
     expect(sql).toContain('sold_quantity <= deal_quantity');
-    expect(sql).toContain('original_price_snapshot > deal_price');
-    expect(sql).toContain('max_per_buyer integer NOT NULL DEFAULT 2');
-    expect(sql).toContain('sort_order integer NOT NULL DEFAULT 0');
     expect(sql).toContain('flash_deal_campaign_active_window_idx');
     expect(sql).toContain('flash_deal_item_sku_lookup_idx');
   });
