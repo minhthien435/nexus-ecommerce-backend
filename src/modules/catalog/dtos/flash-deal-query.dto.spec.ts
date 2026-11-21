@@ -7,7 +7,7 @@ describe('ActiveFlashDealQueryDto', () => {
   it.each([
     { page: '0', limit: '20' },
     { page: '1', limit: '0' },
-    { page: '1', limit: '101' },
+    { page: '1', limit: '25' },
     { page: '1.5', limit: '20' },
     { page: '1', limit: '20', campaignId: 'not-a-uuid' },
   ])('rejects invalid paging/filter input %#', async (input) => {

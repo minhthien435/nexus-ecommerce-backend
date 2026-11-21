@@ -356,43 +356,55 @@ describe('ProductSearchService', () => {
     cache.get.mockResolvedValue(cached);
     query.mockResolvedValueOnce([
       {
-        id: 'earliest-deal',
+        flashDealItemId: 'earliest-deal',
         campaignId: 'earliest-campaign',
         skuId: 'sku-1',
-        dealPrice: '80',
+        flashPrice: '80',
         originalPrice: '100',
         currency: 'VND',
         productId: 'product-1',
         productName: 'Phone',
         productSlug: 'phone',
         imageUrl: null,
-        availableQuantity: 2,
-        endTime: '2026-12-01T00:00:00Z',
+        remainingQuota: 2,
+        soldPercent: 25,
+        maxPerBuyer: 2,
+        endsAt: '2026-12-01T00:00:00Z',
       },
       {
-        id: 'later-deal',
+        flashDealItemId: 'later-deal',
         campaignId: 'later-campaign',
         skuId: 'sku-1',
-        dealPrice: '70',
+        flashPrice: '70',
         originalPrice: '100',
         currency: 'VND',
         productId: 'product-1',
         productName: 'Phone',
         productSlug: 'phone',
         imageUrl: null,
-        availableQuantity: 3,
-        endTime: '2026-12-02T00:00:00Z',
+        remainingQuota: 3,
+        soldPercent: 50,
+        maxPerBuyer: 1,
+        endsAt: '2026-12-02T00:00:00Z',
       },
     ]);
     const detail = await service.getBySlug('phone');
     expect(detail.skus[0].activeFlashDeal).toMatchObject({
-      id: 'earliest-deal',
-      availableQuantity: 2,
+      flashDealItemId: 'earliest-deal',
+      flashPrice: 80,
+      originalPrice: 100,
+      remainingQuota: 2,
     });
+    expect(detail.skus[0].activeFlashDeal).not.toHaveProperty('skuId');
     expect(cache.set).not.toHaveBeenCalled();
-    expect(query.mock.calls[0][0]).toContain("fdc.status = 'ACTIVE'");
+    expect(query.mock.calls[0][0]).toContain(
+      "fdc.status IN ('ACTIVE', 'SCHEDULED')",
+    );
     expect(query.mock.calls[0][0]).toContain(
       'fdc.starts_at <= now() AND fdc.ends_at > now()',
+    );
+    expect(query.mock.calls[0][0]).toContain(
+      'GREATEST(COALESCE(s.original_price, s.price), s.price)',
     );
   });
 });

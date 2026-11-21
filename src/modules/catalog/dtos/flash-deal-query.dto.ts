@@ -6,11 +6,15 @@ const toNumber = ({ value }: { value: unknown }) =>
 
 export class FlashDealPageQueryDto {
   @IsOptional() @IsInt() @Min(1) @Transform(toNumber) page = 1;
-  @IsOptional() @IsInt() @Min(1) @Max(100) @Transform(toNumber) limit = 20;
+  @IsOptional() @IsInt() @Min(1) @Max(24) @Transform(toNumber) limit = 4;
 }
 
 export class ActiveFlashDealQueryDto extends FlashDealPageQueryDto {
   @IsOptional() @IsUUID() campaignId?: string;
+  @IsOptional() @IsUUID() categoryId?: string;
 }
 
-export class TrustedShopQueryDto extends FlashDealPageQueryDto {}
+export class TrustedShopQueryDto {
+  @IsOptional() @IsInt() @Min(1) @Transform(toNumber) page = 1;
+  @IsOptional() @IsInt() @Min(1) @Max(12) @Transform(toNumber) limit = 4;
+}

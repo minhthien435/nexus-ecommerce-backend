@@ -64,32 +64,52 @@ export class PublicShopService {
 
   async trusted(query: TrustedShopQueryDto) {
     const params = [query.limit, (query.page - 1) * query.limit];
-    const where = `status = 'ACTIVE' AND deleted_at IS NULL AND reputation_score >= 70`;
+    const where = `shop.status = 'ACTIVE' AND shop.deleted_at IS NULL
+      AND EXISTS (SELECT 1 FROM catalog.products p
+        WHERE p.seller_id = shop.seller_id AND p.status = 'ACTIVE' AND p.deleted_at IS NULL)`;
     const [rows, counts] = await Promise.all([
       this.dataSource.query<Array<Record<string, unknown>>>(
-        `SELECT id, name, slug, headline, logo_url AS "logoUrl", banner_url AS "bannerUrl",
-                rating_avg AS "ratingAvg", review_count AS "reviewCount", follower_count AS "followerCount",
-                reputation_score AS "reputationScore", created_at AS "createdAt"
-           FROM identity.shops WHERE ${where}
-          ORDER BY reputation_score DESC, rating_avg DESC, id ASC LIMIT $1 OFFSET $2`,
+        `SELECT shop.id, shop.seller_id AS "sellerId", shop.name, shop.slug, shop.headline,
+                shop.logo_url AS "logoUrl", shop.rating_avg AS "ratingAvg",
+                shop.review_count AS "reviewCount", shop.follower_count AS "followerCount",
+                shop.reputation_score AS "reputationScore", shop.warehouse_address AS location,
+                shop.created_at AS "createdAt"
+           FROM identity.shops shop WHERE ${where}
+          ORDER BY shop.reputation_score DESC, shop.rating_avg DESC, shop.review_count DESC,
+                   shop.follower_count DESC, shop.created_at ASC, shop.id ASC LIMIT $1 OFFSET $2`,
         params,
       ),
       this.dataSource.query<Array<{ total: string | number }>>(
-        `SELECT COUNT(*)::int AS total FROM identity.shops WHERE ${where}`,
+        `SELECT COUNT(*)::int AS total FROM identity.shops shop WHERE ${where}`,
       ),
     ]);
     const total = Number(counts[0]?.total ?? 0);
     return {
-      items: rows.map((row) => ({
-        ...row,
-        ratingAvg: Number(row.ratingAvg ?? 0),
-        reviewCount: Number(row.reviewCount ?? 0),
-        followerCount: Number(row.followerCount ?? 0),
-        reputationScore: Number(row.reputationScore),
-        trustLevel: this.trustLevel(Number(row.reputationScore)),
-        positiveRate: null,
-        responseRate: null,
-      })),
+      items: rows.map((row) => {
+        const reputationScore = Number(row.reputationScore);
+        const trustLevel = this.trustLevel(reputationScore);
+        const shopName = String(row.name ?? '');
+        return {
+          id: row.id,
+          sellerId: row.sellerId,
+          shopName,
+          shopSlug: row.slug,
+          initials: this.initials(shopName),
+          headline: row.headline ?? null,
+          avatarUrl: row.logoUrl ?? null,
+          rating: Number(row.ratingAvg ?? 0),
+          reviewCount: Number(row.reviewCount ?? 0),
+          followerCount: Number(row.followerCount ?? 0),
+          reputationScore,
+          trustLevel,
+          badge: this.sellerBadge(reputationScore),
+          isTrusted: reputationScore >= 70,
+          location: this.location(row.location),
+          positiveRate: reputationScore,
+          responseRate: null,
+          createdAt: row.createdAt,
+        };
+      }),
       page: query.page,
       limit: query.limit,
       total,
@@ -234,6 +254,32 @@ export class PublicShopService {
     if (score >= 70) return 'TRUSTED';
     if (score >= 50) return 'STANDARD';
     return 'NEW';
+  }
+
+  private sellerBadge(score: number) {
+    if (score >= 90) return 'Top Rated';
+    if (score >= 70) return 'Trusted Seller';
+    return 'Verified Shop';
+  }
+
+  private initials(name: string) {
+    return name
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('');
+  }
+
+  private location(address: unknown): string | null {
+    if (typeof address !== 'string' || !address.trim()) return null;
+    const parts = address
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (/^(vi(?:e|ệ)t nam|vietnam)$/i.test(parts.at(-1) ?? '')) parts.pop();
+    return parts.at(-1) ?? null;
   }
 
   private escapeLike(value: string) {

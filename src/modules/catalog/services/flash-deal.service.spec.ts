@@ -15,11 +15,16 @@ describe('FlashDealService', () => {
       page: 2,
       limit: 5,
       total: 0,
-      totalPages: 0,
+      totalPages: 1,
     });
-    expect(dataSource.query.mock.calls[0][0]).toContain("status = 'ACTIVE'");
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "status IN ('ACTIVE', 'SCHEDULED')",
+    );
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'starts_at <= now() AND ends_at > now()',
+    );
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      'ORDER BY ends_at ASC, id ASC',
     );
   });
 
@@ -37,7 +42,7 @@ describe('FlashDealService', () => {
       page: 1,
       limit: 20,
       total: 0,
-      totalPages: 0,
+      totalPages: 1,
     });
     expect(dataSource.query.mock.calls[0][1]).toEqual([
       '00000000-0000-4000-8000-000000000000',
@@ -57,7 +62,9 @@ describe('FlashDealService', () => {
       query: vi
         .fn()
         .mockResolvedValueOnce([campaign])
-        .mockResolvedValueOnce([{ id: 'item' }])
+        .mockResolvedValueOnce([
+          { id: 'item', price: '80.00', originalPrice: '100.00' },
+        ])
         .mockResolvedValueOnce([{ total: '6' }]),
     };
     const result = await new FlashDealService(dataSource as never).active({
@@ -66,7 +73,7 @@ describe('FlashDealService', () => {
       limit: 5,
     });
     expect(result).toEqual({
-      items: [{ id: 'item' }],
+      items: [{ id: 'item', price: 80, originalPrice: 100 }],
       campaign,
       endTime: 'end',
       page: 2,
@@ -79,34 +86,30 @@ describe('FlashDealService', () => {
     expect(sql).toContain('HAVING SUM(ii.available_qty) > 0');
     expect(sql).toContain("p.status = 'ACTIVE' AND p.deleted_at IS NULL");
     expect(sql).toContain("shop.status = 'ACTIVE' AND shop.deleted_at IS NULL");
+    expect(sql).not.toContain('JOIN catalog.flash_deal_campaigns fdc');
     expect(sql).not.toContain('fdc.starts_at <= now()');
   });
 
-  it('allows a selected upcoming scheduled campaign to preview its items', async () => {
-    const campaign = {
-      id: 'future',
-      title: 'Tonight',
-      slug: 'tonight',
-      status: 'SCHEDULED',
-      startsAt: 'future',
-      endsAt: 'later',
-    };
-    const dataSource = {
-      query: vi
-        .fn()
-        .mockResolvedValueOnce([campaign])
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: '0' }]),
-    };
+  it('returns an empty page for a selected future campaign', async () => {
+    const dataSource = { query: vi.fn().mockResolvedValueOnce([]) };
     const result = await new FlashDealService(dataSource as never).active({
       campaignId: 'future',
       page: 1,
       limit: 20,
     });
-    expect(result.campaign).toBe(campaign);
+    expect(result).toEqual({
+      items: [],
+      campaign: null,
+      endTime: null,
+      page: 1,
+      limit: 20,
+      total: 0,
+      totalPages: 1,
+    });
     const selectionSql = dataSource.query.mock.calls[0][0] as string;
     expect(selectionSql).toContain("status IN ('ACTIVE', 'SCHEDULED')");
-    expect(selectionSql).toContain('ends_at > now()');
+    expect(selectionSql).toContain('starts_at <= now() AND ends_at > now()');
+    expect(dataSource.query).toHaveBeenCalledOnce();
   });
 
   it('projects every campaign in deterministic order', async () => {
@@ -125,7 +128,13 @@ describe('FlashDealService', () => {
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'ORDER BY starts_at ASC, id ASC',
     );
-    expect(dataSource.query.mock.calls[0][0]).not.toContain('WHERE status');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "WHERE status IN ('SCHEDULED', 'ACTIVE')",
+    );
+    expect(dataSource.query.mock.calls[0][0]).toContain('ends_at > now()');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "starts_at <= now() + interval '24 hours'",
+    );
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'SELECT id, title, slug, status',
     );

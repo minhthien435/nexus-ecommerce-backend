@@ -345,6 +345,12 @@ export class AuctionService {
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     this.validateSchedule(startsAt, endsAt);
+    if (startsAt.getTime() < Date.now() - 60_000) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_AUCTION_SCHEDULE',
+        message: 'Thời gian bắt đầu không được ở quá 60 giây trong quá khứ',
+      });
+    }
     if (dto.reservePrice < dto.startPrice) {
       throw new BadRequestException({
         errorCode: 'INVALID_RESERVE_PRICE',
