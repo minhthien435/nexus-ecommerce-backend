@@ -621,6 +621,33 @@ describe('AuctionService', () => {
       };
     };
 
+    it('rejects a start older than the 60-second tolerance before transaction work', async () => {
+      const auctions = { count: vi.fn().mockResolvedValue(0) } as Record<
+        string,
+        any
+      >;
+      const { service, reservation } = createService(auctions, {}, {});
+      const transaction = auctions.manager.transaction;
+      await expect(
+        service.create(
+          {
+            skuId: 'sku-1',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() - 61_000).toISOString(),
+            endsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          'seller-1',
+        ),
+      ).rejects.toMatchObject({
+        status: 400,
+        response: { errorCode: 'INVALID_AUCTION_SCHEDULE' },
+      });
+      expect(transaction).not.toHaveBeenCalled();
+      expect(reservation.reserve).not.toHaveBeenCalled();
+    });
+
     it.each([
       { shopScore: 49, personalScore: 100, allowed: false },
       { shopScore: 50, personalScore: 100, allowed: false },

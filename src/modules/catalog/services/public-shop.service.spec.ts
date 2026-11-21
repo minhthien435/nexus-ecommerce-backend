@@ -101,7 +101,9 @@ describe('PublicShopService', () => {
     expect(result.items[0]).toMatchObject({
       positiveRate: null,
       responseRate: null,
-      ratingAvg: 4.9,
+      rating: 4.9,
+      badge: 'Top Rated',
+      isTrusted: true,
     });
     expect(result).toMatchObject({
       page: 1,
@@ -110,9 +112,9 @@ describe('PublicShopService', () => {
       totalPages: 1,
     });
     expect(result).not.toHaveProperty('meta');
-    expect(dataSource.query.mock.calls[0][0]).toContain(
-      "status = 'ACTIVE' AND deleted_at IS NULL AND reputation_score >= 70",
-    );
+    const sql = dataSource.query.mock.calls[0][0] as string;
+    expect(sql).toContain('p.seller_id = shop.seller_id');
+    expect(sql).not.toContain('reputation_score >=');
   });
 
   it.each([

@@ -18,6 +18,15 @@ export class FlashDealItemEntity {
   @Column({ name: 'sku_id', type: 'uuid' }) skuId: string;
   @Column({ name: 'deal_price', type: 'numeric', precision: 18, scale: 2 })
   dealPrice: string;
+  @Column({
+    name: 'original_price_snapshot',
+    type: 'numeric',
+    precision: 18,
+    scale: 2,
+  })
+  originalPriceSnapshot: string;
+  @Column({ name: 'max_per_buyer', type: 'integer', default: 2 })
+  maxPerBuyer: number;
   @Column({ name: 'deal_quantity', type: 'integer' }) dealQuantity: number;
   @Column({ name: 'sold_quantity', type: 'integer', default: 0 })
   soldQuantity: number;

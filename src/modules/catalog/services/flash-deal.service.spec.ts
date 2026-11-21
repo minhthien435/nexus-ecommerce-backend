@@ -15,9 +15,11 @@ describe('FlashDealService', () => {
       page: 2,
       limit: 5,
       total: 0,
-      totalPages: 0,
+      totalPages: 1,
     });
-    expect(dataSource.query.mock.calls[0][0]).toContain("status = 'ACTIVE'");
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "status IN ('ACTIVE', 'SCHEDULED')",
+    );
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'starts_at <= now() AND ends_at > now()',
     );
@@ -37,7 +39,7 @@ describe('FlashDealService', () => {
       page: 1,
       limit: 20,
       total: 0,
-      totalPages: 0,
+      totalPages: 1,
     });
     expect(dataSource.query.mock.calls[0][1]).toEqual([
       '00000000-0000-4000-8000-000000000000',
@@ -82,31 +84,26 @@ describe('FlashDealService', () => {
     expect(sql).not.toContain('fdc.starts_at <= now()');
   });
 
-  it('allows a selected upcoming scheduled campaign to preview its items', async () => {
-    const campaign = {
-      id: 'future',
-      title: 'Tonight',
-      slug: 'tonight',
-      status: 'SCHEDULED',
-      startsAt: 'future',
-      endsAt: 'later',
-    };
-    const dataSource = {
-      query: vi
-        .fn()
-        .mockResolvedValueOnce([campaign])
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: '0' }]),
-    };
+  it('returns an empty page for a selected future campaign', async () => {
+    const dataSource = { query: vi.fn().mockResolvedValueOnce([]) };
     const result = await new FlashDealService(dataSource as never).active({
       campaignId: 'future',
       page: 1,
       limit: 20,
     });
-    expect(result.campaign).toBe(campaign);
+    expect(result).toEqual({
+      items: [],
+      campaign: null,
+      endTime: null,
+      page: 1,
+      limit: 20,
+      total: 0,
+      totalPages: 1,
+    });
     const selectionSql = dataSource.query.mock.calls[0][0] as string;
     expect(selectionSql).toContain("status IN ('ACTIVE', 'SCHEDULED')");
-    expect(selectionSql).toContain('ends_at > now()');
+    expect(selectionSql).toContain('starts_at <= now() AND ends_at > now()');
+    expect(dataSource.query).toHaveBeenCalledOnce();
   });
 
   it('projects every campaign in deterministic order', async () => {
@@ -125,7 +122,9 @@ describe('FlashDealService', () => {
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'ORDER BY starts_at ASC, id ASC',
     );
-    expect(dataSource.query.mock.calls[0][0]).not.toContain('WHERE status');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "WHERE status IN ('ACTIVE', 'SCHEDULED')",
+    );
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'SELECT id, title, slug, status',
     );

@@ -22,16 +22,23 @@ export class FlashDealService {
     const campaigns = await this.dataSource.query<CampaignRow[]>(
       `SELECT id, title, slug, status, starts_at AS "startsAt", ends_at AS "endsAt"
          FROM catalog.flash_deal_campaigns
-        WHERE (($1::uuid IS NULL AND status = 'ACTIVE' AND starts_at <= now() AND ends_at > now())
-          OR ($1::uuid IS NOT NULL AND id = $1::uuid AND status IN ('ACTIVE', 'SCHEDULED') AND ends_at > now()))
+        WHERE status IN ('ACTIVE', 'SCHEDULED')
+          AND starts_at <= now() AND ends_at > now()
+          AND ($1::uuid IS NULL OR id = $1::uuid)
         ORDER BY starts_at ASC, id ASC LIMIT 1`,
       [query.campaignId ?? null],
     );
     const campaign = campaigns[0] ?? null;
     if (!campaign) return this.page(query, [], null, 0);
 
-    const params = [campaign.id, query.limit, (query.page - 1) * query.limit];
+    const params = [
+      campaign.id,
+      query.categoryId ?? null,
+      query.limit,
+      (query.page - 1) * query.limit,
+    ];
     const common = `FROM catalog.flash_deal_items fdi
+      JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
       JOIN catalog.product_skus s ON s.id = fdi.sku_id AND s.is_active = true
       JOIN catalog.products p ON p.id = s.product_id AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
       JOIN identity.shops shop ON (shop.id = p.shop_id OR (p.shop_id IS NULL AND shop.seller_id = p.seller_id))
@@ -40,19 +47,24 @@ export class FlashDealService {
         ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1) image ON true
       JOIN LATERAL (SELECT SUM(ii.available_qty)::int AS quantity FROM fulfillment.inventory_items ii
         WHERE ii.sku_id = s.id HAVING SUM(ii.available_qty) > 0) inventory ON true
-      WHERE fdi.campaign_id = $1 AND fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity`;
+      WHERE fdi.campaign_id = $1 AND fdi.is_active = true AND fdi.sold_quantity < fdi.deal_quantity
+        AND ($2::uuid IS NULL OR p.category_id = $2::uuid)`;
     const [rows, counts] = await Promise.all([
       this.dataSource.query<Array<Record<string, unknown>>>(
-        `SELECT fdi.id, fdi.campaign_id AS "campaignId", s.id AS "skuId", s.sku_code AS "skuCode",
-                fdi.deal_price::text AS "dealPrice", s.price::text AS "originalPrice", trim(s.currency) AS currency,
-                p.id AS "productId", p.name AS "productName", p.slug AS "productSlug", image.url AS "imageUrl",
-                LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity"
-           ${common} ORDER BY fdi.created_at ASC, fdi.id ASC LIMIT $2 OFFSET $3`,
+        `SELECT p.id, p.slug, p.name, image.url AS "imageUrl", trim(s.currency) AS currency,
+                fdi.deal_price::text AS price,
+                GREATEST(COALESCE(s.original_price, s.price), s.price)::text AS "originalPrice",
+                ROUND((1 - fdi.deal_price / NULLIF(GREATEST(COALESCE(s.original_price, s.price), s.price), 0)) * 100)::int AS "discountPercent",
+                LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity",
+                ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100)::int AS "dealSoldPercent",
+                true AS "isDeal", s.id AS "defaultSkuId", fdi.id AS "flashDealItemId",
+                fdi.max_per_buyer AS "maxPerBuyer"
+           ${common} ORDER BY fdi.created_at ASC, fdi.id ASC LIMIT $3 OFFSET $4`,
         params,
       ),
       this.dataSource.query<Array<{ total: string }>>(
         `SELECT COUNT(*)::text AS total ${common}`,
-        [campaign.id],
+        [campaign.id, query.categoryId ?? null],
       ),
     ]);
     return this.page(query, rows, campaign, Number(counts[0]?.total ?? 0));
@@ -61,7 +73,10 @@ export class FlashDealService {
   async campaigns() {
     return this.dataSource.query<CampaignRow[]>(
       `SELECT id, title, slug, status, starts_at AS "startsAt", ends_at AS "endsAt"
-         FROM catalog.flash_deal_campaigns ORDER BY starts_at ASC, id ASC`,
+         FROM catalog.flash_deal_campaigns
+        WHERE status IN ('ACTIVE', 'SCHEDULED') AND starts_at <= now() AND ends_at > now()
+           OR status = 'SCHEDULED' AND starts_at > now() AND starts_at <= now() + interval '24 hours'
+        ORDER BY starts_at ASC, id ASC`,
     );
   }
 
@@ -78,7 +93,7 @@ export class FlashDealService {
       page: query.page,
       limit: query.limit,
       total,
-      totalPages: Math.ceil(total / query.limit),
+      totalPages: Math.ceil(total / query.limit) || 1,
     };
   }
 }
