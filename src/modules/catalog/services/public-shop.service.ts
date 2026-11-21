@@ -103,9 +103,9 @@ export class PublicShopService {
           reputationScore,
           trustLevel,
           badge: this.sellerBadge(reputationScore),
-          isTrusted: true,
+          isTrusted: reputationScore >= 70,
           location: this.location(row.location),
-          positiveRate: null,
+          positiveRate: reputationScore,
           responseRate: null,
           createdAt: row.createdAt,
         };

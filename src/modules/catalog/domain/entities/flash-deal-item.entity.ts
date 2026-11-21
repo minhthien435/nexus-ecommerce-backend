@@ -30,6 +30,8 @@ export class FlashDealItemEntity {
   @Column({ name: 'deal_quantity', type: 'integer' }) dealQuantity: number;
   @Column({ name: 'sold_quantity', type: 'integer', default: 0 })
   soldQuantity: number;
+  @Column({ name: 'sort_order', type: 'integer', default: 0 })
+  sortOrder: number;
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

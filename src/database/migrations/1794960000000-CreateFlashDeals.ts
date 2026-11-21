@@ -18,6 +18,7 @@ export class CreateFlashDeals1794960000000 implements MigrationInterface {
         original_price_snapshot numeric(18,2) NOT NULL CHECK (original_price_snapshot > deal_price),
         max_per_buyer integer NOT NULL DEFAULT 2 CHECK (max_per_buyer > 0),
         deal_quantity integer NOT NULL CHECK (deal_quantity > 0), sold_quantity integer NOT NULL DEFAULT 0,
+        sort_order integer NOT NULL DEFAULT 0,
         is_active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
         updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
         CONSTRAINT flash_deal_item_sold_check CHECK (sold_quantity >= 0 AND sold_quantity <= deal_quantity),

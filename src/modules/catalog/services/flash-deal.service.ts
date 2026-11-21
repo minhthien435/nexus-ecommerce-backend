@@ -25,7 +25,7 @@ export class FlashDealService {
         WHERE status IN ('ACTIVE', 'SCHEDULED')
           AND starts_at <= now() AND ends_at > now()
           AND ($1::uuid IS NULL OR id = $1::uuid)
-        ORDER BY starts_at ASC, id ASC LIMIT 1`,
+        ORDER BY ends_at ASC, id ASC LIMIT 1`,
       [query.campaignId ?? null],
     );
     const campaign = campaigns[0] ?? null;
@@ -56,10 +56,10 @@ export class FlashDealService {
                 GREATEST(COALESCE(s.original_price, s.price), s.price)::text AS "originalPrice",
                 ROUND((1 - fdi.deal_price / NULLIF(GREATEST(COALESCE(s.original_price, s.price), s.price), 0)) * 100)::int AS "discountPercent",
                 LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "availableQuantity",
-                ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100)::int AS "dealSoldPercent",
+                LEAST(100, ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100))::int AS "dealSoldPercent",
                 true AS "isDeal", s.id AS "defaultSkuId", fdi.id AS "flashDealItemId",
                 fdi.max_per_buyer AS "maxPerBuyer"
-           ${common} ORDER BY fdi.created_at ASC, fdi.id ASC LIMIT $3 OFFSET $4`,
+           ${common} ORDER BY fdi.sort_order ASC, fdi.created_at ASC, fdi.id ASC LIMIT $3 OFFSET $4`,
         params,
       ),
       this.dataSource.query<Array<{ total: string }>>(
@@ -74,8 +74,9 @@ export class FlashDealService {
     return this.dataSource.query<CampaignRow[]>(
       `SELECT id, title, slug, status, starts_at AS "startsAt", ends_at AS "endsAt"
          FROM catalog.flash_deal_campaigns
-        WHERE status IN ('ACTIVE', 'SCHEDULED') AND starts_at <= now() AND ends_at > now()
-           OR status = 'SCHEDULED' AND starts_at > now() AND starts_at <= now() + interval '24 hours'
+        WHERE status IN ('SCHEDULED', 'ACTIVE')
+          AND ends_at > now()
+          AND starts_at <= now() + interval '24 hours'
         ORDER BY starts_at ASC, id ASC`,
     );
   }

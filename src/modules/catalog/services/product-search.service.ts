@@ -129,8 +129,8 @@ export type ProductDetail = {
 export type ActiveFlashDeal = {
   flashDealItemId: string;
   campaignId: string;
-  flashPrice: string;
-  originalPrice: string;
+  flashPrice: number;
+  originalPrice: number;
   remainingQuota: number;
   soldPercent: number;
   maxPerBuyer: number;
@@ -385,9 +385,10 @@ export class ProductSearchService {
       }>
     >(
       `SELECT fdi.id AS "flashDealItemId", fdi.campaign_id AS "campaignId", s.id AS "skuId",
-              fdi.deal_price::text AS "flashPrice", fdi.original_price_snapshot::text AS "originalPrice",
+              fdi.deal_price::text AS "flashPrice",
+              GREATEST(COALESCE(s.original_price, s.price), s.price)::text AS "originalPrice",
               LEAST(inventory.quantity, fdi.deal_quantity - fdi.sold_quantity)::int AS "remainingQuota",
-              ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100)::int AS "soldPercent",
+              LEAST(100, ROUND((fdi.sold_quantity::numeric / fdi.deal_quantity) * 100))::int AS "soldPercent",
               fdi.max_per_buyer AS "maxPerBuyer", fdc.ends_at AS "endsAt"
          FROM catalog.flash_deal_items fdi
          JOIN catalog.flash_deal_campaigns fdc ON fdc.id = fdi.campaign_id
@@ -408,6 +409,8 @@ export class ProductSearchService {
       if (!bySku.has(deal.skuId)) {
         bySku.set(deal.skuId, {
           ...deal,
+          flashPrice: Number(deal.flashPrice),
+          originalPrice: Number(deal.originalPrice),
           remainingQuota: Number(deal.remainingQuota),
           soldPercent: Number(deal.soldPercent),
           maxPerBuyer: Number(deal.maxPerBuyer),

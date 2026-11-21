@@ -648,6 +648,32 @@ describe('AuctionService', () => {
       expect(reservation.reserve).not.toHaveBeenCalled();
     });
 
+    it('allows a start within the 60-second grace window to reach transaction validation', async () => {
+      const auctions = { count: vi.fn().mockResolvedValue(0) } as Record<
+        string,
+        any
+      >;
+      const skus = { findOne: vi.fn().mockResolvedValue(null) };
+      const { service } = createService(auctions, {}, skus);
+
+      await expect(
+        service.create(
+          {
+            skuId: 'missing-sku',
+            startPrice: 100,
+            reservePrice: 120,
+            bidIncrement: 10,
+            startsAt: new Date(Date.now() - 30_000).toISOString(),
+            endsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          'seller-1',
+        ),
+      ).rejects.toMatchObject({
+        response: { errorCode: 'AUCTION_SKU_INELIGIBLE' },
+      });
+      expect(auctions.manager.transaction).toHaveBeenCalledOnce();
+    });
+
     it.each([
       { shopScore: 49, personalScore: 100, allowed: false },
       { shopScore: 50, personalScore: 100, allowed: false },

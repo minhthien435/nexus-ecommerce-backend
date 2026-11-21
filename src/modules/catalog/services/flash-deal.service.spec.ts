@@ -23,6 +23,9 @@ describe('FlashDealService', () => {
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'starts_at <= now() AND ends_at > now()',
     );
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      'ORDER BY ends_at ASC, id ASC',
+    );
   });
 
   it('returns the same empty page for an unknown valid campaign identifier', async () => {
@@ -123,7 +126,11 @@ describe('FlashDealService', () => {
       'ORDER BY starts_at ASC, id ASC',
     );
     expect(dataSource.query.mock.calls[0][0]).toContain(
-      "WHERE status IN ('ACTIVE', 'SCHEDULED')",
+      "WHERE status IN ('SCHEDULED', 'ACTIVE')",
+    );
+    expect(dataSource.query.mock.calls[0][0]).toContain('ends_at > now()');
+    expect(dataSource.query.mock.calls[0][0]).toContain(
+      "starts_at <= now() + interval '24 hours'",
     );
     expect(dataSource.query.mock.calls[0][0]).toContain(
       'SELECT id, title, slug, status',

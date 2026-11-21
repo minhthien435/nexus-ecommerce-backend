@@ -391,6 +391,8 @@ describe('ProductSearchService', () => {
     const detail = await service.getBySlug('phone');
     expect(detail.skus[0].activeFlashDeal).toMatchObject({
       flashDealItemId: 'earliest-deal',
+      flashPrice: 80,
+      originalPrice: 100,
       remainingQuota: 2,
     });
     expect(cache.set).not.toHaveBeenCalled();
@@ -399,6 +401,9 @@ describe('ProductSearchService', () => {
     );
     expect(query.mock.calls[0][0]).toContain(
       'fdc.starts_at <= now() AND fdc.ends_at > now()',
+    );
+    expect(query.mock.calls[0][0]).toContain(
+      'GREATEST(COALESCE(s.original_price, s.price), s.price)',
     );
   });
 });

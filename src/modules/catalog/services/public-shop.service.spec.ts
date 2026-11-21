@@ -99,7 +99,7 @@ describe('PublicShopService', () => {
       'TRUSTED',
     ]);
     expect(result.items[0]).toMatchObject({
-      positiveRate: null,
+      positiveRate: 90,
       responseRate: null,
       rating: 4.9,
       badge: 'Top Rated',
