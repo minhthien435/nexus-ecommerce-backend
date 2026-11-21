@@ -22,6 +22,7 @@ import {
 import { PayosClientService } from './payos-client.service.js';
 import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
+import { FlashDealQuotaService } from './flash-deal-quota.service.js';
 
 export interface WebhookProcessingResult {
   received: boolean;
@@ -35,6 +36,7 @@ export class PaymentWebhookService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly payosClientService: PayosClientService,
+    private readonly flashDeals: FlashDealQuotaService,
     @Optional()
     @InjectQueue(ORDER_EXPIRY_QUEUE)
     private readonly expiryQueue?: Queue<OrderExpiryJobPayload>,
@@ -151,6 +153,7 @@ export class PaymentWebhookService {
 
         if (isSuccess) {
           if (order.status === 'PAID') {
+            await this.flashDeals.commitByOrderId(manager, order.id);
             this.logger.log(
               `Order ${order.id} is already in PAID state. Acknowledging safely.`,
             );
@@ -172,6 +175,7 @@ export class PaymentWebhookService {
             const previousStatus = order.status;
             order.status = 'PAID';
             await manager.save(order);
+            await this.flashDeals.commitByOrderId(manager, order.id);
 
             await manager.delete(CartItemEntity, {
               reservedOrderId: order.id,

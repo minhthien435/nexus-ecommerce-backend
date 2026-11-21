@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from './flash-deal-quota.service.js';
+const flashDeals = {
+  projectForCart: async () => new Map(),
+} as unknown as FlashDealQuotaService;
 import { CartService } from './cart.service.js';
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -21,6 +25,7 @@ function setup() {
     items as never,
     catalog,
     inventory,
+    flashDeals,
   );
   return { carts, items, catalog, inventory, service };
 }
@@ -81,6 +86,7 @@ describe('CartService read cart', () => {
       forbidden as never,
       s.catalog,
       s.inventory,
+      flashDeals,
     );
     expect((await service.getCart(userId, manager as never)).subtotal).toBe(
       '0.10',

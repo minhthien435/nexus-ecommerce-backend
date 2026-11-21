@@ -1,3 +1,7 @@
+import type { FlashDealQuotaService } from './flash-deal-quota.service.js';
+const flashDeals = {
+  commitByOrderId: vi.fn().mockResolvedValue(undefined),
+} as unknown as FlashDealQuotaService;
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource, EntityManager } from 'typeorm';
@@ -27,6 +31,9 @@ describe('PaymentWebhookService', () => {
   let mockPayment: PaymentEntity;
 
   beforeEach(() => {
+    vi.mocked(flashDeals.commitByOrderId)
+      .mockReset()
+      .mockResolvedValue(undefined);
     mockWebhookData = {
       orderCode,
       amount: 550000,
@@ -115,6 +122,7 @@ describe('PaymentWebhookService', () => {
     service = new PaymentWebhookService(
       dataSource,
       payosClientService,
+      flashDeals,
       expiryQueue,
     );
   });
@@ -154,6 +162,7 @@ describe('PaymentWebhookService', () => {
 
     expect(result).toEqual({ received: true });
     expect(mockOrder.status).toBe('PAID');
+    expect(flashDeals.commitByOrderId).toHaveBeenCalledWith(manager, orderId);
     expect(mockPayment.status).toBe('SUCCEEDED');
     expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
       reservedOrderId: orderId,
@@ -244,6 +253,7 @@ describe('PaymentWebhookService', () => {
 
     expect(result).toEqual({ received: true });
     expect(mockPayment.status).toBe('SUCCEEDED');
+    expect(flashDeals.commitByOrderId).toHaveBeenCalledWith(manager, orderId);
     expect(manager.delete).toHaveBeenCalledWith(CartItemEntity, {
       reservedOrderId: orderId,
     });
@@ -267,6 +277,23 @@ describe('PaymentWebhookService', () => {
       'arrived while order is in state CANCELLED',
     );
     expect(manager.delete).not.toHaveBeenCalled();
+    expect(flashDeals.commitByOrderId).not.toHaveBeenCalled();
+  });
+
+  it('propagates quota commit failure to roll back the locked-order transaction', async () => {
+    vi.mocked(manager.findOne)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(mockPayment)
+      .mockResolvedValueOnce(mockOrder);
+    vi.mocked(flashDeals.commitByOrderId).mockRejectedValueOnce(
+      new Error('released reservation'),
+    );
+    await expect(
+      service.handlePayosWebhook(mockWebhookPayload),
+    ).rejects.toThrow('released reservation');
+    expect(flashDeals.commitByOrderId).toHaveBeenCalledWith(manager, orderId);
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(expiryQueue.getJob).not.toHaveBeenCalled();
   });
 
   it('marks payment FAILED when PayOS webhook indicates failure code', async () => {
@@ -352,6 +379,7 @@ describe('PaymentWebhookService', () => {
     const auctionWebhookService = new PaymentWebhookService(
       dataSource,
       payosClientService,
+      flashDeals,
       expiryQueue,
       undefined,
       mockReputationApi as any,

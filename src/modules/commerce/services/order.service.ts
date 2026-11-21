@@ -39,6 +39,7 @@ import { ShippingQuoteService } from '../../fulfillment/services/shipping-quote.
 import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
 import type { CartSku } from '../../catalog/catalog-cart.api.js';
 import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
+import { FlashDealQuotaService } from './flash-deal-quota.service.js';
 import {
   loadBuyerOrderDispute,
   resolveOrderReferenceField,
@@ -65,6 +66,7 @@ export class OrderService {
     @InjectRepository(UserAddressEntity)
     private readonly addressRepo: Repository<UserAddressEntity>,
     private readonly catalogApi: CatalogCartApi,
+    private readonly flashDeals: FlashDealQuotaService,
     private readonly orderStateMachine: OrderStateMachineService,
     private readonly inventoryReservation: InventoryReservationApi,
     private readonly expiryOutbox: OrderExpiryOutboxApi,
@@ -489,6 +491,12 @@ export class OrderService {
         manager,
       );
       skuMap = new Map(lockedSkus.map((sku) => [sku.id, sku]));
+      const resolvedFlashDeals = await this.flashDeals.resolveForCheckout(
+        manager,
+        cartItems,
+        lockedSkus,
+        dto.expectedFlashDeals,
+      );
       if (this.shippingFingerprint(cartItems, skuMap) !== quotedFingerprint) {
         throw new ConflictException({
           errorCode: 'SHIPPING_QUOTE_STALE',
@@ -550,6 +558,7 @@ export class OrderService {
           quantity: number;
           weightGrams: number;
           lineTotalCents: bigint;
+          flashDealItemId?: string;
         }>;
       }> = [];
 
@@ -559,7 +568,9 @@ export class OrderService {
 
         for (const item of sellerItems) {
           const sku = skuMap.get(item.skuId)!;
-          const unitPriceCents = moneyToCents(sku.price);
+          const flashDeal = resolvedFlashDeals.get(item.id);
+          const unitPrice = flashDeal?.unitPrice ?? sku.price;
+          const unitPriceCents = moneyToCents(unitPrice);
           const lineTotalCents = unitPriceCents * BigInt(item.quantity);
 
           sellerSubtotalCents += lineTotalCents;
@@ -570,10 +581,11 @@ export class OrderService {
             productName: sku.productName,
             attributes: sku.variantAttributes,
             imageUrl: sku.primaryImageUrl || null,
-            unitPrice: sku.price,
+            unitPrice,
             quantity: item.quantity,
             weightGrams: sku.weightGrams!,
             lineTotalCents,
+            flashDealItemId: flashDeal?.itemId,
           });
         }
 
@@ -731,6 +743,25 @@ export class OrderService {
         }
         savedOrder.items = orderItems;
         createdOrders.push(savedOrder);
+      }
+
+      const flashDealOrders = ordersToCreate
+        .map((orderData, index) => ({
+          orderId: createdOrders[index].id,
+          items: orderData.items
+            .filter((item) => item.flashDealItemId)
+            .map((item) => ({
+              itemId: item.flashDealItemId!,
+              skuId: item.skuId,
+              quantity: item.quantity,
+            })),
+        }))
+        .filter((order) => order.items.length > 0);
+      if (flashDealOrders.length > 0) {
+        await this.flashDeals.reserve(manager, {
+          buyerId: userId.toLowerCase(),
+          orders: flashDealOrders,
+        });
       }
 
       return {
@@ -1110,6 +1141,10 @@ export class OrderService {
           message: 'Checkout session has no pending orders to cancel',
         });
       }
+      await this.orderStateMachine.prelockFlashDealOrders(
+        manager,
+        pending.map((order) => order.id),
+      );
       for (const order of pending) {
         await this.orderStateMachine.transition(manager, {
           orderId: order.id,

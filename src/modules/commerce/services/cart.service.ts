@@ -10,6 +10,7 @@ import { InventoryReadApi } from '../../fulfillment/inventory-read.api.js';
 import { CartEntity } from '../domain/entities/cart.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
 import { centsToMoney, moneyToCents } from './cart-money.js';
+import { FlashDealQuotaService } from './flash-deal-quota.service.js';
 
 type ExclusionReason = 'DISCONTINUED' | 'OUT_OF_STOCK' | 'INSUFFICIENT_STOCK';
 const reasons: Record<ExclusionReason, string> = {
@@ -27,6 +28,7 @@ export class CartService {
     private readonly cartItems: Repository<CartItemEntity>,
     private readonly catalog: CatalogCartApi,
     private readonly inventory: InventoryReadApi,
+    private readonly flashDeals: FlashDealQuotaService,
   ) {}
 
   async getCart(userId: string, manager?: EntityManager) {
@@ -66,6 +68,20 @@ export class CartService {
         : []
       ).map((stock) => [stock.skuId, stock.availableQuantity]),
     );
+    const quantities = new Map<string, number>();
+    for (const row of rows) {
+      if (!row.reservedOrderId)
+        quantities.set(
+          row.skuId,
+          (quantities.get(row.skuId) ?? 0) + row.quantity,
+        );
+    }
+    const promotions = await this.flashDeals.projectForCart(
+      [...skus.values()],
+      quantities,
+      cart?.userId ?? null,
+      manager,
+    );
     let subtotal = 0n;
     let currency: string | null = null;
     const items = rows.map((row) => {
@@ -77,7 +93,12 @@ export class CartService {
           message: 'Stock result is missing for a cart SKU',
         });
       }
-      const currentPrice = sku ? moneyToCents(sku.price) : null;
+      const promotion = row.reservedOrderId
+        ? undefined
+        : promotions.get(row.skuId);
+      const currentPrice = sku
+        ? moneyToCents(promotion?.flashDeal?.flashPrice ?? sku.price)
+        : null;
       const snapshot = moneyToCents(row.unitPriceSnapshot);
       let exclusionReason: ExclusionReason | null = null;
       if (
@@ -130,7 +151,11 @@ export class CartService {
         availableQuantity,
         includedInSubtotal: exclusionReason === null && !isReserved,
         exclusionReason,
-        warning: exclusionReason ? reasons[exclusionReason] : null,
+        warning: exclusionReason
+          ? reasons[exclusionReason]
+          : (promotion?.warning ?? null),
+        flashDeal: promotion?.flashDeal ?? null,
+        flashDealWarningCode: promotion?.warningCode ?? null,
         isReserved,
         reservedOrderId: row.reservedOrderId,
         reservationExpiresAt: row.reservationExpiresAt,
