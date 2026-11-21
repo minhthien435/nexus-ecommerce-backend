@@ -746,6 +746,44 @@ describe.skipIf(!hasTestPostgres)(
     it.each([
       ['UPDATE catalog.flash_deal_items SET sold_qty=3', 'SOLD_OUT'],
       ["UPDATE catalog.flash_deal_items SET status='PAUSED'", 'PAUSED'],
+    ])('withholds flash pricing and warns in cart for %s', async (sql, code) => {
+      await database.db.query(sql);
+      const projected = (
+        await service.projectForCart([sku], new Map([[skuId, 1]]), buyer)
+      ).get(skuId)!;
+      expect(projected).toMatchObject({
+        flashDeal: null,
+        warningCode: `FLASH_DEAL_${code}`,
+      });
+    });
+    it('allows SCHEDULED campaign in current window for projectForCart', async () => {
+      await database.db.query(
+        "UPDATE catalog.flash_deal_campaigns SET status='SCHEDULED'",
+      );
+      const projected = (
+        await service.projectForCart([sku], new Map([[skuId, 1]]), buyer)
+      ).get(skuId)!;
+      expect(projected.flashDeal?.itemId).toBe(item);
+      expect(projected.warningCode).toBeNull();
+    });
+    it.each([
+      "UPDATE catalog.flash_deal_items SET status='CANCELLED'",
+      'UPDATE catalog.flash_deal_campaigns SET ends_at=clock_timestamp()',
+      "UPDATE catalog.flash_deal_campaigns SET starts_at=clock_timestamp()+interval '10 minutes'",
+      "UPDATE catalog.flash_deal_campaigns SET status='DRAFT'",
+    ])(
+      'bypasses out-of-window or inactive deal in projectForCart %s',
+      async (sql) => {
+        await database.db.query(sql);
+        const projected = (
+          await service.projectForCart([sku], new Map([[skuId, 1]]), buyer)
+        ).get(skuId);
+        expect(projected).toBeUndefined();
+      },
+    );
+    it.each([
+      ['UPDATE catalog.flash_deal_items SET sold_qty=3', 'SOLD_OUT'],
+      ["UPDATE catalog.flash_deal_items SET status='PAUSED'", 'PAUSED'],
       ["UPDATE catalog.flash_deal_items SET status='CANCELLED'", 'INVALID'],
       [
         'UPDATE catalog.flash_deal_campaigns SET ends_at=clock_timestamp()',
@@ -755,20 +793,9 @@ describe.skipIf(!hasTestPostgres)(
         "UPDATE catalog.flash_deal_campaigns SET starts_at=clock_timestamp()+interval '10 minutes'",
         'UPCOMING',
       ],
-      [
-        "UPDATE catalog.flash_deal_campaigns SET status='SCHEDULED'",
-        'UPCOMING',
-      ],
       ["UPDATE catalog.flash_deal_campaigns SET status='DRAFT'", 'INVALID'],
-    ])('withholds flash pricing and warns for %s', async (sql, code) => {
+    ])('rejects reservations with %s in reserve', async (sql, code) => {
       await database.db.query(sql);
-      const projected = (
-        await service.projectForCart([sku], new Map([[skuId, 1]]), buyer)
-      ).get(skuId)!;
-      expect(projected).toMatchObject({
-        flashDeal: null,
-        warningCode: `FLASH_DEAL_${code}`,
-      });
       await expect(
         database.db.transaction((manager) =>
           addOrder().then((id) => reserve(manager, id)),
