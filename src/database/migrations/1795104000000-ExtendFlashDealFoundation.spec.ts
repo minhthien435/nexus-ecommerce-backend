@@ -4,7 +4,7 @@ import {
   createTestPostgres,
   hasTestPostgres,
 } from '../../../test/support/isolated-postgres.js';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CreateFlashDeals1794960000000 } from './1794960000000-CreateFlashDeals.js';
 import { ExtendFlashDealFoundation1795104000000 } from './1795104000000-ExtendFlashDealFoundation.js';
 
@@ -19,7 +19,7 @@ describe.skipIf(!hasTestPostgres)(
     let database: Awaited<ReturnType<typeof createTestPostgres>>;
     let runner: QueryRunner;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       database = await createTestPostgres();
       runner = database.db.createQueryRunner();
       await runner.query(`
@@ -47,9 +47,67 @@ describe.skipIf(!hasTestPostgres)(
       await new CreateFlashDeals1794960000000().up(runner);
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       if (runner) await runner.release();
       await database?.close();
+    });
+
+    it('enforces item and reservation constraints after a full migration round trip', async () => {
+      const base = new CreateFlashDeals1794960000000();
+      await upgrade.up(runner);
+      await upgrade.down(runner);
+      await base.down(runner);
+      await base.up(runner);
+      await upgrade.up(runner);
+
+      const [{ id: campaign }] = await runner.query(
+        `INSERT INTO catalog.flash_deal_campaigns(title,slug,starts_at,ends_at,created_by)
+         VALUES ('Lunch','lunch',now(),now()+interval '1 hour',$1) RETURNING id`,
+        [userId],
+      );
+      const insertItem = (price: number, limit: number) =>
+        runner.query(
+          `INSERT INTO catalog.flash_deal_items(campaign_id,product_id,sku_id,seller_id,
+           original_price_snapshot,flash_price,quota_qty,max_per_buyer)
+         VALUES ($1,$2,$3,$4,100, $5,3,$6) RETURNING id`,
+          [campaign, productId, skuId, userId, price, limit],
+        );
+      await expect(insertItem(0, 1)).rejects.toMatchObject({ code: '23514' });
+      await expect(insertItem(100, 1)).rejects.toMatchObject({ code: '23514' });
+      await expect(insertItem(80, 0)).rejects.toMatchObject({ code: '23514' });
+      const [{ id: item }] = await insertItem(80, 1);
+      await expect(insertItem(80, 1)).rejects.toMatchObject({ code: '23505' });
+
+      const reserve = (itemId: string, buyerId: string, status: string) =>
+        runner.query(
+          `INSERT INTO catalog.flash_deal_reservations(flash_deal_item_id,order_id,buyer_id,quantity,status)
+         VALUES ($1,$2,$3,1,$4)`,
+          [itemId, orderId, buyerId, status],
+        );
+      await expect(reserve(item, userId, 'INVALID')).rejects.toMatchObject({
+        code: '23514',
+      });
+      await expect(
+        reserve(randomUUID(), userId, 'RESERVED'),
+      ).rejects.toMatchObject({ code: '23503' });
+      await expect(
+        reserve(item, randomUUID(), 'RESERVED'),
+      ).rejects.toMatchObject({ code: '23503' });
+      await reserve(item, userId, 'RESERVED');
+
+      const indexes = await runner.query(
+        "SELECT indexname FROM pg_indexes WHERE schemaname='catalog' AND tablename IN ('flash_deal_campaigns','flash_deal_items','flash_deal_reservations')",
+      );
+      expect(
+        indexes.map((row: { indexname: string }) => row.indexname),
+      ).toEqual(
+        expect.arrayContaining([
+          'flash_deal_campaign_active_window_idx',
+          'flash_deal_item_active_lookup_idx',
+          'flash_deal_item_sku_lookup_idx',
+          'flash_deal_reservation_buyer_item_idx',
+        ]),
+      );
     });
 
     it('requires a creator on fresh installs and can roll back and reapply over legacy offers', async () => {
