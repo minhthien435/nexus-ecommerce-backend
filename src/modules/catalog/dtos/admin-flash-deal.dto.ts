@@ -140,6 +140,10 @@ export class AddFlashDealItemDto {
   @IsInt()
   @Min(0)
   sortOrder = 0;
+
+  @IsOptional()
+  @IsIn([FlashDealItemStatus.ACTIVE, FlashDealItemStatus.PAUSED])
+  status?: FlashDealItemStatus.ACTIVE | FlashDealItemStatus.PAUSED;
 }
 
 export class UpdateFlashDealItemDto {

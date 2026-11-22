@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ValidationPipe,
 } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { FlashDealCampaignStatus } from '../domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemStatus } from '../domain/entities/flash-deal-item.entity.js';
+import { AddFlashDealItemDto } from '../dtos/admin-flash-deal.dto.js';
 import { FlashDealAdminService } from './flash-deal-admin.service.js';
 
 const campaignId = '11111111-1111-4111-8111-111111111111';
@@ -394,6 +396,81 @@ describe('FlashDealAdminService', () => {
     });
     expect(added.id).toBe(itemId);
     expect(added.flashPrice).toBe(800_000);
+    expect(managerQuery).toHaveBeenLastCalledWith(
+      expect.stringContaining('INSERT INTO catalog.flash_deal_items'),
+      expect.arrayContaining([FlashDealItemStatus.ACTIVE]),
+    );
+  });
+
+  it('accepts optional ACTIVE/PAUSED status on AddFlashDealItemDto and persists initial status', async () => {
+    const pipe = new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: true,
+    });
+
+    const activeDto = (await pipe.transform(
+      {
+        skuId,
+        flashPrice: 35_000,
+        quotaQty: 2,
+        maxPerBuyer: 1,
+        status: 'ACTIVE',
+      },
+      { type: 'body', metatype: AddFlashDealItemDto },
+    )) as AddFlashDealItemDto;
+    expect(activeDto.status).toBe(FlashDealItemStatus.ACTIVE);
+
+    const pausedDto = (await pipe.transform(
+      {
+        skuId,
+        flashPrice: 35_000,
+        quotaQty: 2,
+        maxPerBuyer: 1,
+        status: 'PAUSED',
+      },
+      { type: 'body', metatype: AddFlashDealItemDto },
+    )) as AddFlashDealItemDto;
+    expect(pausedDto.status).toBe(FlashDealItemStatus.PAUSED);
+
+    await expect(
+      pipe.transform(
+        {
+          skuId,
+          flashPrice: 35_000,
+          quotaQty: 2,
+          maxPerBuyer: 1,
+          status: 'CANCELLED',
+        },
+        { type: 'body', metatype: AddFlashDealItemDto },
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const { service, managerQuery, dataSourceQuery } = setup();
+    managerQuery
+      .mockResolvedValueOnce([makeCampaignRow()])
+      .mockResolvedValueOnce([makeSkuRow()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: itemId }]);
+    dataSourceQuery.mockResolvedValueOnce([
+      makeItemRow({ status: FlashDealItemStatus.PAUSED }),
+    ]);
+
+    const added = await service.addItem(campaignId, {
+      skuId,
+      flashPrice: 800_000,
+      quotaQty: 10,
+      maxPerBuyer: 2,
+      sortOrder: 0,
+      status: FlashDealItemStatus.PAUSED,
+    });
+    expect(added.status).toBe(FlashDealItemStatus.PAUSED);
+    expect(managerQuery).toHaveBeenLastCalledWith(
+      expect.stringContaining('INSERT INTO catalog.flash_deal_items'),
+      expect.arrayContaining([FlashDealItemStatus.PAUSED]),
+    );
   });
 
   it('locks flashPrice on ACTIVE campaigns and rejects quotaQty below soldQty', async () => {
