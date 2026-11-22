@@ -566,12 +566,13 @@ export class FlashDealAdminService {
         new Date(campaign.ends_at),
       );
 
+      const initialStatus = dto.status ?? FlashDealItemStatus.ACTIVE;
       const inserted = await manager.query<Array<{ id: string }>>(
         `INSERT INTO catalog.flash_deal_items
            (campaign_id, product_id, sku_id, seller_id, original_price_snapshot,
             flash_price, quota_qty, sold_qty, max_per_buyer, status, sort_order)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric,
-                 $6::numeric, $7::int, 0, $8::int, 'ACTIVE', $9::int)
+                 $6::numeric, $7::int, 0, $8::int, $9, $10::int)
          RETURNING id`,
         [
           campaignId,
@@ -582,6 +583,7 @@ export class FlashDealAdminService {
           dto.flashPrice.toFixed(2),
           dto.quotaQty,
           dto.maxPerBuyer ?? 2,
+          initialStatus,
           dto.sortOrder ?? 0,
         ],
       );
