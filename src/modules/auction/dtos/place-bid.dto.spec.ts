@@ -7,7 +7,7 @@ import { PlaceBidDto } from './place-bid.dto.js';
 describe('PlaceBidDto', () => {
   it('trims a valid idempotency key before validation', async () => {
     const dto = plainToInstance(PlaceBidDto, {
-      amount: 110,
+      amount: 50_000,
       idempotencyKey: ' retry-key ',
     });
 
@@ -15,9 +15,15 @@ describe('PlaceBidDto', () => {
     expect(dto.idempotencyKey).toBe('retry-key');
   });
 
+  it('rejects bid amounts below 1,000 VND', async () => {
+    const dto = plainToInstance(PlaceBidDto, { amount: 999 });
+    const errors = await validate(dto);
+    expect(errors.some(({ property }) => property === 'amount')).toBe(true);
+  });
+
   it('rejects a whitespace-only idempotency key', async () => {
     const dto = plainToInstance(PlaceBidDto, {
-      amount: 110,
+      amount: 50_000,
       idempotencyKey: '   ',
     });
 

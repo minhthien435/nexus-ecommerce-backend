@@ -55,16 +55,48 @@ describe('SKU DTOs', () => {
     expect(errors).toHaveLength(0);
   });
 
-  it('accepts null to clear originalPrice and rejects negative values', async () => {
+  it.each([
+    ['price', 0],
+    ['price', 999],
+    ['originalPrice', 0],
+    ['originalPrice', 999],
+  ])('rejects %s below MIN_SKU_PRICE (1,000 VND): %s', async (field, value) => {
+    const errors = await validate(
+      plainToInstance(CreateSkuDto, { ...validCreate, [field]: value }),
+    );
+    expect(errors.some((error) => error.property === field)).toBe(true);
+  });
+
+  it('accepts minimum valid price of 1,000 VND', async () => {
+    const errors = await validate(
+      plainToInstance(CreateSkuDto, {
+        ...validCreate,
+        price: 1000,
+        originalPrice: 1000,
+      }),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it('accepts null to clear originalPrice and rejects values below 1,000 VND on update', async () => {
     await expect(
       validate(plainToInstance(UpdateSkuDto, { originalPrice: null })),
     ).resolves.toHaveLength(0);
-    const errors = await validate(
-      plainToInstance(UpdateSkuDto, { originalPrice: -1 }),
-    );
-    expect(errors.some((error) => error.property === 'originalPrice')).toBe(
-      true,
-    );
+    for (const payload of [
+      { price: 0 },
+      { price: 999 },
+      { originalPrice: -1 },
+      { originalPrice: 0 },
+      { originalPrice: 999 },
+    ]) {
+      const errors = await validate(plainToInstance(UpdateSkuDto, payload));
+      expect(errors.length).toBeGreaterThan(0);
+    }
+    await expect(
+      validate(
+        plainToInstance(UpdateSkuDto, { price: 1000, originalPrice: 1000 }),
+      ),
+    ).resolves.toHaveLength(0);
   });
 
   it.each([

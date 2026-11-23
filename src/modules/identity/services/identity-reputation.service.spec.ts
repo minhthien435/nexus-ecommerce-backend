@@ -161,4 +161,67 @@ describe('IdentityReputationService', () => {
       );
     });
   });
+
+  describe('rewardCompletedOrder', () => {
+    it('returns null when order net subtotal is below 50,000 VND', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([
+          { id: 'order-low', seller_id: 'seller-1', buyer_id: 'buyer-1' },
+        ])
+        .mockResolvedValueOnce([]); // eligible query rejects subtotal - discount_amount < 50_000
+
+      const result = await service.rewardCompletedOrder('order-low');
+
+      expect(result).toBeNull();
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('(o.subtotal - o.discount_amount) >= $2'),
+        ['order-low', 50_000],
+      );
+    });
+
+    it('returns null when the same buyer already earned a reward for the shop within 30 days', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([
+          { id: 'order-2', seller_id: 'seller-1', buyer_id: 'buyer-1' },
+        ])
+        .mockResolvedValueOnce([{ id: 'order-2' }])
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 65 }])
+        .mockResolvedValueOnce([{ '?column?': 1 }]); // recentBuyerReward hit
+
+      const result = await service.rewardCompletedOrder('order-2');
+
+      expect(result).toBeNull();
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        4,
+        expect.stringContaining('o2.buyer_id = $3'),
+        ['shop-1', 'order-2', 'buyer-1', 30],
+      );
+      expect(managerMock.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO identity.shop_reputation_rewards'),
+        expect.anything(),
+      );
+    });
+
+    it('awards +5 when order net subtotal >= 50,000 VND and no recent reward exists for buyer-shop pair', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([
+          { id: 'order-ok', seller_id: 'seller-1', buyer_id: 'buyer-2' },
+        ])
+        .mockResolvedValueOnce([{ id: 'order-ok' }])
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 60 }])
+        .mockResolvedValueOnce([]) // no recent buyer-shop reward
+        .mockResolvedValueOnce([{ id: 'claim-1' }]) // insert shop_reputation_rewards
+        .mockResolvedValueOnce([]); // update shop reputation_score
+
+      const result = await service.rewardCompletedOrder('order-ok');
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 60,
+        newScore: 65,
+        alreadyRewarded: false,
+      });
+    });
+  });
 });

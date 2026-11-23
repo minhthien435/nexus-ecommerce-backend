@@ -11,6 +11,7 @@ import { DataSource, EntityManager, In, IsNull } from 'typeorm';
 import { InventoryItemEntity } from '../../fulfillment/domain/entities/inventory-item.entity.js';
 import { WarehouseEntity } from '../../fulfillment/domain/entities/warehouse.entity.js';
 import { ShopEntity } from '../../identity/domain/shop.entity.js';
+import { MIN_SKU_PRICE } from '../catalog-pricing.constants.js';
 import { CategoryEntity } from '../domain/entities/category.entity.js';
 import { ProductImageEntity } from '../domain/entities/product-image.entity.js';
 import { ProductSkuEntity } from '../domain/entities/product-sku.entity.js';
@@ -291,9 +292,9 @@ export class SellerBulkImportService {
         add(field, 'Must have at most 2 decimal places');
       return value;
     };
-    const price = decimal('price', 0, Number.MAX_SAFE_INTEGER);
+    const price = decimal('price', MIN_SKU_PRICE, Number.MAX_SAFE_INTEGER);
     const originalPrice = row.original_price
-      ? decimal('original_price', 0, Number.MAX_SAFE_INTEGER)
+      ? decimal('original_price', MIN_SKU_PRICE, Number.MAX_SAFE_INTEGER)
       : null;
     const stock = decimal('stock', 0, 2_147_483_647);
     const weight = decimal('weight_grams', 1, 2_147_483_647);

@@ -1,4 +1,4 @@
-﻿import 'reflect-metadata';
+import 'reflect-metadata';
 import {
   BadRequestException,
   type INestApplication,
@@ -27,9 +27,9 @@ describe('Auction creation HTTP access', () => {
   const auctions = { create: vi.fn() };
   const body = () => ({
     skuId: '22222222-2222-4222-8222-222222222222',
-    startPrice: 100,
-    reservePrice: 120,
-    bidIncrement: 10,
+    startPrice: 100_000,
+    reservePrice: 120_000,
+    bidIncrement: 10_000,
     startsAt: new Date(Date.now() + 60_000).toISOString(),
     endsAt: new Date(Date.now() + 3_660_000).toISOString(),
   });

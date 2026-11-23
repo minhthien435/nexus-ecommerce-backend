@@ -10,6 +10,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { MIN_FLASH_PRICE } from '../catalog-pricing.constants.js';
 import { FlashDealRegistrationStatus } from '../domain/entities/flash-deal-registration.entity.js';
 
 const toNumber = ({ value }: { value: unknown }) =>
@@ -110,7 +111,7 @@ export class CreateFlashDealRegistrationDto {
 
   @Transform(toNumber)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
+  @Min(MIN_FLASH_PRICE, { message: 'Giá Flash Deal tối thiểu là 1.000₫' })
   flashPrice: number;
 
   @Transform(toNumber)
@@ -131,7 +132,7 @@ export class UpdateFlashDealRegistrationDto {
   @IsOptional()
   @Transform(toNumber)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
+  @Min(MIN_FLASH_PRICE, { message: 'Giá Flash Deal tối thiểu là 1.000₫' })
   flashPrice?: number;
 
   @IsOptional()

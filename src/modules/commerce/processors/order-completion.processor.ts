@@ -3,6 +3,10 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
+import {
+  BUYER_SHOP_REPUTATION_COOLDOWN_DAYS,
+  MIN_ORDER_NET_SUBTOTAL_FOR_REPUTATION,
+} from '../../identity/reputation-policy.constants.js';
 import { ORDER_COMPLETION_QUEUE } from '../order-completion.constants.js';
 import { OrderStateMachineService } from '../services/order-state-machine.service.js';
 
@@ -82,10 +86,12 @@ export class OrderCompletionProcessor extends WorkerHost {
 
     // 2. Independent scan includes buyer confirmations and rejected disputes already COMPLETED.
     // Exclude consumed and ineligible rows before LIMIT to prevent head-of-batch starvation.
-    const rewardOrders = await this.dataSource.query<Array<{ id: string }>>(`
+    const rewardOrders = await this.dataSource.query<Array<{ id: string }>>(
+      `
       SELECT o.id FROM commerce.orders o
       JOIN identity.shops s ON s.seller_id = o.seller_id AND s.deleted_at IS NULL
       WHERE o.status = 'COMPLETED'
+        AND (o.subtotal - o.discount_amount) >= $1
         AND (SELECT MAX(h.created_at) FROM commerce.order_status_history h
           WHERE h.order_id = o.id AND h.to_status = 'DELIVERED') < NOW() - INTERVAL '72 hours'
         AND NOT EXISTS (SELECT 1 FROM commerce.order_disputes d
@@ -94,8 +100,22 @@ export class OrderCompletionProcessor extends WorkerHost {
           AND r.status IN ('REQUESTED','PROCESSING','COMPLETED') AND r.amount >= o.total)
         AND NOT EXISTS (SELECT 1 FROM identity.shop_reputation_rewards r
           WHERE r.source_type = 'ORDER_COMPLETION' AND r.reference_id = o.id)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM identity.shop_reputation_rewards r
+          JOIN commerce.orders o2 ON o2.id = r.order_id
+          WHERE r.shop_id = s.id
+            AND r.source_type = 'ORDER_COMPLETION'
+            AND o2.buyer_id = o.buyer_id
+            AND r.created_at >= NOW() - ($2 * INTERVAL '1 day')
+        )
       ORDER BY o.id LIMIT 100
-    `);
+    `,
+      [
+        MIN_ORDER_NET_SUBTOTAL_FOR_REPUTATION,
+        BUYER_SHOP_REPUTATION_COOLDOWN_DAYS,
+      ],
+    );
 
     let rewardedCount = 0;
     for (const row of rewardOrders) {

@@ -14,6 +14,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { MIN_FLASH_PRICE } from '../catalog-pricing.constants.js';
 import { FlashDealCampaignStatus } from '../domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemStatus } from '../domain/entities/flash-deal-item.entity.js';
 import {
@@ -222,7 +223,7 @@ export class AddFlashDealItemDto {
 
   @Transform(toNumber)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
+  @Min(MIN_FLASH_PRICE, { message: 'Giá Flash Deal tối thiểu là 1.000₫' })
   flashPrice: number;
 
   @Transform(toNumber)
@@ -257,7 +258,7 @@ export class UpdateFlashDealItemDto {
   @IsOptional()
   @Transform(toNumber)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
+  @Min(MIN_FLASH_PRICE, { message: 'Giá Flash Deal tối thiểu là 1.000₫' })
   flashPrice?: number;
 
   @IsOptional()
