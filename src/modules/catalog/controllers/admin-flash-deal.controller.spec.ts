@@ -17,6 +17,16 @@ describe('AdminFlashDealController', () => {
     cancelCampaign: vi
       .fn()
       .mockResolvedValue({ id: 'camp-1', status: 'CANCELLED' }),
+    inviteSellers: vi
+      .fn()
+      .mockResolvedValue({ invited: 3, invitedAt: '2026-11-23T02:00:00.000Z' }),
+    listRegistrations: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    approveRegistration: vi
+      .fn()
+      .mockResolvedValue({ id: 'reg-1', status: 'APPROVED' }),
+    rejectRegistration: vi
+      .fn()
+      .mockResolvedValue({ id: 'reg-1', status: 'REJECTED' }),
   };
 
   it('enforces ADMIN role and FLASH_DEAL RBAC permissions on all endpoints', () => {
@@ -71,6 +81,30 @@ describe('AdminFlashDealController', () => {
         AdminFlashDealController.prototype.cancel,
       ),
     ).toEqual(['FLASH_DEAL.CANCEL']);
+    expect(
+      Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        AdminFlashDealController.prototype.inviteSellers,
+      ),
+    ).toEqual(['FLASH_DEAL.MANAGE']);
+    expect(
+      Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        AdminFlashDealController.prototype.listRegistrations,
+      ),
+    ).toEqual(['FLASH_DEAL.LIST']);
+    expect(
+      Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        AdminFlashDealController.prototype.approveRegistration,
+      ),
+    ).toEqual(['FLASH_DEAL.MANAGE']);
+    expect(
+      Reflect.getMetadata(
+        PERMISSIONS_KEY,
+        AdminFlashDealController.prototype.rejectRegistration,
+      ),
+    ).toEqual(['FLASH_DEAL.MANAGE']);
   });
 
   it('rejects empty PATCH payloads before invoking service', () => {

@@ -31,7 +31,7 @@ describe('RBAC seed', () => {
     ]);
   });
 
-  it('grants the three flash deal privileges exclusively to admins', () => {
+  it('grants flash deal admin and seller registration privileges to the expected roles', () => {
     expect(
       PRIVILEGE_SEEDS.filter(({ code }) => code.startsWith('FLASH_DEAL.')).map(
         ({ code, roles }) => [code, roles],
@@ -40,6 +40,7 @@ describe('RBAC seed', () => {
       ['FLASH_DEAL.LIST', ['ADMIN']],
       ['FLASH_DEAL.MANAGE', ['ADMIN']],
       ['FLASH_DEAL.CANCEL', ['ADMIN']],
+      ['FLASH_DEAL.REGISTER', ['SELLER']],
     ]);
   });
 

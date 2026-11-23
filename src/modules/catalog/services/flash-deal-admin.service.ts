@@ -9,6 +9,10 @@ import {
 import { randomBytes } from 'node:crypto';
 import { DataSource, type EntityManager } from 'typeorm';
 import {
+  NotificationDispatchApi,
+  type NotifyUserInput,
+} from '../../notification/notification-dispatch.api.js';
+import {
   FLASH_DEAL_MIN_DISCOUNT_AMOUNT,
   FLASH_DEAL_MIN_DISCOUNT_PERCENT,
   FLASH_DEAL_MIN_DURATION_MINUTES,
@@ -16,14 +20,21 @@ import {
 } from '../flash-deal-lifecycle.constants.js';
 import { FlashDealCampaignStatus } from '../domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemStatus } from '../domain/entities/flash-deal-item.entity.js';
+import { FlashDealRegistrationStatus } from '../domain/entities/flash-deal-registration.entity.js';
 import type {
   AddFlashDealItemDto,
   CreateFlashDealCampaignDto,
+  QueryAdminFlashDealRegistrationsDto,
   QueryAdminFlashDealsDto,
   UpdateFlashDealCampaignDto,
   UpdateFlashDealItemDto,
 } from '../dtos/admin-flash-deal.dto.js';
 import { FlashDealSchedulerService } from './flash-deal-scheduler.service.js';
+import {
+  mapRegistrationRow,
+  type FlashDealRegistrationView,
+  type RawRegistrationRow,
+} from './seller-flash-deal.service.js';
 
 export interface AdminFlashDealSummary {
   activeCount: number;
@@ -44,11 +55,31 @@ export interface AdminFlashDealCampaignListItem {
   createdBy: string | null;
   startsAt: string;
   endsAt: string;
+  registrationOpensAt: string | null;
+  registrationClosesAt: string | null;
+  minDiscountPercent: number | null;
+  minReputation: number | null;
+  maxItemsPerSeller: number;
+  invitedAt: string | null;
+  registrationCounts: {
+    pending: number;
+    approved: number;
+    rejected: number;
+  };
   itemCount: number;
   totalQuota: number;
   totalSold: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdminFlashDealRegistrationView extends FlashDealRegistrationView {
+  seller: {
+    id: string;
+    shopName: string | null;
+    shopSlug: string | null;
+    reputationScore: number;
+  };
 }
 
 export interface AdminFlashDealItemView {
@@ -100,11 +131,37 @@ interface RawCampaignRow {
   created_by: string | null;
   starts_at: Date | string;
   ends_at: Date | string;
+  registration_opens_at?: Date | string | null;
+  registration_closes_at?: Date | string | null;
+  min_discount_percent?: number | string | null;
+  min_reputation?: number | string | null;
+  max_items_per_seller?: number | string;
+  invited_at?: Date | string | null;
+  reg_pending_count?: number | string;
+  reg_approved_count?: number | string;
+  reg_rejected_count?: number | string;
   item_count?: number | string;
   total_quota?: number | string;
   total_sold?: number | string;
   created_at: Date | string;
   updated_at: Date | string;
+}
+
+interface RawAdminRegistrationRow extends RawRegistrationRow {
+  seller_id: string;
+  shop_name: string | null;
+  shop_slug: string | null;
+  reputation_score: number | string | null;
+}
+
+interface RawExpiredRegistrationRow {
+  id: string;
+  campaign_id: string;
+  campaign_title: string;
+  seller_id: string;
+  product_id: string;
+  product_name: string;
+  sku_id: string;
 }
 
 interface RawItemRow {
@@ -154,6 +211,8 @@ export class FlashDealAdminService {
     private readonly dataSource: DataSource,
     @Optional()
     private readonly scheduler?: FlashDealSchedulerService,
+    @Optional()
+    private readonly notifications?: NotificationDispatchApi,
   ) {}
 
   async listCampaigns(
@@ -189,14 +248,28 @@ export class FlashDealAdminService {
       this.dataSource.query<RawCampaignRow[]>(
         `SELECT c.id, c.title, c.slug, c.status, c.created_by,
                 c.starts_at, c.ends_at, c.created_at, c.updated_at,
+                c.registration_opens_at, c.registration_closes_at,
+                c.min_discount_percent, c.min_reputation,
+                c.max_items_per_seller, c.invited_at,
+                COALESCE(rc.pending_count, 0)::int AS reg_pending_count,
+                COALESCE(rc.approved_count, 0)::int AS reg_approved_count,
+                COALESCE(rc.rejected_count, 0)::int AS reg_rejected_count,
                 COUNT(i.id)::int AS item_count,
                 COALESCE(SUM(i.quota_qty), 0)::int AS total_quota,
                 COALESCE(SUM(i.sold_qty), 0)::int AS total_sold
            FROM catalog.flash_deal_campaigns c
            LEFT JOIN catalog.flash_deal_items i
              ON i.campaign_id = c.id AND i.status <> 'CANCELLED'
+           LEFT JOIN LATERAL (
+             SELECT
+               COUNT(*) FILTER (WHERE r.status = 'PENDING')::int AS pending_count,
+               COUNT(*) FILTER (WHERE r.status = 'APPROVED')::int AS approved_count,
+               COUNT(*) FILTER (WHERE r.status = 'REJECTED')::int AS rejected_count
+               FROM catalog.flash_deal_registrations r
+              WHERE r.campaign_id = c.id
+           ) rc ON true
            ${whereClause}
-          GROUP BY c.id
+          GROUP BY c.id, rc.pending_count, rc.approved_count, rc.rejected_count
           ORDER BY
             CASE c.status
               WHEN 'ACTIVE' THEN 0
@@ -266,14 +339,28 @@ export class FlashDealAdminService {
     const rows = await this.dataSource.query<RawCampaignRow[]>(
       `SELECT c.id, c.title, c.slug, c.status, c.created_by,
               c.starts_at, c.ends_at, c.created_at, c.updated_at,
+              c.registration_opens_at, c.registration_closes_at,
+              c.min_discount_percent, c.min_reputation,
+              c.max_items_per_seller, c.invited_at,
+              COALESCE(rc.pending_count, 0)::int AS reg_pending_count,
+              COALESCE(rc.approved_count, 0)::int AS reg_approved_count,
+              COALESCE(rc.rejected_count, 0)::int AS reg_rejected_count,
               COUNT(i.id)::int AS item_count,
               COALESCE(SUM(i.quota_qty), 0)::int AS total_quota,
               COALESCE(SUM(i.sold_qty), 0)::int AS total_sold
          FROM catalog.flash_deal_campaigns c
          LEFT JOIN catalog.flash_deal_items i
            ON i.campaign_id = c.id AND i.status <> 'CANCELLED'
+         LEFT JOIN LATERAL (
+           SELECT
+             COUNT(*) FILTER (WHERE r.status = 'PENDING')::int AS pending_count,
+             COUNT(*) FILTER (WHERE r.status = 'APPROVED')::int AS approved_count,
+             COUNT(*) FILTER (WHERE r.status = 'REJECTED')::int AS rejected_count
+             FROM catalog.flash_deal_registrations r
+            WHERE r.campaign_id = c.id
+         ) rc ON true
         WHERE c.id = $1::uuid
-        GROUP BY c.id
+        GROUP BY c.id, rc.pending_count, rc.approved_count, rc.rejected_count
         LIMIT 1`,
       [id],
     );
@@ -297,17 +384,34 @@ export class FlashDealAdminService {
     const endsAt = new Date(dto.endsAt);
     this.validateSchedule(startsAt, endsAt, { requireFutureStart: true });
 
+    const regOpensAt = dto.registrationOpensAt
+      ? new Date(dto.registrationOpensAt)
+      : null;
+    const regClosesAt = dto.registrationClosesAt
+      ? new Date(dto.registrationClosesAt)
+      : null;
+    this.validateRegistrationWindow(regOpensAt, regClosesAt, startsAt);
+
     const status = dto.status ?? FlashDealCampaignStatus.SCHEDULED;
     const slug = dto.slug
       ? dto.slug.trim().toLowerCase()
       : this.buildSlug(dto.title);
+    const minDiscountPercent = dto.minDiscountPercent ?? null;
+    const minReputation = dto.minReputation ?? null;
+    const maxItemsPerSeller = dto.maxItemsPerSeller ?? 5;
 
     try {
       const inserted = await this.dataSource.query<RawCampaignRow[]>(
         `INSERT INTO catalog.flash_deal_campaigns
-           (title, slug, status, created_by, starts_at, ends_at)
-         VALUES ($1, $2, $3, $4::uuid, $5::timestamptz, $6::timestamptz)
-         RETURNING id, title, slug, status, created_by, starts_at, ends_at, created_at, updated_at`,
+           (title, slug, status, created_by, starts_at, ends_at,
+            registration_opens_at, registration_closes_at,
+            min_discount_percent, min_reputation, max_items_per_seller)
+         VALUES ($1, $2, $3, $4::uuid, $5::timestamptz, $6::timestamptz,
+                 $7::timestamptz, $8::timestamptz, $9::int, $10::int, $11::int)
+         RETURNING id, title, slug, status, created_by, starts_at, ends_at,
+                   registration_opens_at, registration_closes_at,
+                   min_discount_percent, min_reputation, max_items_per_seller,
+                   invited_at, created_at, updated_at`,
         [
           dto.title.trim(),
           slug,
@@ -315,6 +419,11 @@ export class FlashDealAdminService {
           actorId,
           startsAt.toISOString(),
           endsAt.toISOString(),
+          regOpensAt ? regOpensAt.toISOString() : null,
+          regClosesAt ? regClosesAt.toISOString() : null,
+          minDiscountPercent,
+          minReputation,
+          maxItemsPerSeller,
         ],
       );
       const campaign = inserted[0];
@@ -331,6 +440,9 @@ export class FlashDealAdminService {
       return {
         ...this.mapCampaignRow({
           ...campaign,
+          reg_pending_count: 0,
+          reg_approved_count: 0,
+          reg_rejected_count: 0,
           item_count: 0,
           total_quota: 0,
           total_sold: 0,
@@ -373,7 +485,21 @@ export class FlashDealAdminService {
       const nextStatus = dto.status ?? current.status;
       const nextTitle = dto.title ? dto.title.trim() : current.title;
 
+      const hasRegistrationRuleEdit =
+        dto.registrationOpensAt !== undefined ||
+        dto.registrationClosesAt !== undefined ||
+        dto.minDiscountPercent !== undefined ||
+        dto.minReputation !== undefined ||
+        dto.maxItemsPerSeller !== undefined;
+
       if (current.status === FlashDealCampaignStatus.ACTIVE) {
+        if (hasRegistrationRuleEdit) {
+          throw new ConflictException({
+            errorCode: 'FLASH_DEAL_NOT_EDITABLE',
+            message:
+              'Cannot modify registration rules of an active flash deal campaign',
+          });
+        }
         if (
           dto.startsAt &&
           nextStartsAt.getTime() !== currentStartsAt.getTime()
@@ -403,6 +529,49 @@ export class FlashDealAdminService {
           requireFutureEnd: true,
         });
       }
+
+      const nextRegOpensAt =
+        dto.registrationOpensAt !== undefined
+          ? dto.registrationOpensAt
+            ? new Date(dto.registrationOpensAt)
+            : null
+          : current.registration_opens_at
+            ? new Date(current.registration_opens_at)
+            : null;
+      const nextRegClosesAt =
+        dto.registrationClosesAt !== undefined
+          ? dto.registrationClosesAt
+            ? new Date(dto.registrationClosesAt)
+            : null
+          : current.registration_closes_at
+            ? new Date(current.registration_closes_at)
+            : null;
+      if (current.status !== FlashDealCampaignStatus.ACTIVE) {
+        this.validateRegistrationWindow(
+          nextRegOpensAt,
+          nextRegClosesAt,
+          nextStartsAt,
+        );
+      }
+
+      const nextMinDiscountPercent =
+        dto.minDiscountPercent !== undefined
+          ? dto.minDiscountPercent
+          : current.min_discount_percent === null ||
+              current.min_discount_percent === undefined
+            ? null
+            : Number(current.min_discount_percent);
+      const nextMinReputation =
+        dto.minReputation !== undefined
+          ? dto.minReputation
+          : current.min_reputation === null ||
+              current.min_reputation === undefined
+            ? null
+            : Number(current.min_reputation);
+      const nextMaxItemsPerSeller =
+        dto.maxItemsPerSeller !== undefined
+          ? dto.maxItemsPerSeller
+          : Number(current.max_items_per_seller ?? 5);
 
       // If campaign is active/scheduled, verify existing items do not collide with overlapping campaigns.
       if (
@@ -441,15 +610,28 @@ export class FlashDealAdminService {
                 status = $3,
                 starts_at = $4::timestamptz,
                 ends_at = $5::timestamptz,
+                registration_opens_at = $6::timestamptz,
+                registration_closes_at = $7::timestamptz,
+                min_discount_percent = $8::int,
+                min_reputation = $9::int,
+                max_items_per_seller = $10::int,
                 updated_at = clock_timestamp()
           WHERE id = $1::uuid
-          RETURNING id, title, slug, status, created_by, starts_at, ends_at, created_at, updated_at`,
+          RETURNING id, title, slug, status, created_by, starts_at, ends_at,
+                    registration_opens_at, registration_closes_at,
+                    min_discount_percent, min_reputation, max_items_per_seller,
+                    invited_at, created_at, updated_at`,
         [
           id,
           nextTitle,
           nextStatus,
           nextStartsAt.toISOString(),
           nextEndsAt.toISOString(),
+          nextRegOpensAt ? nextRegOpensAt.toISOString() : null,
+          nextRegClosesAt ? nextRegClosesAt.toISOString() : null,
+          nextMinDiscountPercent,
+          nextMinReputation,
+          nextMaxItemsPerSeller,
         ],
       );
       return savedRows[0];
@@ -487,107 +669,15 @@ export class FlashDealAdminService {
         });
       }
 
-      const sku = await this.loadSkuWithInventory(manager, dto.skuId);
-      if (!sku) {
-        throw new NotFoundException({
-          errorCode: 'SKU_NOT_FOUND',
-          message: 'SKU not found',
-        });
-      }
-
-      if (
-        !sku.sku_active ||
-        sku.product_status !== 'ACTIVE' ||
-        sku.product_deleted_at !== null
-      ) {
-        throw new BadRequestException({
-          errorCode: 'PRODUCT_NOT_ACTIVE',
-          message: 'Product and SKU must be active and not deleted',
-        });
-      }
-
-      const activeAuctions = await manager.query<Array<{ id: string }>>(
-        `SELECT id FROM auction.auctions
-          WHERE sku_id = $1::uuid AND status IN ('SCHEDULED', 'ACTIVE')
-          LIMIT 1`,
-        [dto.skuId],
-      );
-      if (activeAuctions.length > 0) {
-        throw new ConflictException({
-          errorCode: 'SKU_IN_ACTIVE_AUCTION',
-          message: 'SKU is currently assigned to a scheduled or active auction',
-        });
-      }
-
-      const availableQty = Number(sku.available_qty ?? 0);
-      if (dto.quotaQty > availableQty) {
-        throw new ConflictException({
-          errorCode: 'INSUFFICIENT_STOCK',
-          message: `Quota (${dto.quotaQty}) exceeds available inventory (${availableQty})`,
-        });
-      }
-
-      const regularPrice = Number(sku.price);
-      const originalPriceSnapshot = Math.max(
-        regularPrice,
-        sku.original_price !== null ? Number(sku.original_price) : regularPrice,
-      );
-      this.validateFlashPrice(dto.flashPrice, regularPrice);
-
-      const sameCampaignConflict = await manager.query<
-        Array<{ sku_id: string; product_id: string }>
-      >(
-        `SELECT sku_id, product_id
-           FROM catalog.flash_deal_items
-          WHERE campaign_id = $1::uuid
-            AND (sku_id = $2::uuid OR (product_id = $3::uuid AND status <> 'CANCELLED'))
-          LIMIT 1`,
-        [campaignId, dto.skuId, sku.product_id],
-      );
-      if (sameCampaignConflict.length > 0) {
-        if (sameCampaignConflict[0].sku_id === dto.skuId) {
-          throw new ConflictException({
-            errorCode: 'FLASH_DEAL_ITEM_DUPLICATE',
-            message: 'SKU already exists in this flash deal campaign',
-          });
-        }
-        throw new ConflictException({
-          errorCode: 'FLASH_DEAL_PRODUCT_DUPLICATE',
-          message:
-            'Another SKU of this product is already included in this flash deal campaign',
-        });
-      }
-
-      await this.assertNoOverlappingSkuCampaign(
-        manager,
-        campaignId,
-        dto.skuId,
-        new Date(campaign.starts_at),
-        new Date(campaign.ends_at),
-      );
-
-      const initialStatus = dto.status ?? FlashDealItemStatus.ACTIVE;
-      const inserted = await manager.query<Array<{ id: string }>>(
-        `INSERT INTO catalog.flash_deal_items
-           (campaign_id, product_id, sku_id, seller_id, original_price_snapshot,
-            flash_price, quota_qty, sold_qty, max_per_buyer, status, sort_order)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric,
-                 $6::numeric, $7::int, 0, $8::int, $9, $10::int)
-         RETURNING id`,
-        [
-          campaignId,
-          sku.product_id,
-          dto.skuId,
-          sku.seller_id,
-          originalPriceSnapshot.toFixed(2),
-          dto.flashPrice.toFixed(2),
-          dto.quotaQty,
-          dto.maxPerBuyer ?? 2,
-          initialStatus,
-          dto.sortOrder ?? 0,
-        ],
-      );
-      return inserted[0].id;
+      return this.insertItem(manager, campaign, {
+        skuId: dto.skuId,
+        flashPrice: dto.flashPrice,
+        quotaQty: dto.quotaQty,
+        maxPerBuyer: dto.maxPerBuyer ?? 2,
+        sortOrder: dto.sortOrder ?? 0,
+        status: dto.status ?? FlashDealItemStatus.ACTIVE,
+        minDiscountPercent: null,
+      });
     });
 
     const itemRows = await this.fetchEnrichedItems(
@@ -596,6 +686,125 @@ export class FlashDealAdminService {
       insertedId,
     );
     return this.mapItemRow(itemRows[0]);
+  }
+
+  private async insertItem(
+    manager: EntityManager,
+    campaign: RawCampaignRow,
+    input: {
+      skuId: string;
+      flashPrice: number;
+      quotaQty: number;
+      maxPerBuyer: number;
+      sortOrder: number;
+      status: FlashDealItemStatus;
+      minDiscountPercent: number | null;
+    },
+  ): Promise<string> {
+    const sku = await this.loadSkuWithInventory(manager, input.skuId);
+    if (!sku) {
+      throw new NotFoundException({
+        errorCode: 'SKU_NOT_FOUND',
+        message: 'SKU not found',
+      });
+    }
+
+    if (
+      !sku.sku_active ||
+      sku.product_status !== 'ACTIVE' ||
+      sku.product_deleted_at !== null
+    ) {
+      throw new BadRequestException({
+        errorCode: 'PRODUCT_NOT_ACTIVE',
+        message: 'Product and SKU must be active and not deleted',
+      });
+    }
+
+    const activeAuctions = await manager.query<Array<{ id: string }>>(
+      `SELECT id FROM auction.auctions
+        WHERE sku_id = $1::uuid AND status IN ('SCHEDULED', 'ACTIVE')
+        LIMIT 1`,
+      [input.skuId],
+    );
+    if (activeAuctions.length > 0) {
+      throw new ConflictException({
+        errorCode: 'SKU_IN_ACTIVE_AUCTION',
+        message: 'SKU is currently assigned to a scheduled or active auction',
+      });
+    }
+
+    const availableQty = Number(sku.available_qty ?? 0);
+    if (input.quotaQty > availableQty) {
+      throw new ConflictException({
+        errorCode: 'INSUFFICIENT_STOCK',
+        message: `Quota (${input.quotaQty}) exceeds available inventory (${availableQty})`,
+      });
+    }
+
+    const regularPrice = Number(sku.price);
+    const originalPriceSnapshot = Math.max(
+      regularPrice,
+      sku.original_price !== null ? Number(sku.original_price) : regularPrice,
+    );
+    this.validateFlashPrice(
+      input.flashPrice,
+      regularPrice,
+      input.minDiscountPercent,
+    );
+
+    const sameCampaignConflict = await manager.query<
+      Array<{ sku_id: string; product_id: string }>
+    >(
+      `SELECT sku_id, product_id
+         FROM catalog.flash_deal_items
+        WHERE campaign_id = $1::uuid
+          AND (sku_id = $2::uuid OR (product_id = $3::uuid AND status <> 'CANCELLED'))
+        LIMIT 1`,
+      [campaign.id, input.skuId, sku.product_id],
+    );
+    if (sameCampaignConflict.length > 0) {
+      if (sameCampaignConflict[0].sku_id === input.skuId) {
+        throw new ConflictException({
+          errorCode: 'FLASH_DEAL_ITEM_DUPLICATE',
+          message: 'SKU already exists in this flash deal campaign',
+        });
+      }
+      throw new ConflictException({
+        errorCode: 'FLASH_DEAL_PRODUCT_DUPLICATE',
+        message:
+          'Another SKU of this product is already included in this flash deal campaign',
+      });
+    }
+
+    await this.assertNoOverlappingSkuCampaign(
+      manager,
+      campaign.id,
+      input.skuId,
+      new Date(campaign.starts_at),
+      new Date(campaign.ends_at),
+    );
+
+    const inserted = await manager.query<Array<{ id: string }>>(
+      `INSERT INTO catalog.flash_deal_items
+         (campaign_id, product_id, sku_id, seller_id, original_price_snapshot,
+          flash_price, quota_qty, sold_qty, max_per_buyer, status, sort_order)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric,
+               $6::numeric, $7::int, 0, $8::int, $9, $10::int)
+       RETURNING id`,
+      [
+        campaign.id,
+        sku.product_id,
+        input.skuId,
+        sku.seller_id,
+        originalPriceSnapshot.toFixed(2),
+        input.flashPrice.toFixed(2),
+        input.quotaQty,
+        input.maxPerBuyer,
+        input.status,
+        input.sortOrder,
+      ],
+    );
+    return inserted[0].id;
   }
 
   async updateItem(
@@ -807,8 +1016,297 @@ export class FlashDealAdminService {
     });
   }
 
-  async cancelCampaign(id: string): Promise<AdminFlashDealCampaignDetail> {
+  async inviteSellers(
+    campaignId: string,
+  ): Promise<{ invited: number; invitedAt: string }> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const campaign = await this.lockCampaign(manager, campaignId);
+      if (
+        campaign.status !== FlashDealCampaignStatus.SCHEDULED ||
+        !campaign.registration_opens_at ||
+        !campaign.registration_closes_at ||
+        new Date(campaign.registration_closes_at).getTime() <= Date.now()
+      ) {
+        throw new ConflictException({
+          errorCode: 'FLASH_DEAL_REGISTRATION_CLOSED',
+          message:
+            'Campaign must be SCHEDULED with an active registration deadline to invite sellers',
+        });
+      }
+
+      const minRep =
+        campaign.min_reputation === null ||
+        campaign.min_reputation === undefined
+          ? null
+          : Number(campaign.min_reputation);
+
+      const [updatedRows, sellers] = await Promise.all([
+        manager.query<Array<{ invited_at: Date | string }>>(
+          `UPDATE catalog.flash_deal_campaigns
+              SET invited_at = clock_timestamp(), updated_at = clock_timestamp()
+            WHERE id = $1::uuid
+            RETURNING invited_at`,
+          [campaignId],
+        ),
+        manager.query<Array<{ seller_id: string }>>(
+          `SELECT s.seller_id
+             FROM identity.shops s
+            WHERE s.status = 'ACTIVE'
+              AND s.deleted_at IS NULL
+              AND ($1::int IS NULL OR s.reputation_score >= $1::int)
+            ORDER BY s.seller_id ASC`,
+          [minRep],
+        ),
+      ]);
+
+      return {
+        campaignTitle: campaign.title,
+        startsAt: new Date(campaign.starts_at).toISOString(),
+        closesAt: new Date(campaign.registration_closes_at).toISOString(),
+        invitedAt: new Date(updatedRows[0].invited_at).toISOString(),
+        sellerIds: sellers.map((row) => row.seller_id),
+      };
+    });
+
+    await this.dispatchNotificationsInBatches(
+      result.sellerIds.map((sellerId) => ({
+        userId: sellerId,
+        type: 'FLASH_DEAL_INVITATION',
+        title: 'Flash sale is open for registration',
+        content: `${result.campaignTitle} runs ${result.startsAt}. Register your SKUs before ${result.closesAt}.`,
+        actionUrl: `/seller/flash-deals/${campaignId}`,
+        sourceEventId: campaignId,
+        metadata: { campaignId },
+        channels: ['PUSH'],
+      })),
+    );
+
+    return {
+      invited: result.sellerIds.length,
+      invitedAt: result.invitedAt,
+    };
+  }
+
+  async listRegistrations(
+    campaignId: string,
+    query: QueryAdminFlashDealRegistrationsDto,
+  ) {
+    const campaignCheck = await this.dataSource.query<Array<{ id: string }>>(
+      `SELECT id FROM catalog.flash_deal_campaigns WHERE id = $1::uuid LIMIT 1`,
+      [campaignId],
+    );
+    if (!campaignCheck[0]) {
+      throw this.campaignNotFound();
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const offset = (page - 1) * limit;
+
+    const conditions = [`r.campaign_id = $1::uuid`];
+    const params: unknown[] = [campaignId];
+    if (query.status && query.status !== 'ALL') {
+      params.push(query.status);
+      conditions.push(`r.status = $${params.length}`);
+    }
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+    const [rows, countRows] = await Promise.all([
+      this.fetchAdminRegistrations(this.dataSource, {
+        campaignId,
+        status:
+          query.status && query.status !== 'ALL' ? query.status : undefined,
+        limit,
+        offset,
+      }),
+      this.dataSource.query<Array<{ total: string | number }>>(
+        `SELECT COUNT(*)::int AS total FROM catalog.flash_deal_registrations r ${whereClause}`,
+        params,
+      ),
+    ]);
+
+    const total = Number(countRows[0]?.total ?? 0);
+    return {
+      items: rows.map((row) => this.mapAdminRegistrationRow(row)),
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  async approveRegistration(
+    campaignId: string,
+    registrationId: string,
+    actorId: string,
+  ): Promise<AdminFlashDealRegistrationView> {
     await this.dataSource.transaction(async (manager) => {
+      const campaign = await this.lockCampaign(manager, campaignId);
+      if (
+        (campaign.status !== FlashDealCampaignStatus.DRAFT &&
+          campaign.status !== FlashDealCampaignStatus.SCHEDULED) ||
+        new Date(campaign.starts_at).getTime() <= Date.now()
+      ) {
+        throw new ConflictException({
+          errorCode: 'FLASH_DEAL_NOT_EDITABLE',
+          message:
+            'Registrations can only be approved before the flash deal campaign starts',
+        });
+      }
+
+      const regRows = await manager.query<
+        Array<{
+          id: string;
+          campaign_id: string;
+          seller_id: string;
+          sku_id: string;
+          flash_price: string | number;
+          quota_qty: number | string;
+          max_per_buyer: number | string;
+          status: FlashDealRegistrationStatus;
+        }>
+      >(
+        `SELECT id, campaign_id, seller_id, sku_id, flash_price,
+                quota_qty, max_per_buyer, status
+           FROM catalog.flash_deal_registrations
+          WHERE id = $1::uuid AND campaign_id = $2::uuid
+          FOR UPDATE`,
+        [registrationId, campaignId],
+      );
+      const reg = regRows[0];
+      if (!reg) {
+        throw this.registrationNotFound();
+      }
+      if (reg.status !== FlashDealRegistrationStatus.PENDING) {
+        throw new ConflictException({
+          errorCode: 'FLASH_DEAL_REGISTRATION_NOT_EDITABLE',
+          message: 'Only pending registrations can be approved',
+        });
+      }
+
+      const minDiscountPercent =
+        campaign.min_discount_percent === null ||
+        campaign.min_discount_percent === undefined
+          ? null
+          : Number(campaign.min_discount_percent);
+
+      const itemId = await this.insertItem(manager, campaign, {
+        skuId: reg.sku_id,
+        flashPrice: Number(reg.flash_price),
+        quotaQty: Number(reg.quota_qty),
+        maxPerBuyer: Number(reg.max_per_buyer),
+        sortOrder: 0,
+        status: FlashDealItemStatus.ACTIVE,
+        minDiscountPercent,
+      });
+
+      await manager.query(
+        `UPDATE catalog.flash_deal_registrations
+            SET status = 'APPROVED',
+                flash_deal_item_id = $2::uuid,
+                reviewed_by = $3::uuid,
+                reviewed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+          WHERE id = $1::uuid`,
+        [registrationId, itemId, actorId],
+      );
+    });
+
+    const rows = await this.fetchAdminRegistrations(this.dataSource, {
+      registrationId,
+    });
+    const view = this.mapAdminRegistrationRow(rows[0]);
+
+    await this.dispatchNotificationsInBatches([
+      {
+        userId: view.seller.id,
+        type: 'FLASH_DEAL_REGISTRATION_APPROVED',
+        title: 'Flash deal approved',
+        content: `${view.productName} will sell at ${view.flashPrice.toLocaleString('en-US')}₫ in ${view.campaignTitle}.`,
+        actionUrl: `/seller/flash-deals/${campaignId}`,
+        sourceEventId: registrationId,
+        metadata: {
+          campaignId,
+          registrationId,
+          productId: view.productId,
+          skuId: view.skuId,
+        },
+        channels: ['PUSH'],
+      },
+    ]);
+
+    return view;
+  }
+
+  async rejectRegistration(
+    campaignId: string,
+    registrationId: string,
+    actorId: string,
+    reason: string,
+  ): Promise<AdminFlashDealRegistrationView> {
+    const trimmedReason = reason.trim();
+    await this.dataSource.transaction(async (manager) => {
+      await this.lockCampaign(manager, campaignId);
+      const regRows = await manager.query<
+        Array<{ id: string; status: FlashDealRegistrationStatus }>
+      >(
+        `SELECT id, status
+           FROM catalog.flash_deal_registrations
+          WHERE id = $1::uuid AND campaign_id = $2::uuid
+          FOR UPDATE`,
+        [registrationId, campaignId],
+      );
+      const reg = regRows[0];
+      if (!reg) {
+        throw this.registrationNotFound();
+      }
+      if (reg.status !== FlashDealRegistrationStatus.PENDING) {
+        throw new ConflictException({
+          errorCode: 'FLASH_DEAL_REGISTRATION_NOT_EDITABLE',
+          message: 'Only pending registrations can be rejected',
+        });
+      }
+
+      await manager.query(
+        `UPDATE catalog.flash_deal_registrations
+            SET status = 'REJECTED',
+                reject_reason = $2,
+                reviewed_by = $3::uuid,
+                reviewed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+          WHERE id = $1::uuid`,
+        [registrationId, trimmedReason, actorId],
+      );
+    });
+
+    const rows = await this.fetchAdminRegistrations(this.dataSource, {
+      registrationId,
+    });
+    const view = this.mapAdminRegistrationRow(rows[0]);
+
+    await this.dispatchNotificationsInBatches([
+      {
+        userId: view.seller.id,
+        type: 'FLASH_DEAL_REGISTRATION_REJECTED',
+        title: 'Flash deal registration declined',
+        content: `${view.productName}: ${trimmedReason}`,
+        actionUrl: `/seller/flash-deals/${campaignId}`,
+        sourceEventId: registrationId,
+        metadata: {
+          campaignId,
+          registrationId,
+          productId: view.productId,
+          skuId: view.skuId,
+        },
+        channels: ['PUSH'],
+      },
+    ]);
+
+    return view;
+  }
+
+  async cancelCampaign(id: string): Promise<AdminFlashDealCampaignDetail> {
+    const cancelOutcome = await this.dataSource.transaction(async (manager) => {
       const campaign = await this.lockCampaign(manager, id);
       if (
         campaign.status === FlashDealCampaignStatus.ENDED ||
@@ -826,8 +1324,63 @@ export class FlashDealAdminService {
           WHERE id = $1::uuid`,
         [id],
       );
+
+      const expiredPending = await manager.query<RawExpiredRegistrationRow[]>(
+        `UPDATE catalog.flash_deal_registrations r
+            SET status = 'EXPIRED', updated_at = clock_timestamp()
+           FROM catalog.products p
+          WHERE r.campaign_id = $1::uuid
+            AND r.status = 'PENDING'
+            AND p.id = r.product_id
+          RETURNING r.id, r.campaign_id, $2::text AS campaign_title,
+                    r.seller_id, r.product_id, p.name AS product_name, r.sku_id`,
+        [id, campaign.title],
+      );
+
+      const approvedSellers = await manager.query<Array<{ seller_id: string }>>(
+        `SELECT DISTINCT seller_id
+           FROM catalog.flash_deal_registrations
+          WHERE campaign_id = $1::uuid AND status = 'APPROVED'
+          ORDER BY seller_id ASC`,
+        [id],
+      );
+
+      return {
+        campaignTitle: campaign.title,
+        expiredPending,
+        approvedSellerIds: approvedSellers.map((row) => row.seller_id),
+      };
     });
 
+    const notifications: NotifyUserInput[] = [
+      ...cancelOutcome.approvedSellerIds.map((sellerId) => ({
+        userId: sellerId,
+        type: 'FLASH_DEAL_CAMPAIGN_CANCELLED' as const,
+        title: 'Flash sale cancelled',
+        content: `${cancelOutcome.campaignTitle} was cancelled. Your items return to regular price.`,
+        actionUrl: `/seller/flash-deals/${id}`,
+        sourceEventId: id,
+        metadata: { campaignId: id },
+        channels: ['PUSH' as const],
+      })),
+      ...cancelOutcome.expiredPending.map((row) => ({
+        userId: row.seller_id,
+        type: 'FLASH_DEAL_REGISTRATION_EXPIRED' as const,
+        title: 'Flash deal registration expired',
+        content: `${row.product_name} was not reviewed before ${row.campaign_title} started.`,
+        actionUrl: `/seller/flash-deals/${row.campaign_id}`,
+        sourceEventId: row.id,
+        metadata: {
+          campaignId: row.campaign_id,
+          registrationId: row.id,
+          productId: row.product_id,
+          skuId: row.sku_id,
+        },
+        channels: ['PUSH' as const],
+      })),
+    ];
+
+    await this.dispatchNotificationsInBatches(notifications);
     return this.getCampaignDetail(id);
   }
 
@@ -843,6 +1396,7 @@ export class FlashDealAdminService {
     );
     if (ended.length > 0) {
       this.logger.log(`Ended flash deal campaign ${campaignId}`);
+      await this.expirePendingRegistrations(campaignId);
       return;
     }
 
@@ -859,9 +1413,14 @@ export class FlashDealAdminService {
     if (activated.length > 0) {
       this.logger.log(`Activated flash deal campaign ${campaignId}`);
     }
+    await this.expirePendingRegistrations(campaignId);
   }
 
-  async sweepDueCampaigns(): Promise<{ activated: number; ended: number }> {
+  async sweepDueCampaigns(): Promise<{
+    activated: number;
+    ended: number;
+    expiredRegistrations: number;
+  }> {
     const [endedRows, activatedRows] = await Promise.all([
       this.dataSource.query<Array<{ id: string }>>(
         `UPDATE catalog.flash_deal_campaigns
@@ -880,14 +1439,57 @@ export class FlashDealAdminService {
       ),
     ]);
 
+    const expiredRegistrations = await this.expirePendingRegistrations();
     const ended = endedRows.length;
     const activated = activatedRows.length;
-    if (activated > 0 || ended > 0) {
+    if (activated > 0 || ended > 0 || expiredRegistrations > 0) {
       this.logger.log(
-        `Flash deal lifecycle sweep: activated=${activated}, ended=${ended}`,
+        `Flash deal lifecycle sweep: activated=${activated}, ended=${ended}, expiredRegistrations=${expiredRegistrations}`,
       );
     }
-    return { activated, ended };
+    return { activated, ended, expiredRegistrations };
+  }
+
+  private async expirePendingRegistrations(
+    campaignId?: string,
+  ): Promise<number> {
+    const expired = await this.dataSource.query<RawExpiredRegistrationRow[]>(
+      `UPDATE catalog.flash_deal_registrations r
+          SET status = 'EXPIRED', updated_at = clock_timestamp()
+         FROM catalog.flash_deal_campaigns c, catalog.products p
+        WHERE r.campaign_id = c.id
+          AND p.id = r.product_id
+          AND r.status = 'PENDING'
+          AND ($1::uuid IS NULL OR r.campaign_id = $1::uuid)
+          AND (
+            c.status IN ('ACTIVE', 'ENDED', 'CANCELLED')
+            OR c.starts_at <= clock_timestamp()
+          )
+        RETURNING r.id, r.campaign_id, c.title AS campaign_title,
+                  r.seller_id, r.product_id, p.name AS product_name, r.sku_id`,
+      [campaignId ?? null],
+    );
+
+    if (expired.length > 0) {
+      await this.dispatchNotificationsInBatches(
+        expired.map((row) => ({
+          userId: row.seller_id,
+          type: 'FLASH_DEAL_REGISTRATION_EXPIRED',
+          title: 'Flash deal registration expired',
+          content: `${row.product_name} was not reviewed before ${row.campaign_title} started.`,
+          actionUrl: `/seller/flash-deals/${row.campaign_id}`,
+          sourceEventId: row.id,
+          metadata: {
+            campaignId: row.campaign_id,
+            registrationId: row.id,
+            productId: row.product_id,
+            skuId: row.sku_id,
+          },
+          channels: ['PUSH'],
+        })),
+      );
+    }
+    return expired.length;
   }
 
   private validateSchedule(
@@ -932,7 +1534,42 @@ export class FlashDealAdminService {
     }
   }
 
-  private validateFlashPrice(flashPrice: number, regularPrice: number): void {
+  private validateRegistrationWindow(
+    opensAt: Date | null,
+    closesAt: Date | null,
+    startsAt: Date,
+  ): void {
+    if ((opensAt === null) !== (closesAt === null)) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_FLASH_DEAL_REGISTRATION_WINDOW',
+        message:
+          'registrationOpensAt and registrationClosesAt must both be provided or both be null',
+      });
+    }
+    if (!opensAt || !closesAt) return;
+
+    const opensMs = opensAt.getTime();
+    const closesMs = closesAt.getTime();
+    const startsMs = startsAt.getTime();
+    if (
+      !Number.isFinite(opensMs) ||
+      !Number.isFinite(closesMs) ||
+      opensMs >= closesMs ||
+      closesMs > startsMs
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_FLASH_DEAL_REGISTRATION_WINDOW',
+        message:
+          'registrationOpensAt must be before registrationClosesAt, and registrationClosesAt must be on or before startsAt',
+      });
+    }
+  }
+
+  private validateFlashPrice(
+    flashPrice: number,
+    regularPrice: number,
+    minDiscountPercent: number | null = null,
+  ): void {
     if (
       !Number.isFinite(flashPrice) ||
       !Number.isFinite(regularPrice) ||
@@ -957,6 +1594,16 @@ export class FlashDealAdminService {
         message: `Flash deal discount must be at least ${FLASH_DEAL_MIN_DISCOUNT_PERCENT}% or ${FLASH_DEAL_MIN_DISCOUNT_AMOUNT.toLocaleString('en-US')} VND`,
       });
     }
+
+    if (
+      minDiscountPercent !== null &&
+      discountPercent + 1e-9 < minDiscountPercent
+    ) {
+      throw new BadRequestException({
+        errorCode: 'INVALID_FLASH_DEAL_PRICE',
+        message: `Flash deal discount must be at least ${minDiscountPercent}% for this campaign`,
+      });
+    }
   }
 
   private async lockCampaign(
@@ -964,7 +1611,10 @@ export class FlashDealAdminService {
     id: string,
   ): Promise<RawCampaignRow> {
     const rows = await manager.query<RawCampaignRow[]>(
-      `SELECT id, title, slug, status, created_by, starts_at, ends_at, created_at, updated_at
+      `SELECT id, title, slug, status, created_by, starts_at, ends_at,
+              registration_opens_at, registration_closes_at,
+              min_discount_percent, min_reputation, max_items_per_seller,
+              invited_at, created_at, updated_at
          FROM catalog.flash_deal_campaigns
         WHERE id = $1::uuid
         FOR UPDATE`,
@@ -1073,6 +1723,103 @@ export class FlashDealAdminService {
     );
   }
 
+  private async fetchAdminRegistrations(
+    runner: Pick<DataSource, 'query'>,
+    filter: {
+      campaignId?: string;
+      registrationId?: string;
+      status?: FlashDealRegistrationStatus;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<RawAdminRegistrationRow[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (filter.campaignId) {
+      params.push(filter.campaignId);
+      conditions.push(`r.campaign_id = $${params.length}::uuid`);
+    }
+    if (filter.registrationId) {
+      params.push(filter.registrationId);
+      conditions.push(`r.id = $${params.length}::uuid`);
+    }
+    if (filter.status) {
+      params.push(filter.status);
+      conditions.push(`r.status = $${params.length}`);
+    }
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    let pagination = '';
+    if (filter.limit !== undefined) {
+      params.push(filter.limit);
+      const limitIdx = params.length;
+      params.push(filter.offset ?? 0);
+      const offsetIdx = params.length;
+      pagination = `LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+    }
+
+    return runner.query<RawAdminRegistrationRow[]>(
+      `SELECT r.id, r.campaign_id, c.title AS campaign_title, r.status,
+              r.seller_id,
+              sh.name AS shop_name, sh.slug AS shop_slug,
+              sh.reputation_score,
+              r.product_id, p.name AS product_name, p.slug AS product_slug,
+              img.url AS image_url, r.sku_id, s.sku_code, s.variant_attributes,
+              r.regular_price_snapshot, r.flash_price, r.quota_qty, r.max_per_buyer,
+              COALESCE(inv.available_qty, 0)::int AS available_qty,
+              r.reject_reason, r.reviewed_at,
+              fdi.id AS item_id, fdi.status AS item_status,
+              fdi.sold_qty AS item_sold_qty, fdi.quota_qty AS item_quota_qty,
+              r.created_at, r.updated_at
+         FROM catalog.flash_deal_registrations r
+         JOIN catalog.flash_deal_campaigns c ON c.id = r.campaign_id
+         JOIN catalog.products p ON p.id = r.product_id
+         JOIN catalog.product_skus s ON s.id = r.sku_id
+         LEFT JOIN identity.shops sh
+           ON sh.seller_id = r.seller_id AND sh.deleted_at IS NULL
+         LEFT JOIN catalog.flash_deal_items fdi ON fdi.id = r.flash_deal_item_id
+         LEFT JOIN LATERAL (
+           SELECT pi.url FROM catalog.product_images pi
+            WHERE pi.product_id = p.id
+            ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC
+            LIMIT 1
+         ) img ON true
+         LEFT JOIN LATERAL (
+           SELECT SUM(ii.available_qty)::int AS available_qty
+             FROM fulfillment.inventory_items ii
+            WHERE ii.sku_id = s.id
+         ) inv ON true
+        ${whereClause}
+        ORDER BY r.created_at DESC, r.id ASC
+        ${pagination}`,
+      params,
+    );
+  }
+
+  private mapAdminRegistrationRow(
+    row: RawAdminRegistrationRow,
+  ): AdminFlashDealRegistrationView {
+    return {
+      ...mapRegistrationRow(row),
+      seller: {
+        id: row.seller_id,
+        shopName: row.shop_name ?? null,
+        shopSlug: row.shop_slug ?? null,
+        reputationScore: Number(row.reputation_score ?? 0),
+      },
+    };
+  }
+
+  private async dispatchNotificationsInBatches(
+    inputs: NotifyUserInput[],
+    batchSize = 3,
+  ): Promise<void> {
+    if (!this.notifications || inputs.length === 0) return;
+    for (let i = 0; i < inputs.length; i += batchSize) {
+      await this.notifications.notifyMany(inputs.slice(i, i + batchSize));
+    }
+  }
+
   private mapCampaignRow(row: RawCampaignRow): AdminFlashDealCampaignListItem {
     return {
       id: row.id,
@@ -1082,6 +1829,28 @@ export class FlashDealAdminService {
       createdBy: row.created_by ?? null,
       startsAt: new Date(row.starts_at).toISOString(),
       endsAt: new Date(row.ends_at).toISOString(),
+      registrationOpensAt: row.registration_opens_at
+        ? new Date(row.registration_opens_at).toISOString()
+        : null,
+      registrationClosesAt: row.registration_closes_at
+        ? new Date(row.registration_closes_at).toISOString()
+        : null,
+      minDiscountPercent:
+        row.min_discount_percent === null ||
+        row.min_discount_percent === undefined
+          ? null
+          : Number(row.min_discount_percent),
+      minReputation:
+        row.min_reputation === null || row.min_reputation === undefined
+          ? null
+          : Number(row.min_reputation),
+      maxItemsPerSeller: Number(row.max_items_per_seller ?? 5),
+      invitedAt: row.invited_at ? new Date(row.invited_at).toISOString() : null,
+      registrationCounts: {
+        pending: Number(row.reg_pending_count ?? 0),
+        approved: Number(row.reg_approved_count ?? 0),
+        rejected: Number(row.reg_rejected_count ?? 0),
+      },
       itemCount: Number(row.item_count ?? 0),
       totalQuota: Number(row.total_quota ?? 0),
       totalSold: Number(row.total_sold ?? 0),
@@ -1172,6 +1941,13 @@ export class FlashDealAdminService {
     return new NotFoundException({
       errorCode: 'FLASH_DEAL_ITEM_NOT_FOUND',
       message: 'Flash deal item not found',
+    });
+  }
+
+  private registrationNotFound(): NotFoundException {
+    return new NotFoundException({
+      errorCode: 'FLASH_DEAL_REGISTRATION_NOT_FOUND',
+      message: 'Flash deal registration not found',
     });
   }
 }

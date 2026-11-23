@@ -22,7 +22,9 @@ import { RolesGuard } from '../../identity/rbac/guards/roles.guard.js';
 import {
   AddFlashDealItemDto,
   CreateFlashDealCampaignDto,
+  QueryAdminFlashDealRegistrationsDto,
   QueryAdminFlashDealsDto,
+  RejectFlashDealRegistrationDto,
   UpdateFlashDealCampaignDto,
   UpdateFlashDealItemDto,
 } from '../dtos/admin-flash-deal.dto.js';
@@ -110,5 +112,49 @@ export class AdminFlashDealController {
   @HttpCode(HttpStatus.OK)
   cancel(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.flashDealAdmin.cancelCampaign(id);
+  }
+
+  @Permissions('FLASH_DEAL.MANAGE')
+  @Post(':id/invite-sellers')
+  @HttpCode(HttpStatus.OK)
+  inviteSellers(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.flashDealAdmin.inviteSellers(id);
+  }
+
+  @Permissions('FLASH_DEAL.LIST')
+  @Get(':id/registrations')
+  listRegistrations(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: QueryAdminFlashDealRegistrationsDto,
+  ) {
+    return this.flashDealAdmin.listRegistrations(id, query);
+  }
+
+  @Permissions('FLASH_DEAL.MANAGE')
+  @Post(':id/registrations/:registrationId/approve')
+  @HttpCode(HttpStatus.OK)
+  approveRegistration(
+    @CurrentUserId() actorId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('registrationId', new ParseUUIDPipe()) registrationId: string,
+  ) {
+    return this.flashDealAdmin.approveRegistration(id, registrationId, actorId);
+  }
+
+  @Permissions('FLASH_DEAL.MANAGE')
+  @Post(':id/registrations/:registrationId/reject')
+  @HttpCode(HttpStatus.OK)
+  rejectRegistration(
+    @CurrentUserId() actorId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('registrationId', new ParseUUIDPipe()) registrationId: string,
+    @Body() dto: RejectFlashDealRegistrationDto,
+  ) {
+    return this.flashDealAdmin.rejectRegistration(
+      id,
+      registrationId,
+      actorId,
+      dto.reason,
+    );
   }
 }
