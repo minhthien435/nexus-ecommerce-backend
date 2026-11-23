@@ -3,16 +3,20 @@ import { BullModule } from '@nestjs/bullmq';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IdentityModule } from '../identity/identity.module.js';
+import { NotificationModule } from '../notification/notification.module.js';
 import { AdminFlashDealController } from './controllers/admin-flash-deal.controller.js';
 import { FlashDealController } from './controllers/flash-deal.controller.js';
+import { SellerFlashDealController } from './controllers/seller-flash-deal.controller.js';
 import { FlashDealCampaignEntity } from './domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemEntity } from './domain/entities/flash-deal-item.entity.js';
+import { FlashDealRegistrationEntity } from './domain/entities/flash-deal-registration.entity.js';
 import { FlashDealReservationEntity } from './domain/entities/flash-deal-reservation.entity.js';
 import { FLASH_DEAL_LIFECYCLE_QUEUE } from './flash-deal-lifecycle.constants.js';
 import { FlashDealLifecycleProcessor } from './processors/flash-deal-lifecycle.processor.js';
 import { FlashDealAdminService } from './services/flash-deal-admin.service.js';
 import { FlashDealSchedulerService } from './services/flash-deal-scheduler.service.js';
 import { FlashDealService } from './services/flash-deal.service.js';
+import { SellerFlashDealService } from './services/seller-flash-deal.service.js';
 
 @Module({
   imports: [
@@ -20,18 +24,25 @@ import { FlashDealService } from './services/flash-deal.service.js';
       FlashDealCampaignEntity,
       FlashDealItemEntity,
       FlashDealReservationEntity,
+      FlashDealRegistrationEntity,
     ]),
     BullModule.registerQueue({ name: FLASH_DEAL_LIFECYCLE_QUEUE }),
     IdentityModule,
+    NotificationModule,
     JwtModule,
   ],
-  controllers: [FlashDealController, AdminFlashDealController],
+  controllers: [
+    FlashDealController,
+    AdminFlashDealController,
+    SellerFlashDealController,
+  ],
   providers: [
     FlashDealService,
     FlashDealAdminService,
+    SellerFlashDealService,
     FlashDealSchedulerService,
     FlashDealLifecycleProcessor,
   ],
-  exports: [TypeOrmModule, FlashDealAdminService],
+  exports: [TypeOrmModule, FlashDealAdminService, SellerFlashDealService],
 })
 export class FlashDealModule {}

@@ -7,6 +7,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { FlashDealCampaignStatus } from '../domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemStatus } from '../domain/entities/flash-deal-item.entity.js';
+import { FlashDealRegistrationStatus } from '../domain/entities/flash-deal-registration.entity.js';
 import { AddFlashDealItemDto } from '../dtos/admin-flash-deal.dto.js';
 import { FlashDealAdminService } from './flash-deal-admin.service.js';
 
@@ -97,11 +98,24 @@ function setup() {
   const scheduler = {
     schedule: vi.fn(),
   };
+  const notifications = {
+    isEnabled: vi.fn().mockResolvedValue(true),
+    notify: vi.fn().mockResolvedValue(undefined),
+    notifyMany: vi.fn().mockResolvedValue(undefined),
+  };
   const service = new FlashDealAdminService(
     dataSource as never,
     scheduler as never,
+    notifications as never,
   );
-  return { service, dataSource, dataSourceQuery, managerQuery, scheduler };
+  return {
+    service,
+    dataSource,
+    dataSourceQuery,
+    managerQuery,
+    scheduler,
+    notifications,
+  };
 }
 
 describe('FlashDealAdminService', () => {
@@ -553,14 +567,27 @@ describe('FlashDealAdminService', () => {
     });
   });
 
-  it('cancels open campaigns and rejects cancelling already closed ones', async () => {
-    const { service, managerQuery, dataSourceQuery } = setup();
+  it('cancels open campaigns, notifies approved sellers, expires pending registrations, and rejects cancelling already closed ones', async () => {
+    const { service, managerQuery, dataSourceQuery, notifications } = setup();
+    const pendingRegId = '77777777-7777-4777-8777-777777777777';
 
     managerQuery
       .mockResolvedValueOnce([
         makeCampaignRow({ status: FlashDealCampaignStatus.ACTIVE }),
       ])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: pendingRegId,
+          campaign_id: campaignId,
+          campaign_title: 'Flash Sale 12H',
+          seller_id: sellerId,
+          product_id: productId,
+          product_name: 'Mechanical Keyboard',
+          sku_id: skuId,
+        },
+      ])
+      .mockResolvedValueOnce([{ seller_id: sellerId }]);
     dataSourceQuery
       .mockResolvedValueOnce([
         makeCampaignRow({ status: FlashDealCampaignStatus.CANCELLED }),
@@ -569,6 +596,20 @@ describe('FlashDealAdminService', () => {
 
     const cancelled = await service.cancelCampaign(campaignId);
     expect(cancelled.status).toBe(FlashDealCampaignStatus.CANCELLED);
+    expect(notifications.notifyMany).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId: sellerId,
+          type: 'FLASH_DEAL_CAMPAIGN_CANCELLED',
+          sourceEventId: campaignId,
+        }),
+        expect.objectContaining({
+          userId: sellerId,
+          type: 'FLASH_DEAL_REGISTRATION_EXPIRED',
+          sourceEventId: pendingRegId,
+        }),
+      ]),
+    );
 
     managerQuery.mockResolvedValueOnce([
       makeCampaignRow({ status: FlashDealCampaignStatus.CANCELLED }),
@@ -579,21 +620,262 @@ describe('FlashDealAdminService', () => {
     });
   });
 
-  it('advances lifecycle transitions and sweeps due campaigns cleanly', async () => {
-    const { service, dataSourceQuery } = setup();
+  it('advances lifecycle transitions, sweeps due campaigns, and expires pending registrations', async () => {
+    const { service, dataSourceQuery, notifications } = setup();
+    const expiredRegId = '88888888-8888-4888-8888-888888888888';
 
     dataSourceQuery
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: campaignId }]);
+      .mockResolvedValueOnce([{ id: campaignId }])
+      .mockResolvedValueOnce([]);
     await service.advanceLifecycle(campaignId);
-    expect(dataSourceQuery).toHaveBeenCalledTimes(2);
+    expect(dataSourceQuery).toHaveBeenCalledTimes(3);
 
     dataSourceQuery
       .mockResolvedValueOnce([{ id: 'ended-1' }])
-      .mockResolvedValueOnce([{ id: 'active-1' }, { id: 'active-2' }]);
+      .mockResolvedValueOnce([{ id: 'active-1' }, { id: 'active-2' }])
+      .mockResolvedValueOnce([
+        {
+          id: expiredRegId,
+          campaign_id: 'active-1',
+          campaign_title: 'Flash Sale 12H',
+          seller_id: sellerId,
+          product_id: productId,
+          product_name: 'Mechanical Keyboard',
+          sku_id: skuId,
+        },
+      ]);
     await expect(service.sweepDueCampaigns()).resolves.toEqual({
       activated: 2,
       ended: 1,
+      expiredRegistrations: 1,
     });
+    expect(notifications.notifyMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: sellerId,
+        type: 'FLASH_DEAL_REGISTRATION_EXPIRED',
+        sourceEventId: expiredRegId,
+      }),
+    ]);
+  });
+
+  it('validates registration window rules and invites eligible sellers with UUID sourceEventId', async () => {
+    const { service, managerQuery, notifications } = setup();
+
+    // Invalid registration window: closesAt > startsAt -> 400
+    await expect(
+      service.createCampaign(actorId, {
+        title: 'Bad Reg Window',
+        startsAt: futureIso(60),
+        endsAt: futureIso(120),
+        registrationOpensAt: futureIso(10),
+        registrationClosesAt: futureIso(90),
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      response: { errorCode: 'INVALID_FLASH_DEAL_REGISTRATION_WINDOW' },
+    });
+
+    // Invite eligible sellers
+    const invitedAt = new Date().toISOString();
+    managerQuery
+      .mockResolvedValueOnce([
+        makeCampaignRow({
+          registration_opens_at: futureIso(-10),
+          registration_closes_at: futureIso(20),
+          min_reputation: 70,
+        }),
+      ])
+      .mockResolvedValueOnce([{ invited_at: invitedAt }])
+      .mockResolvedValueOnce([
+        { seller_id: sellerId },
+        { seller_id: '99999999-9999-4999-8999-999999999999' },
+      ]);
+
+    const inviteRes = await service.inviteSellers(campaignId);
+    expect(inviteRes).toEqual({ invited: 2, invitedAt });
+    expect(notifications.notifyMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: sellerId,
+        type: 'FLASH_DEAL_INVITATION',
+        sourceEventId: campaignId,
+      }),
+      expect.objectContaining({
+        userId: '99999999-9999-4999-8999-999999999999',
+        type: 'FLASH_DEAL_INVITATION',
+        sourceEventId: campaignId,
+      }),
+    ]);
+  });
+
+  it('approves pending registrations (including late review before startsAt), rejects with reason, and preserves PENDING on stock failure', async () => {
+    const { service, managerQuery, dataSourceQuery, notifications } = setup();
+    const regId = '77777777-7777-4777-8777-777777777777';
+
+    // Approve fails when inventory is insufficient -> throws 409 and never updates registration
+    managerQuery
+      .mockResolvedValueOnce([
+        makeCampaignRow({
+          starts_at: futureIso(30),
+          registration_opens_at: futureIso(-60),
+          registration_closes_at: futureIso(-5), // late review allowed before starts_at
+          min_discount_percent: 10,
+        }),
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: regId,
+          campaign_id: campaignId,
+          seller_id: sellerId,
+          sku_id: skuId,
+          flash_price: '800000.00',
+          quota_qty: 50,
+          max_per_buyer: 2,
+          status: FlashDealRegistrationStatus.PENDING,
+        },
+      ])
+      .mockResolvedValueOnce([makeSkuRow({ available_qty: 5 })])
+      .mockResolvedValueOnce([]);
+
+    await expect(
+      service.approveRegistration(campaignId, regId, actorId),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { errorCode: 'INSUFFICIENT_STOCK' },
+    });
+    expect(notifications.notifyMany).not.toHaveBeenCalled();
+
+    // Approve happy path (late review after registration_closes_at, before starts_at)
+    managerQuery
+      .mockResolvedValueOnce([
+        makeCampaignRow({
+          starts_at: futureIso(30),
+          registration_opens_at: futureIso(-60),
+          registration_closes_at: futureIso(-5),
+          min_discount_percent: 10,
+        }),
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: regId,
+          campaign_id: campaignId,
+          seller_id: sellerId,
+          sku_id: skuId,
+          flash_price: '800000.00',
+          quota_qty: 10,
+          max_per_buyer: 2,
+          status: FlashDealRegistrationStatus.PENDING,
+        },
+      ])
+      .mockResolvedValueOnce([makeSkuRow({ available_qty: 25 })])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: itemId }])
+      .mockResolvedValueOnce([]);
+    dataSourceQuery.mockResolvedValueOnce([
+      {
+        id: regId,
+        campaign_id: campaignId,
+        campaign_title: 'Flash Sale 12H',
+        status: FlashDealRegistrationStatus.APPROVED,
+        seller_id: sellerId,
+        shop_name: 'TechZone',
+        shop_slug: 'techzone',
+        reputation_score: 90,
+        product_id: productId,
+        product_name: 'Mechanical Keyboard',
+        product_slug: 'mechanical-keyboard',
+        image_url: null,
+        sku_id: skuId,
+        sku_code: 'KB-001',
+        variant_attributes: {},
+        regular_price_snapshot: '1000000.00',
+        flash_price: '800000.00',
+        quota_qty: 10,
+        max_per_buyer: 2,
+        available_qty: 25,
+        reject_reason: null,
+        reviewed_at: new Date().toISOString(),
+        item_id: itemId,
+        item_status: FlashDealItemStatus.ACTIVE,
+        item_sold_qty: 0,
+        item_quota_qty: 10,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+
+    const approved = await service.approveRegistration(
+      campaignId,
+      regId,
+      actorId,
+    );
+    expect(approved.status).toBe(FlashDealRegistrationStatus.APPROVED);
+    expect(approved.item).toMatchObject({ id: itemId, quotaQty: 10 });
+    expect(notifications.notifyMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: sellerId,
+        type: 'FLASH_DEAL_REGISTRATION_APPROVED',
+        sourceEventId: regId,
+      }),
+    ]);
+
+    // Reject with reason
+    notifications.notifyMany.mockClear();
+    managerQuery
+      .mockResolvedValueOnce([makeCampaignRow()])
+      .mockResolvedValueOnce([
+        { id: regId, status: FlashDealRegistrationStatus.PENDING },
+      ])
+      .mockResolvedValueOnce([]);
+    dataSourceQuery.mockResolvedValueOnce([
+      {
+        id: regId,
+        campaign_id: campaignId,
+        campaign_title: 'Flash Sale 12H',
+        status: FlashDealRegistrationStatus.REJECTED,
+        seller_id: sellerId,
+        shop_name: 'TechZone',
+        shop_slug: 'techzone',
+        reputation_score: 90,
+        product_id: productId,
+        product_name: 'Mechanical Keyboard',
+        product_slug: 'mechanical-keyboard',
+        image_url: null,
+        sku_id: skuId,
+        sku_code: 'KB-001',
+        variant_attributes: {},
+        regular_price_snapshot: '1000000.00',
+        flash_price: '800000.00',
+        quota_qty: 10,
+        max_per_buyer: 2,
+        available_qty: 25,
+        reject_reason: 'Discount too low for hero slot',
+        reviewed_at: new Date().toISOString(),
+        item_id: null,
+        item_status: null,
+        item_sold_qty: null,
+        item_quota_qty: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+
+    const rejected = await service.rejectRegistration(
+      campaignId,
+      regId,
+      actorId,
+      'Discount too low for hero slot',
+    );
+    expect(rejected.status).toBe(FlashDealRegistrationStatus.REJECTED);
+    expect(rejected.rejectReason).toBe('Discount too low for hero slot');
+    expect(notifications.notifyMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: sellerId,
+        type: 'FLASH_DEAL_REGISTRATION_REJECTED',
+        sourceEventId: regId,
+      }),
+    ]);
   });
 });

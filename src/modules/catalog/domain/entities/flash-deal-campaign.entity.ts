@@ -33,6 +33,26 @@ export class FlashDealCampaignEntity {
     string | null;
   @Column({ name: 'starts_at', type: 'timestamptz' }) startsAt: Date;
   @Column({ name: 'ends_at', type: 'timestamptz' }) endsAt: Date;
+  @Column({
+    name: 'registration_opens_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  registrationOpensAt: Date | null;
+  @Column({
+    name: 'registration_closes_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  registrationClosesAt: Date | null;
+  @Column({ name: 'min_discount_percent', type: 'integer', nullable: true })
+  minDiscountPercent: number | null;
+  @Column({ name: 'min_reputation', type: 'integer', nullable: true })
+  minReputation: number | null;
+  @Column({ name: 'max_items_per_seller', type: 'integer', default: 5 })
+  maxItemsPerSeller: number;
+  @Column({ name: 'invited_at', type: 'timestamptz', nullable: true })
+  invitedAt: Date | null;
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })

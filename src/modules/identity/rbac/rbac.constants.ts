@@ -229,6 +229,12 @@ export const PRIVILEGE_SEEDS: readonly PrivilegeSeed[] = [
     roles: ['ADMIN'],
   },
   {
+    code: 'FLASH_DEAL.REGISTER',
+    module: 'CATALOG',
+    description: 'Register seller SKUs for flash deal campaigns',
+    roles: ['SELLER'],
+  },
+  {
     code: 'CATEGORY.CREATE',
     module: 'CATALOG',
     description: 'Create category',

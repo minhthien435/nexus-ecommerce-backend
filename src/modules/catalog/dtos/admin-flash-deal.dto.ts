@@ -12,9 +12,14 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { FlashDealCampaignStatus } from '../domain/entities/flash-deal-campaign.entity.js';
 import { FlashDealItemStatus } from '../domain/entities/flash-deal-item.entity.js';
+import {
+  FLASH_DEAL_REGISTRATION_FILTER_STATUSES,
+  type FlashDealRegistrationFilterStatus,
+} from './seller-flash-deal.dto.js';
 
 const toNumber = ({ value }: { value: unknown }) =>
   value === undefined || value === '' || value === null
@@ -92,6 +97,39 @@ export class CreateFlashDealCampaignDto {
   @IsOptional()
   @IsIn([FlashDealCampaignStatus.DRAFT, FlashDealCampaignStatus.SCHEDULED])
   status?: FlashDealCampaignStatus.DRAFT | FlashDealCampaignStatus.SCHEDULED;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsDateString()
+  registrationOpensAt?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsDateString()
+  registrationClosesAt?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Transform(toNumber)
+  @IsInt()
+  @Min(5)
+  @Max(90)
+  minDiscountPercent?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Transform(toNumber)
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  minReputation?: number | null;
+
+  @IsOptional()
+  @Transform(toNumber)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  maxItemsPerSeller?: number;
 }
 
 export class UpdateFlashDealCampaignDto {
@@ -113,6 +151,69 @@ export class UpdateFlashDealCampaignDto {
   @IsOptional()
   @IsIn([FlashDealCampaignStatus.DRAFT, FlashDealCampaignStatus.SCHEDULED])
   status?: FlashDealCampaignStatus.DRAFT | FlashDealCampaignStatus.SCHEDULED;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsDateString()
+  registrationOpensAt?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsDateString()
+  registrationClosesAt?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Transform(toNumber)
+  @IsInt()
+  @Min(5)
+  @Max(90)
+  minDiscountPercent?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Transform(toNumber)
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  minReputation?: number | null;
+
+  @IsOptional()
+  @Transform(toNumber)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  maxItemsPerSeller?: number;
+}
+
+export class QueryAdminFlashDealRegistrationsDto {
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsIn(FLASH_DEAL_REGISTRATION_FILTER_STATUSES)
+  status?: FlashDealRegistrationFilterStatus;
+
+  @IsOptional()
+  @Transform(toNumber)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Transform(toNumber)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 20;
+}
+
+export class RejectFlashDealRegistrationDto {
+  @Transform(trimString)
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  reason: string;
 }
 
 export class AddFlashDealItemDto {
