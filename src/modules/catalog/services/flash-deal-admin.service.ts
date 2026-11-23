@@ -604,7 +604,7 @@ export class FlashDealAdminService {
         }
       }
 
-      const savedRows = await manager.query<RawCampaignRow[]>(
+      const savedRaw: unknown = await manager.query(
         `UPDATE catalog.flash_deal_campaigns
             SET title = $2,
                 status = $3,
@@ -634,7 +634,7 @@ export class FlashDealAdminService {
           nextMaxItemsPerSeller,
         ],
       );
-      return savedRows[0];
+      return this.extractMutationRows<RawCampaignRow>(savedRaw)[0];
     });
 
     if (
@@ -1040,8 +1040,8 @@ export class FlashDealAdminService {
           ? null
           : Number(campaign.min_reputation);
 
-      const [updatedRows, sellers] = await Promise.all([
-        manager.query<Array<{ invited_at: Date | string }>>(
+      const [updatedRaw, sellers] = await Promise.all([
+        manager.query(
           `UPDATE catalog.flash_deal_campaigns
               SET invited_at = clock_timestamp(), updated_at = clock_timestamp()
             WHERE id = $1::uuid
@@ -1058,6 +1058,9 @@ export class FlashDealAdminService {
           [minRep],
         ),
       ]);
+      const updatedRows = this.extractMutationRows<{
+        invited_at: Date | string;
+      }>(updatedRaw);
 
       return {
         campaignTitle: campaign.title,
@@ -1325,7 +1328,7 @@ export class FlashDealAdminService {
         [id],
       );
 
-      const expiredPending = await manager.query<RawExpiredRegistrationRow[]>(
+      const expiredPendingRaw: unknown = await manager.query(
         `UPDATE catalog.flash_deal_registrations r
             SET status = 'EXPIRED', updated_at = clock_timestamp()
            FROM catalog.products p
@@ -1336,6 +1339,8 @@ export class FlashDealAdminService {
                     r.seller_id, r.product_id, p.name AS product_name, r.sku_id`,
         [id, campaign.title],
       );
+      const expiredPending =
+        this.extractMutationRows<RawExpiredRegistrationRow>(expiredPendingRaw);
 
       const approvedSellers = await manager.query<Array<{ seller_id: string }>>(
         `SELECT DISTINCT seller_id
@@ -1385,7 +1390,7 @@ export class FlashDealAdminService {
   }
 
   async advanceLifecycle(campaignId: string): Promise<void> {
-    const ended = await this.dataSource.query<Array<{ id: string }>>(
+    const endedRaw: unknown = await this.dataSource.query(
       `UPDATE catalog.flash_deal_campaigns
           SET status = 'ENDED', updated_at = clock_timestamp()
         WHERE id = $1::uuid
@@ -1394,13 +1399,14 @@ export class FlashDealAdminService {
         RETURNING id`,
       [campaignId],
     );
+    const ended = this.extractMutationRows<{ id: string }>(endedRaw);
     if (ended.length > 0) {
       this.logger.log(`Ended flash deal campaign ${campaignId}`);
       await this.expirePendingRegistrations(campaignId);
       return;
     }
 
-    const activated = await this.dataSource.query<Array<{ id: string }>>(
+    const activatedRaw: unknown = await this.dataSource.query(
       `UPDATE catalog.flash_deal_campaigns
           SET status = 'ACTIVE', updated_at = clock_timestamp()
         WHERE id = $1::uuid
@@ -1410,6 +1416,7 @@ export class FlashDealAdminService {
         RETURNING id`,
       [campaignId],
     );
+    const activated = this.extractMutationRows<{ id: string }>(activatedRaw);
     if (activated.length > 0) {
       this.logger.log(`Activated flash deal campaign ${campaignId}`);
     }
@@ -1421,15 +1428,15 @@ export class FlashDealAdminService {
     ended: number;
     expiredRegistrations: number;
   }> {
-    const [endedRows, activatedRows] = await Promise.all([
-      this.dataSource.query<Array<{ id: string }>>(
+    const [endedRaw, activatedRaw] = await Promise.all([
+      this.dataSource.query(
         `UPDATE catalog.flash_deal_campaigns
             SET status = 'ENDED', updated_at = clock_timestamp()
           WHERE status IN ('SCHEDULED', 'ACTIVE')
             AND ends_at <= clock_timestamp()
           RETURNING id`,
       ),
-      this.dataSource.query<Array<{ id: string }>>(
+      this.dataSource.query(
         `UPDATE catalog.flash_deal_campaigns
             SET status = 'ACTIVE', updated_at = clock_timestamp()
           WHERE status = 'SCHEDULED'
@@ -1438,6 +1445,10 @@ export class FlashDealAdminService {
           RETURNING id`,
       ),
     ]);
+    const endedRows = this.extractMutationRows<{ id: string }>(endedRaw);
+    const activatedRows = this.extractMutationRows<{ id: string }>(
+      activatedRaw,
+    );
 
     const expiredRegistrations = await this.expirePendingRegistrations();
     const ended = endedRows.length;
@@ -1453,7 +1464,7 @@ export class FlashDealAdminService {
   private async expirePendingRegistrations(
     campaignId?: string,
   ): Promise<number> {
-    const expired = await this.dataSource.query<RawExpiredRegistrationRow[]>(
+    const expiredRaw: unknown = await this.dataSource.query(
       `UPDATE catalog.flash_deal_registrations r
           SET status = 'EXPIRED', updated_at = clock_timestamp()
          FROM catalog.flash_deal_campaigns c, catalog.products p
@@ -1469,6 +1480,8 @@ export class FlashDealAdminService {
                   r.seller_id, r.product_id, p.name AS product_name, r.sku_id`,
       [campaignId ?? null],
     );
+    const expired =
+      this.extractMutationRows<RawExpiredRegistrationRow>(expiredRaw);
 
     if (expired.length > 0) {
       await this.dispatchNotificationsInBatches(
@@ -1808,6 +1821,19 @@ export class FlashDealAdminService {
         reputationScore: Number(row.reputation_score ?? 0),
       },
     };
+  }
+
+  private extractMutationRows<T>(result: unknown): T[] {
+    if (!Array.isArray(result)) return [];
+    // TypeORM PostgresQueryRunner returns [rows, rowCount] for UPDATE/DELETE ... RETURNING.
+    if (
+      result.length === 2 &&
+      Array.isArray(result[0]) &&
+      (typeof result[1] === 'number' || result[1] === null)
+    ) {
+      return result[0] as T[];
+    }
+    return result as T[];
   }
 
   private async dispatchNotificationsInBatches(
