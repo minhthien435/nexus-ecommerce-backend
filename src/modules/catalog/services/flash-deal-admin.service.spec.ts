@@ -575,17 +575,20 @@ describe('FlashDealAdminService', () => {
       .mockResolvedValueOnce([
         makeCampaignRow({ status: FlashDealCampaignStatus.ACTIVE }),
       ])
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([[], 1])
       .mockResolvedValueOnce([
-        {
-          id: pendingRegId,
-          campaign_id: campaignId,
-          campaign_title: 'Flash Sale 12H',
-          seller_id: sellerId,
-          product_id: productId,
-          product_name: 'Mechanical Keyboard',
-          sku_id: skuId,
-        },
+        [
+          {
+            id: pendingRegId,
+            campaign_id: campaignId,
+            campaign_title: 'Flash Sale 12H',
+            seller_id: sellerId,
+            product_id: productId,
+            product_name: 'Mechanical Keyboard',
+            sku_id: skuId,
+          },
+        ],
+        1,
       ])
       .mockResolvedValueOnce([{ seller_id: sellerId }]);
     dataSourceQuery
@@ -625,25 +628,28 @@ describe('FlashDealAdminService', () => {
     const expiredRegId = '88888888-8888-4888-8888-888888888888';
 
     dataSourceQuery
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: campaignId }])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([[], 0])
+      .mockResolvedValueOnce([[{ id: campaignId }], 1])
+      .mockResolvedValueOnce([[], 0]);
     await service.advanceLifecycle(campaignId);
     expect(dataSourceQuery).toHaveBeenCalledTimes(3);
 
     dataSourceQuery
-      .mockResolvedValueOnce([{ id: 'ended-1' }])
-      .mockResolvedValueOnce([{ id: 'active-1' }, { id: 'active-2' }])
+      .mockResolvedValueOnce([[{ id: 'ended-1' }], 1])
+      .mockResolvedValueOnce([[{ id: 'active-1' }, { id: 'active-2' }], 2])
       .mockResolvedValueOnce([
-        {
-          id: expiredRegId,
-          campaign_id: 'active-1',
-          campaign_title: 'Flash Sale 12H',
-          seller_id: sellerId,
-          product_id: productId,
-          product_name: 'Mechanical Keyboard',
-          sku_id: skuId,
-        },
+        [
+          {
+            id: expiredRegId,
+            campaign_id: 'active-1',
+            campaign_title: 'Flash Sale 12H',
+            seller_id: sellerId,
+            product_id: productId,
+            product_name: 'Mechanical Keyboard',
+            sku_id: skuId,
+          },
+        ],
+        1,
       ]);
     await expect(service.sweepDueCampaigns()).resolves.toEqual({
       activated: 2,
@@ -657,6 +663,39 @@ describe('FlashDealAdminService', () => {
         sourceEventId: expiredRegId,
       }),
     ]);
+  });
+
+  it('unwraps TypeORM [rows, rowCount] tuples on updateCampaign and reschedules lifecycle jobs', async () => {
+    const { service, managerQuery, dataSourceQuery, scheduler } = setup();
+    const nextStartsAt = futureIso(45);
+    const nextEndsAt = futureIso(165);
+    const updatedRow = makeCampaignRow({
+      title: 'Rescheduled Sale',
+      status: FlashDealCampaignStatus.SCHEDULED,
+      starts_at: nextStartsAt,
+      ends_at: nextEndsAt,
+    });
+
+    managerQuery
+      .mockResolvedValueOnce([makeCampaignRow()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([[updatedRow], 1]);
+    dataSourceQuery
+      .mockResolvedValueOnce([updatedRow])
+      .mockResolvedValueOnce([]);
+
+    const detail = await service.updateCampaign(campaignId, {
+      title: 'Rescheduled Sale',
+      startsAt: nextStartsAt,
+      endsAt: nextEndsAt,
+    });
+    expect(detail.title).toBe('Rescheduled Sale');
+    expect(scheduler.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: campaignId,
+        status: FlashDealCampaignStatus.SCHEDULED,
+      }),
+    );
   });
 
   it('validates registration window rules and invites eligible sellers with UUID sourceEventId', async () => {
@@ -676,7 +715,7 @@ describe('FlashDealAdminService', () => {
       response: { errorCode: 'INVALID_FLASH_DEAL_REGISTRATION_WINDOW' },
     });
 
-    // Invite eligible sellers
+    // Invite eligible sellers (TypeORM returns [rows, rowCount] for UPDATE ... RETURNING)
     const invitedAt = new Date().toISOString();
     managerQuery
       .mockResolvedValueOnce([
@@ -686,7 +725,7 @@ describe('FlashDealAdminService', () => {
           min_reputation: 70,
         }),
       ])
-      .mockResolvedValueOnce([{ invited_at: invitedAt }])
+      .mockResolvedValueOnce([[{ invited_at: invitedAt }], 1])
       .mockResolvedValueOnce([
         { seller_id: sellerId },
         { seller_id: '99999999-9999-4999-8999-999999999999' },
