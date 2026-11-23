@@ -11,6 +11,10 @@ import {
   type ReputationRewardResult,
   type ShopReputationRewardResult,
 } from '../identity-reputation.api.js';
+import {
+  BUYER_SHOP_REPUTATION_COOLDOWN_DAYS,
+  MIN_ORDER_NET_SUBTOTAL_FOR_REPUTATION,
+} from '../reputation-policy.constants.js';
 
 @Injectable()
 export class IdentityReputationService extends IdentityReputationApi {
@@ -142,20 +146,21 @@ export class IdentityReputationService extends IdentityReputationApi {
     const run = async (manager: EntityManager) => {
       // Serialize with order transitions/refund requests, then recheck all policy after locking.
       const orders = await manager.query(
-        `SELECT id, seller_id FROM commerce.orders WHERE id = $1 FOR UPDATE`,
+        `SELECT id, seller_id, buyer_id FROM commerce.orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
       if (!orders.length) return null;
       const eligible = await manager.query(
         `SELECT o.id FROM commerce.orders o WHERE o.id = $1
         AND o.status = 'COMPLETED'
+        AND (o.subtotal - o.discount_amount) >= $2
         AND (SELECT MAX(h.created_at) FROM commerce.order_status_history h
           WHERE h.order_id = o.id AND h.to_status = 'DELIVERED') < NOW() - INTERVAL '72 hours'
         AND NOT EXISTS (SELECT 1 FROM commerce.order_disputes d WHERE d.order_id = o.id
           AND d.status != 'REJECTED_PAY_SELLER')
         AND NOT EXISTS (SELECT 1 FROM commerce.order_refunds r WHERE r.order_id = o.id
           AND r.status IN ('REQUESTED','PROCESSING','COMPLETED') AND r.amount >= o.total)`,
-        [orderId],
+        [orderId, MIN_ORDER_NET_SUBTOTAL_FOR_REPUTATION],
       );
       if (!eligible.length) return null;
       const shops = await manager.query(
@@ -164,6 +169,25 @@ export class IdentityReputationService extends IdentityReputationApi {
         [orders[0].seller_id],
       );
       if (!shops.length) return null;
+      // Serialized under the shop row lock: allow at most one rewarded order per buyer-shop pair per cooldown window.
+      const recentBuyerReward = await manager.query(
+        `SELECT 1
+        FROM identity.shop_reputation_rewards r
+        JOIN commerce.orders o2 ON o2.id = r.order_id
+        WHERE r.shop_id = $1
+          AND r.source_type = 'ORDER_COMPLETION'
+          AND r.order_id <> $2
+          AND o2.buyer_id = $3
+          AND r.created_at >= NOW() - ($4 * INTERVAL '1 day')
+        LIMIT 1`,
+        [
+          shops[0].id,
+          orderId,
+          orders[0].buyer_id,
+          BUYER_SHOP_REPUTATION_COOLDOWN_DAYS,
+        ],
+      );
+      if (recentBuyerReward.length) return null;
       return this.creditShop(
         manager,
         shops[0].id,

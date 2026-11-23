@@ -242,12 +242,26 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     );
     return { id, sellerId };
   }
-  async function order(sellerId: string, status = 'COMPLETED', hours = 73) {
+  async function order(
+    sellerId: string,
+    status = 'COMPLETED',
+    hours = 73,
+    options: {
+      buyerId?: string;
+      subtotal?: number;
+      discountAmount?: number;
+      total?: number;
+    } = {},
+  ) {
     const id = randomUUID();
+    const buyerId = options.buyerId ?? (await user());
+    const subtotal = options.subtotal ?? 50_000;
+    const discountAmount = options.discountAmount ?? 0;
+    const total = options.total ?? subtotal - discountAmount;
     await db.query(
-      `INSERT INTO commerce.orders(id,order_number,buyer_id,seller_id,status,delivered_at,shipping_address_snapshot,total,subtotal)
-        VALUES ($1,$4,$2,$2,$3,NOW()-INTERVAL '100 hours','{}',100,100)`,
-      [id, sellerId, status, id],
+      `INSERT INTO commerce.orders(id,order_number,buyer_id,seller_id,status,delivered_at,shipping_address_snapshot,total,subtotal,discount_amount)
+        VALUES ($1,$4,$5,$2,$3,NOW()-INTERVAL '100 hours','{}',$6,$7,$8)`,
+      [id, sellerId, status, id, buyerId, total, subtotal, discountAmount],
     );
     await db.query(
       `INSERT INTO commerce.order_status_history(order_id,to_status,created_at) VALUES ($1,'DELIVERED',NOW()-$2*INTERVAL '1 hour')`,
@@ -274,7 +288,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   async function refund(orderId: string, status: string) {
     if (!migrated) {
       await db.query(
-        'INSERT INTO commerce.order_refunds(order_id,amount,status) VALUES ($1,100,$2)',
+        'INSERT INTO commerce.order_refunds(order_id,amount,status) VALUES ($1,50000,$2)',
         [orderId, status],
       );
       return;
@@ -282,13 +296,13 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     const paymentId = randomUUID();
     await db.query(
       `INSERT INTO commerce.payments(id,order_id,amount,status)
-      VALUES ($1,$2,100,'SUCCEEDED')`,
+      VALUES ($1,$2,50000,'SUCCEEDED')`,
       [paymentId, orderId],
     );
     await db.query(
       `INSERT INTO commerce.order_refunds
       (order_id,payment_id,refund_code,amount,currency,reason,status,payment_carrier,idempotency_key,requested_by)
-      SELECT id,$2,$4,100,'VND','Synthetic reputation test refund',$3,'PAYOS',$4,buyer_id
+      SELECT id,$2,$4,50000,'VND','Synthetic reputation test refund',$3,'PAYOS',$4,buyer_id
       FROM commerce.orders WHERE id=$1`,
       [orderId, paymentId, status, paymentId],
     );
@@ -935,5 +949,90 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     expect(await shopScore(s1.id)).toBe(55);
     expect(await shopScore(s2.id)).toBe(55);
     expect(await count('identity.shop_reputation_rewards')).toBe(2);
+  });
+
+  it('excludes orders with net subtotal below 50,000 VND even when shipping lifts total above 50,000 VND', async () => {
+    const s = await shop();
+    const lowSubtotalWithHighShip = await order(s.sellerId, 'COMPLETED', 73, {
+      subtotal: 10_000,
+      discountAmount: 0,
+      total: 60_000,
+    });
+    const discountedBelowThreshold = await order(s.sellerId, 'COMPLETED', 73, {
+      subtotal: 60_000,
+      discountAmount: 10_001,
+      total: 49_999,
+    });
+    const exactThreshold = await order(s.sellerId, 'COMPLETED', 73, {
+      subtotal: 60_000,
+      discountAmount: 10_000,
+      total: 50_000,
+    });
+
+    const processor = new OrderCompletionProcessor(
+      db,
+      new OrderStateMachineService(flashDeals),
+      reputation,
+    );
+    await processor.process({} as never);
+
+    expect(
+      await reputation.rewardCompletedOrder(lowSubtotalWithHighShip),
+    ).toBeNull();
+    expect(
+      await reputation.rewardCompletedOrder(discountedBelowThreshold),
+    ).toBeNull();
+    expect(await shopScore(s.id)).toBe(55);
+    expect(await count('identity.shop_reputation_rewards')).toBe(1);
+    expect(
+      (
+        await db.query<Array<{ reference_id: string }>>(
+          'SELECT reference_id FROM identity.shop_reputation_rewards',
+        )
+      )[0].reference_id,
+    ).toBe(exactThreshold);
+  });
+
+  it('allows at most one completion reward per buyer-shop pair within 30 days', async () => {
+    const s = await shop();
+    const buyerA = await user();
+    const buyerB = await user();
+    const firstFromA = await order(s.sellerId, 'COMPLETED', 73, {
+      buyerId: buyerA,
+    });
+    const secondFromA = await order(s.sellerId, 'COMPLETED', 73, {
+      buyerId: buyerA,
+    });
+    const firstFromB = await order(s.sellerId, 'COMPLETED', 73, {
+      buyerId: buyerB,
+    });
+
+    expect(await reputation.rewardCompletedOrder(firstFromA)).toMatchObject({
+      newScore: 55,
+      alreadyRewarded: false,
+    });
+    // Replaying the same order preserves idempotent alreadyRewarded response
+    expect(await reputation.rewardCompletedOrder(firstFromA)).toMatchObject({
+      newScore: 55,
+      alreadyRewarded: true,
+    });
+    // Distinct order from same buyer within 30 days is rejected
+    expect(await reputation.rewardCompletedOrder(secondFromA)).toBeNull();
+    // Different buyer succeeds
+    expect(await reputation.rewardCompletedOrder(firstFromB)).toMatchObject({
+      newScore: 60,
+      alreadyRewarded: false,
+    });
+    // Once first reward ages past 30 days, buyerA becomes eligible again
+    await db.query(
+      `UPDATE identity.shop_reputation_rewards
+          SET created_at = NOW() - INTERVAL '31 days'
+        WHERE reference_id = $1`,
+      [firstFromA],
+    );
+    expect(await reputation.rewardCompletedOrder(secondFromA)).toMatchObject({
+      newScore: 65,
+      alreadyRewarded: false,
+    });
   });
 });

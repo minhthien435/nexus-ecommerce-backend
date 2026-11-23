@@ -1,7 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { ExternalReferenceEntity } from '../../integrations/entities/external-reference.entity.js';
 import type { ImportedProduct } from '../../integrations/kaggle/contracts.js';
+import { MIN_SKU_PRICE } from '../catalog-pricing.constants.js';
 import { CategoryEntity } from '../domain/entities/category.entity.js';
 import { ProductImageEntity } from '../domain/entities/product-image.entity.js';
 import { ProductSkuEntity } from '../domain/entities/product-sku.entity.js';
@@ -126,6 +131,12 @@ export class ProductImportService {
       );
 
     for (const input of record.skus) {
+      const price = Number(input.price);
+      if (!Number.isFinite(price) || price < MIN_SKU_PRICE) {
+        throw new BadRequestException(
+          `Giá SKU tối thiểu là ${MIN_SKU_PRICE.toLocaleString('vi-VN')}₫`,
+        );
+      }
       const skuKey = this.refKey(record, 'PRODUCT_SKU', input.externalId);
       const skuRef = await manager.findOne(ExternalReferenceEntity, {
         where: skuKey,

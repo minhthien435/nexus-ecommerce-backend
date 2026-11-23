@@ -22,7 +22,7 @@ const csv = (...rows: string[]) =>
     `\uFEFF${BULK_IMPORT_HEADERS.join(',')}\r\n${rows.join('\r\n')}\r\n`,
   );
 const validRow = (sku = 'SKU-1', stock = '5') =>
-  `"Good, Product",Description,${categoryId},Brand,${sku},100.25,120.25,${stock},500,10.25,8.25,5.25,https://example.com/a.jpg;http://example.com/b.jpg,true`;
+  `"Good, Product",Description,${categoryId},Brand,${sku},100000.25,120000.25,${stock},500,10.25,8.25,5.25,https://example.com/a.jpg;http://example.com/b.jpg,true`;
 
 function harness(
   options: {
@@ -200,6 +200,25 @@ describe('SellerBulkImportService', () => {
       ProductEntity,
       expect.objectContaining({ isAuctionEligible: false }),
     );
+  });
+
+  it('rejects rows with price or original_price below 1,000 VND', async () => {
+    const h = harness();
+    const zeroPriceRow = `"Zero",Desc,${categoryId},Brand,SKU-ZERO,0,,5,500,10,8,5,https://example.com/a.jpg,true`;
+    const lowPriceRow = `"Low",Desc,${categoryId},Brand,SKU-LOW,999,999,5,500,10,8,5,https://example.com/a.jpg,true`;
+    const result = await h.service.import(
+      'seller',
+      csv(zeroPriceRow, lowPriceRow),
+    );
+    expect(result.importedCount).toBe(0);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ row: 2, field: 'price' }),
+        expect.objectContaining({ row: 3, field: 'price' }),
+        expect.objectContaining({ row: 3, field: 'original_price' }),
+      ]),
+    );
+    expect(h.dataSource.transaction).not.toHaveBeenCalled();
   });
 
   it('keeps collision-suffixed slugs within 180 characters', async () => {

@@ -81,6 +81,14 @@ describe('OrderCompletionProcessor', () => {
 
     // Reward phase called independently without externalManager
     expect(test.reputation.rewardCompletedOrder).toHaveBeenCalledTimes(2);
+    expect(test.dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining('(o.subtotal - o.discount_amount) >= $1'),
+      [50_000, 30],
+    );
+    expect(test.dataSource.query).toHaveBeenCalledWith(
+      expect.stringContaining('o2.buyer_id = o.buyer_id'),
+      [50_000, 30],
+    );
     expect(test.reputation.rewardCompletedOrder).toHaveBeenNthCalledWith(
       1,
       'reward-1',

@@ -7,11 +7,12 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { MIN_AUCTION_BID_AMOUNT } from '../auction-lifecycle.constants.js';
 
 export class PlaceBidDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0.01)
+  @Min(MIN_AUCTION_BID_AMOUNT, { message: 'Giá đặt tối thiểu là 1.000₫' })
   amount: number;
 
   @IsOptional()

@@ -10,6 +10,9 @@ export const AUCTION_MIN_DURATION_MINUTES = 60;
 export const AUCTION_MAX_DURATION_HOURS = 168;
 export const MAX_ACTIVE_AUCTIONS_PER_SELLER = 5;
 export const MIN_SELLER_REPUTATION = 70;
+export const MIN_AUCTION_PRICE = 50_000;
+export const MIN_AUCTION_BID_INCREMENT = 10_000;
+export const MIN_AUCTION_BID_AMOUNT = 1_000;
 
 export interface AuctionLifecycleJob {
   auctionId?: string;
