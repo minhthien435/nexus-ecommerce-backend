@@ -40,6 +40,7 @@ import {
 } from './services/gemini-client.service.js';
 import { SearchProductsTool } from './tools/search-products.tool.js';
 import { AuctionReadToolsService } from './tools/auction-read-tools.service.js';
+import { FlashDealReadToolsService } from './tools/flash-deal-read-tools.service.js';
 import {
   AiReadTools,
   ToolExecutorService,
@@ -101,6 +102,7 @@ export class AiAssistantModule {
         { provide: GeminiTransport, useClass: GoogleGeminiTransport },
         SearchProductsTool,
         AuctionReadToolsService,
+        FlashDealReadToolsService,
         UiActionHandler,
         TrendingProductsQuery,
         AiCacheService,
@@ -117,6 +119,7 @@ export class AiAssistantModule {
         AiImageService,
         SearchProductsTool,
         AuctionReadToolsService,
+        FlashDealReadToolsService,
         UiActionHandler,
         AiReadTools,
         ...(options.exports ?? []),

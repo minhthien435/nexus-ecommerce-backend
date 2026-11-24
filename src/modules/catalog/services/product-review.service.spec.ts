@@ -36,6 +36,12 @@ describe('ProductReviewService', () => {
       catalogCache as never,
     ).create('buyer', 'item', { orderItemId: 'item', rating: 5 });
     expect(result).toEqual({ id: 'review' });
+    expect(query.mock.calls[0][0]).toContain('LEFT JOIN identity.shops s');
+    expect(query.mock.calls[0][0]).toContain(
+      'p.shop_id IS NULL AND s.seller_id = p.seller_id',
+    );
+    expect(query.mock.calls[0][0]).toContain("s.status = 'ACTIVE'");
+    expect(query.mock.calls[2][1]).toEqual(['shop']);
     expect(query.mock.calls[4][0]).toContain('UPDATE catalog.products');
     expect(query.mock.calls[5][0]).toContain('UPDATE identity.shops');
     expect(catalogCache.invalidateProduct).toHaveBeenCalledWith('product-slug');
@@ -67,6 +73,22 @@ describe('ProductReviewService', () => {
     );
     await expect(
       service.create('buyer', 'item', { orderItemId: 'item', rating: 4 }),
+    ).rejects.toMatchObject({
+      response: { errorCode: 'REVIEW_ALREADY_EXISTS' },
+    });
+    const wrappedErrorService = new ProductReviewService(
+      {
+        transaction: vi
+          .fn()
+          .mockRejectedValue({ driverError: { code: '23505' } }),
+      } as never,
+      cache() as never,
+    );
+    await expect(
+      wrappedErrorService.create('buyer', 'item', {
+        orderItemId: 'item',
+        rating: 4,
+      }),
     ).rejects.toMatchObject({
       response: { errorCode: 'REVIEW_ALREADY_EXISTS' },
     });
@@ -122,7 +144,7 @@ describe('ProductReviewService', () => {
     const success = {
       query: vi
         .fn()
-        .mockResolvedValueOnce([{ id: 'review', sellerReply: 'Thanks' }]),
+        .mockResolvedValueOnce([[{ id: 'review', sellerReply: 'Thanks' }], 1]),
     };
     await expect(
       new ProductReviewService(success as never, cache() as never).reply(
@@ -132,7 +154,7 @@ describe('ProductReviewService', () => {
       ),
     ).resolves.toMatchObject({ sellerReply: 'Thanks' });
     const missing = {
-      query: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]),
+      query: vi.fn().mockResolvedValueOnce([[], 0]).mockResolvedValueOnce([]),
     };
     await expect(
       new ProductReviewService(missing as never, cache() as never).reply(
@@ -144,7 +166,7 @@ describe('ProductReviewService', () => {
     const replied = {
       query: vi
         .fn()
-        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([[], 0])
         .mockResolvedValueOnce([{ replied: true }]),
     };
     await expect(

@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
   UseGuards,
@@ -50,7 +51,7 @@ export class ProductReviewController {
   @Permissions('PRODUCT.UPDATE')
   reply(
     @CurrentUserId() sellerId: string,
-    @Param('id') reviewId: string,
+    @Param('id', ParseUUIDPipe) reviewId: string,
     @Body() dto: ReplyProductReviewDto,
   ) {
     return this.reviews.reply(sellerId, reviewId, dto);

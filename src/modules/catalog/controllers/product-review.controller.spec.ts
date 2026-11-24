@@ -1,8 +1,9 @@
-import { RequestMethod } from '@nestjs/common';
+import { ParseUUIDPipe, RequestMethod } from '@nestjs/common';
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
   PATH_METADATA,
+  ROUTE_ARGS_METADATA,
 } from '@nestjs/common/constants.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ProductReviewController } from './product-review.controller.js';
@@ -67,5 +68,14 @@ describe('ProductReviewController', () => {
         ProductReviewController.prototype.reply,
       ),
     ).toHaveLength(2);
+    const replyArguments = Reflect.getMetadata(
+      ROUTE_ARGS_METADATA,
+      ProductReviewController,
+      'reply',
+    ) as Record<string, { data?: unknown; pipes?: unknown[] }>;
+    const reviewIdArgument = Object.values(replyArguments).find(
+      (argument) => argument.data === 'id',
+    );
+    expect(reviewIdArgument?.pipes).toContain(ParseUUIDPipe);
   });
 });

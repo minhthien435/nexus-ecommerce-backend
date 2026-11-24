@@ -1,15 +1,17 @@
 import { isUUID } from 'class-validator';
 import { BadRequestException } from '@nestjs/common';
+import type { AiChatLanguage } from '../contracts/ai-assistant.types.js';
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type ImageMime = (typeof IMAGE_MIMES)[number];
+export const AI_CHAT_LANGUAGES = ['vi', 'en'] as const;
 
 export class AiChatDto {
   sessionId!: string;
   message!: string;
   image?: { url: string; key: string };
-  context?: { currentPath?: string };
+  context?: { currentPath?: string; language?: AiChatLanguage };
 }
 
 export function strictObject(
@@ -79,7 +81,7 @@ export function parseAiChat(value: unknown): AiChatDto {
       throw new Error('message');
     dto.message = input.message.trim();
     if (input.context !== undefined) {
-      const context = strictObject(input.context, ['currentPath']);
+      const context = strictObject(input.context, ['currentPath', 'language']);
       const path = optionalText(context.currentPath, 2048);
       if (path) {
         const decoded = decodeURIComponent(path);
@@ -97,7 +99,20 @@ export function parseAiChat(value: unknown): AiChatDto {
         )
           throw new Error('context');
       }
-      dto.context = { currentPath: path };
+      let language: AiChatLanguage | undefined;
+      if (context.language !== undefined) {
+        if (
+          typeof context.language !== 'string' ||
+          !AI_CHAT_LANGUAGES.includes(context.language as AiChatLanguage)
+        ) {
+          throw new Error('context');
+        }
+        language = context.language as AiChatLanguage;
+      }
+      dto.context = {
+        ...(path !== undefined ? { currentPath: path } : {}),
+        ...(language !== undefined ? { language } : {}),
+      };
     }
     return dto;
   } catch (error) {
