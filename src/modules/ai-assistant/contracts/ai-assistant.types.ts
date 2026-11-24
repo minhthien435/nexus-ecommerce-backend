@@ -1,3 +1,5 @@
+export type AiChatLanguage = 'vi' | 'en';
+
 export interface AiImageInput {
   url: string;
   key: string;
@@ -8,6 +10,7 @@ export interface AiChatContext {
   currentUrl?: string;
   currentProductSlug?: string;
   currentAuctionIdOrCode?: string;
+  language?: AiChatLanguage;
   userId?: string;
 }
 

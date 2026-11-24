@@ -86,6 +86,9 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
       AI_MAX_TOOL_ROUNDS: '4',
       AI_RATE_LIMIT_GUEST: '10',
       AI_RATE_LIMIT_USER: '20',
+      REDIS_HOST: '127.0.0.1',
+      REDIS_PORT: '1',
+      REDIS_CONNECT_TIMEOUT_MS: '20',
       SUPABASE_URL: 'https://project.supabase.co',
       SUPABASE_STORAGE_BUCKET: 'nexus-media',
     };
@@ -219,6 +222,7 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'get_price_insight',
         'search_auctions',
         'get_auction_detail',
+        'get_flash_deals',
       ]);
 
       // 2) User explicitly asks to open product -> NAVIGATE allowed
@@ -336,6 +340,7 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'search_auctions',
         'get_auction_detail',
         'get_my_auction_participations',
+        'get_flash_deals',
       ]);
 
       // Missing API key degrades cleanly to 503 AI_UNAVAILABLE
@@ -533,6 +538,129 @@ describe('AI Assistant Live Integration (Minh + Hoang)', () => {
         'gemini-3.1-flash-lite',
         'gemini-3.1-flash-lite',
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('executes get_flash_deals with context.language and rejects unknown context keys with 400', async () => {
+    const endsAt = new Date(Date.now() + 3_600_000).toISOString();
+    dbQuery
+      .mockResolvedValueOnce([
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          title: 'Midday Flash Sale',
+          slug: 'midday-flash-sale',
+          startsAt: new Date(Date.now() - 600_000).toISOString(),
+          endsAt,
+          itemCount: 1,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          campaignId: '33333333-3333-4333-8333-333333333333',
+          campaignTitle: 'Midday Flash Sale',
+          campaignSlug: 'midday-flash-sale',
+          endsAt,
+          slug: 'ao-polo-nexus',
+          name: 'Áo Polo Nexus',
+          imageUrl: 'https://cdn.nexus.vn/polo.jpg',
+          currency: 'VND',
+          flashPrice: '149000.00',
+          regularPrice: '250000.00',
+          discountPercent: 40,
+          remainingQty: 5,
+          maxPerBuyer: 2,
+          unitsSold: 15,
+          shopName: 'Nexus Fashion',
+          shopSlug: 'nexus-fashion',
+        },
+      ]);
+
+    geminiGenerate
+      .mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  functionCall: {
+                    id: 'fc-fd-1',
+                    name: 'get_flash_deals',
+                    args: { state: 'ACTIVE' },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  functionCall: {
+                    id: 'fc-fd-2',
+                    name: 'ui_action',
+                    args: { type: 'SHOW_PRODUCTS' },
+                  },
+                },
+                {
+                  text: 'Midday Flash Sale is live! Áo Polo Nexus is 40% off at 149,000₫ (regular 250,000₫), with 5 left.',
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+    const app = await createTestApp();
+    try {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/ai/chat')
+        .send({
+          sessionId,
+          message: 'What Flash Deals are live right now?',
+          context: { currentPath: '/flash-deals', language: 'en' },
+        })
+        .expect(200);
+
+      expect(res.body.data.reply).toContain('Midday Flash Sale');
+      expect(res.body.data.products).toEqual([
+        {
+          slug: 'ao-polo-nexus',
+          name: 'Áo Polo Nexus',
+          minPrice: '149000.00',
+          originalPrice: '250000.00',
+          unitsSold: 15,
+          shop: { name: 'Nexus Fashion', slug: 'nexus-fashion' },
+          imageUrl: 'https://cdn.nexus.vn/polo.jpg',
+        },
+      ]);
+      expect(res.body.data.action).toEqual({ type: 'SHOW_PRODUCTS' });
+      expect(res.body.data.suggestions).toEqual([
+        'Is this product in stock or on Flash Deal?',
+        'Show more trending products',
+        'Compare prices of these products',
+      ]);
+      expect(
+        geminiGenerate.mock.calls[0][0].config.systemInstruction,
+      ).toContain('TIẾNG ANH (`en`)');
+
+      // Unknown key in context must still be rejected with 400
+      const badRes = await request(app.getHttpServer())
+        .post('/api/v1/ai/chat')
+        .send({
+          sessionId,
+          message: 'Hello',
+          context: { currentPath: '/', language: 'en', hacked: true },
+        })
+        .expect(400);
+      expect(badRes.body.errorCode).toBe('AI_MESSAGE_INVALID');
     } finally {
       await app.close();
     }
