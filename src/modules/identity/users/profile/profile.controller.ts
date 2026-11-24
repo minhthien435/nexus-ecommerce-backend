@@ -16,7 +16,7 @@ import { ProfileService } from './profile.service.js';
 export class ProfileController {
   constructor(private readonly profiles: ProfileService) {}
 
-  @Get('api/v1/auth/me')
+  @Get(['api/v1/auth/me', 'api/v1/users/profile'])
   getProfile(@CurrentUserId() userId: string) {
     return this.profiles.getProfile(userId);
   }

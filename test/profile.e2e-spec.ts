@@ -16,6 +16,7 @@ const publicProfile = {
   fullName: 'User',
   phone: null,
   avatarUrl: null,
+  preferredLanguage: null,
   roles: ['CUSTOMER'],
   trustLevel: 'STANDARD',
   profileCompletionRewarded: false,
@@ -77,15 +78,32 @@ describe('Profile API (e2e)', () => {
       .expect(401);
   });
 
-  it('gets the current public profile without credentials', async () => {
-    const response = await request(app.getHttpServer())
-      .get('/api/v1/auth/me')
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-    expect(response.body).toEqual(publicProfile);
-    expect(JSON.stringify(response.body)).not.toMatch(/password|hash/i);
-    expect(profiles.getProfile).toHaveBeenCalledWith(userId);
-  });
+  it.each(['/api/v1/auth/me', '/api/v1/users/profile'])(
+    'gets the current public profile at %s',
+    async (path) => {
+      const response = await request(app.getHttpServer())
+        .get(path)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(response.body).toEqual(publicProfile);
+      expect(JSON.stringify(response.body)).not.toMatch(/password|hash/i);
+      expect(profiles.getProfile).toHaveBeenCalledWith(userId);
+    },
+  );
+
+  it.each(['en', 'vi'])(
+    'updates the preferred language to %s',
+    async (preferredLanguage) => {
+      await request(app.getHttpServer())
+        .patch('/api/v1/users/profile')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ preferredLanguage })
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.preferredLanguage).toBe(preferredLanguage),
+        );
+    },
+  );
 
   it('patches nullable fields and rejects empty, unknown, and invalid payloads', async () => {
     await request(app.getHttpServer())
@@ -109,6 +127,8 @@ describe('Profile API (e2e)', () => {
       { fullName: ' ' },
       { phone: '123' },
       { avatarUrl: 'not-a-url' },
+      { preferredLanguage: 'fr' },
+      { preferredLanguage: null },
     ]) {
       await request(app.getHttpServer())
         .patch('/api/v1/users/profile')

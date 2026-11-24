@@ -10,6 +10,7 @@ import { ProfileUserEntity } from '../entities/profile-user.entity.js';
 import { UserAddressEntity } from '../entities/user-address.entity.js';
 import { AddressService } from '../addresses/address.service.js';
 import { IdentityReputationApi } from '../../identity-reputation.api.js';
+import type { PreferredLanguage } from '../../domain/preferred-language.js';
 
 export type PublicProfile = {
   id: string;
@@ -17,6 +18,7 @@ export type PublicProfile = {
   fullName: string;
   phone: string | null;
   avatarUrl: string | null;
+  preferredLanguage: PreferredLanguage | null;
   roles: string[];
   reputationScore: number;
   trustLevel: string;
@@ -43,6 +45,7 @@ export class ProfileService {
         fullName: true,
         phone: true,
         avatarUrl: true,
+        preferredLanguage: true,
       },
     });
     if (!user) throw new NotFoundException('User not found');
@@ -86,6 +89,7 @@ export class ProfileService {
       fullName: user.fullName,
       phone: user.phone,
       avatarUrl: user.avatarUrl,
+      preferredLanguage: user.preferredLanguage,
       roles: roleRows.map(({ code }) => code),
       reputationScore,
       trustLevel: trustRows[0]?.trust_level ?? 'STANDARD',
@@ -117,7 +121,13 @@ export class ProfileService {
           .execute();
         if (result.affected !== 1)
           throw new NotFoundException('User not found');
-        await this.reputation.rewardProfileCompletion(userId, manager);
+        if (
+          input.fullName !== undefined ||
+          input.phone !== undefined ||
+          input.avatarUrl !== undefined
+        ) {
+          await this.reputation.rewardProfileCompletion(userId, manager);
+        }
       });
     } catch (error: unknown) {
       if (
