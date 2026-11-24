@@ -7,6 +7,7 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 import type { UserStatus } from './user-status.js';
+import type { PreferredLanguage } from './preferred-language.js';
 
 @Entity({ name: 'users', schema: 'identity' })
 export class UserEntity {
@@ -21,6 +22,14 @@ export class UserEntity {
 
   @Column({ type: 'varchar', length: 150, name: 'full_name' })
   fullName: string;
+
+  @Column({
+    type: 'varchar',
+    length: 5,
+    name: 'preferred_language',
+    nullable: true,
+  })
+  preferredLanguage: PreferredLanguage | null;
 
   @Column({
     type: 'varchar',

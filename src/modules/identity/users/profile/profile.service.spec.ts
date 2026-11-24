@@ -8,6 +8,7 @@ const user = {
   email: 'user@example.com',
   fullName: 'User',
   phone: null,
+  preferredLanguage: null,
   avatarUrl: null,
 };
 
@@ -128,6 +129,21 @@ describe('ProfileService', () => {
       test.service.updateProfile(userId, { fullName: 'Updated' }),
     ).rejects.toThrow('reward failed');
     expect(test.users.findOne).not.toHaveBeenCalled();
+  });
+
+  it('saves and reads a language-only change independently of completion rewards', async () => {
+    const test = setup();
+    test.users.findOne.mockResolvedValue({ ...user, preferredLanguage: 'vi' });
+    await expect(
+      test.service.updateProfile(userId, { preferredLanguage: 'vi' }),
+    ).resolves.toMatchObject({ preferredLanguage: 'vi' });
+    expect(test.builder.set).toHaveBeenCalledWith({ preferredLanguage: 'vi' });
+    expect(test.users.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ preferredLanguage: true }),
+      }),
+    );
+    expect(test.reputation.rewardProfileCompletion).not.toHaveBeenCalled();
   });
 
   it('maps phone uniqueness conflicts and concurrent soft-delete to HTTP errors', async () => {
