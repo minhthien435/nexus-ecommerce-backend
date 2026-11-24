@@ -1,6 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
+export type AiActiveFlashDealInfo = {
+  campaignTitle: string;
+  flashPrice: string;
+  regularPrice: string;
+  discountPercent: number;
+  remainingQty: number;
+  maxPerBuyer: number;
+  endsAt: string;
+};
+
 export type AiProductProjection = {
   slug: string;
   name: string;
@@ -14,6 +24,7 @@ export type AiProductProjection = {
   currency: string;
   activeVariantCount: number;
   unitsSold: number;
+  activeFlashDeal?: AiActiveFlashDealInfo | null;
 };
 
 const CURRENT_PRODUCT_PROJECTION = `
@@ -23,7 +34,8 @@ const CURRENT_PRODUCT_PROJECTION = `
          image.url AS "imageUrl", prices.min_price::text AS "minPrice",
          prices.max_price::text AS "maxPrice", prices.original_price::text AS "originalPrice",
          prices.currency, prices.variant_count::int AS "activeVariantCount",
-         COALESCE(sold.units_sold, 0)::int AS "unitsSold"
+         COALESCE(sold.units_sold, 0)::int AS "unitsSold",
+         flash_deal.info AS "activeFlashDeal"
     FROM catalog.products p
     JOIN catalog.categories c ON c.id = p.category_id AND c.is_active = true AND c.deleted_at IS NULL
     JOIN identity.shops shop
@@ -47,6 +59,35 @@ const CURRENT_PRODUCT_PROJECTION = `
        AND o.created_at >= NOW() - INTERVAL '30 days'
       WHERE oi.product_id = p.id
     ) sold ON true
+    LEFT JOIN LATERAL (
+      SELECT json_build_object(
+               'campaignTitle', fdc.title,
+               'flashPrice', fdi.flash_price::text,
+               'regularPrice', GREATEST(COALESCE(fs.original_price, fs.price), fs.price)::text,
+               'discountPercent', ROUND((1 - fdi.flash_price / NULLIF(GREATEST(COALESCE(fs.original_price, fs.price), fs.price), 0)) * 100)::int,
+               'remainingQty', LEAST(fi.available_qty, fdi.quota_qty - fdi.sold_qty)::int,
+               'maxPerBuyer', fdi.max_per_buyer::int,
+               'endsAt', fdc.ends_at
+             ) AS info
+        FROM catalog.flash_deal_items fdi
+        JOIN catalog.flash_deal_campaigns fdc
+          ON fdc.id = fdi.campaign_id
+         AND fdc.status IN ('ACTIVE', 'SCHEDULED')
+         AND fdc.starts_at <= NOW()
+         AND fdc.ends_at > NOW()
+        JOIN catalog.product_skus fs
+          ON fs.id = fdi.sku_id AND fs.product_id = p.id AND fs.is_active = true
+        JOIN LATERAL (
+          SELECT SUM(ii.available_qty)::int AS available_qty
+            FROM fulfillment.inventory_items ii
+           WHERE ii.sku_id = fs.id
+          HAVING SUM(ii.available_qty) > 0
+        ) fi ON true
+       WHERE fdi.status = 'ACTIVE'
+         AND fdi.sold_qty < fdi.quota_qty
+       ORDER BY fdi.flash_price ASC, fdc.ends_at ASC, fdi.id ASC
+       LIMIT 1
+    ) flash_deal ON true
    WHERE p.status = 'ACTIVE' AND p.deleted_at IS NULL`;
 
 @Injectable()

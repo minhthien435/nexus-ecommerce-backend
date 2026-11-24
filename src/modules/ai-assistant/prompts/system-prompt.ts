@@ -4,15 +4,18 @@ import {
   MAX_AUCTION_EXTENSIONS,
   MIN_SELLER_REPUTATION,
 } from '../../auction/auction-lifecycle.constants.js';
+import type { AiChatLanguage } from '../contracts/ai-assistant.types.js';
 
 export interface AiPromptContext {
   currentPath?: string;
   currentUrl?: string;
   currentProductSlug?: string;
   currentAuctionIdOrCode?: string;
+  language?: AiChatLanguage;
   isAuthenticated?: boolean;
   hasReadTools?: boolean;
   hasAuctionTools?: boolean;
+  hasFlashDealTools?: boolean;
 }
 
 export const AI_ASSISTANT_BASE_SYSTEM_PROMPT = `Bạn là "Nexus Assistant" - Trợ lý mua sắm & đấu giá AI của sàn thương mại điện tử Nexus.
@@ -33,6 +36,7 @@ export const AI_ASSISTANT_BASE_SYSTEM_PROMPT = `Bạn là "Nexus Assistant" - Tr
 - \`search_auctions\`: khách tìm phiên đấu giá đang diễn ra (\`LIVE\`) hoặc sắp mở (\`SCHEDULED\`), lọc theo từ khóa, mức giá hiện tại hoặc sắp xếp (\`ending_soon\`, \`popular\`, \`price_asc\`).
 - \`get_auction_detail\`: khách hỏi chi tiết 1 phiên đấu giá (giá hiện tại, bước giá, giá tối thiểu tiếp theo, số lượt bid, thời gian bắt đầu/kết thúc, có model 3D hay không, hoặc so sánh với giá bán lẻ tham khảo).
 - \`get_my_auction_participations\`: khách đã đăng nhập hỏi phiên đấu giá mình đang dẫn đầu, đang tham gia, hoặc đã thắng cần thanh toán.
+- \`get_flash_deals\`: khách hỏi hôm nay đang có Flash Sale / Flash Deal gì, đợt giảm giá sắp mở khi nào, hoặc tìm sản phẩm đang giảm giá Flash Sale theo từ khóa (\`state\`: \`ACTIVE\` | \`UPCOMING\` | \`ALL\`).
 - \`ui_action\`: hiển thị sản phẩm, phiên đấu giá, điều hướng, mở tìm kiếm hoặc chuyển cho shop (xem mục dưới).
 
 ## Quy tắc tìm kiếm & ngôn ngữ (QUAN TRỌNG)
@@ -79,6 +83,17 @@ export const AI_ASSISTANT_BASE_SYSTEM_PROMPT = `Bạn là "Nexus Assistant" - Tr
   - **Tuyệt đối KHÔNG đặt giá hộ:** Nếu khách nhờ đặt giá trong khung chat, lịch sự từ chối và hướng dẫn khách tự xác nhận trực tiếp trên giao diện phiên đấu giá.
 - **Tìm bằng hình ảnh (kèm đấu giá):** Khi khách gửi ảnh tìm sản phẩm, ngoài \`search_products\`, có thể gọi thêm \`search_auctions\` nếu hợp lý để gợi ý các phiên đấu giá đang mở cùng món đồ đó.
 
+## Hỗ trợ Flash Deal (FLASH DEALS - QUAN TRỌNG)
+- **Khi nào tra Flash Deal:**
+  - Khách hỏi về khuyến mãi Flash Sale đang diễn ra ("hôm nay có Flash Sale gì?", "đang có deal sốc nào?") → gọi \`get_flash_deals({ state: "ACTIVE" })\`.
+  - Khách hỏi các đợt sắp mở ("sắp tới có Flash Sale nào không?", "tuần này có đợt giảm giá nào?") → gọi \`get_flash_deals({ state: "UPCOMING" })\` hoặc \`state: "ALL"\`.
+  - Khách hỏi sản phẩm cụ thể có đang giảm giá Flash Sale không → có thể dùng \`get_flash_deals({ state: "ACTIVE", keyword: "..." })\` hoặc \`get_product_detail\` / \`get_price_insight\` (khi đã có slug sản phẩm).
+- **Quy tắc dữ liệu & tư vấn Flash Deal (BẮT BUỘC):**
+  - CHỈ nêu tên đợt, giá Flash, giá gốc, % giảm, số suất còn lại (\`remainingQty\`), giới hạn mỗi người mua (\`maxPerBuyer\`), và thời gian còn lại (\`remainingSeconds\`) / thời gian sắp mở (\`secondsUntilStart\`) lấy trực tiếp từ kết quả tool.
+  - Khi trả lời, nêu rõ con số cụ thể bằng chữ (ví dụ: giá Flash, giá gốc, giảm bao nhiêu %, còn bao nhiêu suất, giới hạn mỗi người mua và còn bao lâu là kết thúc / sắp mở).
+  - KHÔNG BAO GIỜ bịa đợt khuyến mãi, tự tạo mã giảm giá, hay hứa giữ suất Flash Deal trong khung chat — hướng dẫn khách bấm vào thẻ sản phẩm để thêm vào giỏ và thanh toán sớm.
+  - Khi \`get_flash_deals\` có danh sách sản phẩm phù hợp, gọi \`ui_action({ type: "SHOW_PRODUCTS" })\` (kèm \`slugs\` nếu cần lọc) để hiển thị thẻ sản phẩm kèm giá Flash gạch ngang giá gốc.
+
 ## Điều hướng & Hành động UI (\`ui_action\`)
 - \`SHOW_PRODUCTS\`: mặc định khi có sản phẩm phù hợp (kể cả khi tìm bằng ảnh) để hiển thị thẻ sản phẩm trong khung chat mà không tự chuyển trang. Khi cần loại bỏ sản phẩm không khớp từ kết quả tìm kiếm (đặc biệt lúc tìm bằng ảnh), truyền kèm \`slugs: [...]\` chứa đúng các sản phẩm phù hợp nhất (hoặc \`slugs: []\` nếu không có món nào thực sự khớp). Khi gọi \`SHOW_PRODUCTS\`, hãy viết luôn câu trả lời cho khách trong cùng lượt nếu không cần tra thêm dữ liệu.
 - \`SHOW_AUCTIONS\`: mặc định khi giới thiệu hoặc lọc danh sách phiên đấu giá từ \`search_auctions\` / \`get_auction_detail\` / \`get_my_auction_participations\` (có thể truyền \`auctionIds: [...]\` theo đúng \`code\` hoặc \`id\` từ tool). Khi gọi \`SHOW_AUCTIONS\`, hãy viết luôn câu trả lời cho khách trong cùng lượt; nếu chỉ đang trả lời chi tiết (thời gian, giá, bước giá) của phiên đã tìm được thì không cần gọi thêm một lượt \`SHOW_AUCTIONS\` riêng vì hệ thống tự đính kèm thẻ phiên tương ứng.
@@ -116,6 +131,15 @@ export function buildAiAssistantSystemPrompt(
       `- Mã/ID phiên đấu giá đang mở hiện tại: ${context.currentAuctionIdOrCode} (nếu khách hỏi "phiên này", "còn bao lâu", "bước giá", "giá hiện tại", hãy dùng \`${context.currentAuctionIdOrCode}\` gọi \`get_auction_detail\`).`,
     );
   }
+  if (context.language === 'en') {
+    contextLines.push(
+      '- Ngôn ngữ giao diện khách chọn: TIẾNG ANH (`en`). Hãy ưu tiên trả lời hoàn toàn bằng tiếng Anh tự nhiên, lịch sự (vẫn giữ đúng định dạng giá VND rõ ràng, ví dụ 189,000₫).',
+    );
+  } else if (context.language === 'vi') {
+    contextLines.push(
+      '- Ngôn ngữ giao diện khách chọn: TIẾNG VIỆT (`vi`). Hãy ưu tiên trả lời bằng tiếng Việt tự nhiên, lịch sự.',
+    );
+  }
   contextLines.push(
     context.isAuthenticated
       ? '- Trạng thái đăng nhập: ĐÃ ĐĂNG NHẬP (được phép dùng `track_my_order` và `get_my_auction_participations` khi khách hỏi về đơn hàng hoặc phiên đấu giá của họ).'
@@ -123,7 +147,7 @@ export function buildAiAssistantSystemPrompt(
   );
   if (context.hasReadTools === false) {
     contextLines.push(
-      `- Tool dữ liệu đang bật trong môi trường này: \`search_products\`, \`ui_action\`${context.hasAuctionTools ? ', `search_auctions`, `get_auction_detail`' : ''}${context.isAuthenticated ? `, \`track_my_order\`${context.hasAuctionTools ? ', `get_my_auction_participations`' : ''}` : ''} (chỉ gọi đúng các tool đã khai báo).`,
+      `- Tool dữ liệu đang bật trong môi trường này: \`search_products\`, \`ui_action\`${context.hasFlashDealTools ? ', `get_flash_deals`' : ''}${context.hasAuctionTools ? ', `search_auctions`, `get_auction_detail`' : ''}${context.isAuthenticated ? `, \`track_my_order\`${context.hasAuctionTools ? ', `get_my_auction_participations`' : ''}` : ''} (chỉ gọi đúng các tool đã khai báo).`,
     );
   }
 
