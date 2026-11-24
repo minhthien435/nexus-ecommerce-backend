@@ -41,10 +41,13 @@ export class ProductReviewService {
         async (manager) => {
           const rows = await manager.query<EligibilityRow[]>(
             `SELECT oi.id AS order_item_id, oi.order_id, o.buyer_id, o.seller_id,
-                    oi.product_id, oi.sku_id, p.shop_id, p.slug AS product_slug, o.status
+                    oi.product_id, oi.sku_id, s.id AS shop_id, p.slug AS product_slug, o.status
              FROM commerce.order_items oi
              JOIN commerce.orders o ON o.id = oi.order_id
              JOIN catalog.products p ON p.id = oi.product_id
+             LEFT JOIN identity.shops s
+               ON (s.id = p.shop_id OR (p.shop_id IS NULL AND s.seller_id = p.seller_id))
+              AND s.status = 'ACTIVE' AND s.deleted_at IS NULL
             WHERE oi.id = $1 AND o.buyer_id = $2
             LIMIT 1`,
             [orderItemId, buyerId.toLowerCase()],
@@ -110,7 +113,7 @@ export class ProductReviewService {
       await this.cache.invalidateProduct(committed.productSlug);
       return committed.review;
     } catch (error) {
-      if ((error as { code?: string }).code === '23505') {
+      if (this.isUniqueViolation(error)) {
         throw new ConflictException({ errorCode: 'REVIEW_ALREADY_EXISTS' });
       }
       throw error;
@@ -137,12 +140,13 @@ export class ProductReviewService {
   }
 
   async reply(sellerId: string, reviewId: string, dto: ReplyProductReviewDto) {
-    const rows = await this.dataSource.query<Array<Record<string, unknown>>>(
+    const raw: unknown = await this.dataSource.query(
       `UPDATE catalog.product_reviews SET seller_reply = $3, seller_replied_at = now(), updated_at = now()
         WHERE id = $1 AND seller_id = $2 AND seller_reply IS NULL
         RETURNING id, seller_reply AS "sellerReply", seller_replied_at AS "sellerRepliedAt"`,
       [reviewId, sellerId.toLowerCase(), dto.reply.trim()],
     );
+    const rows = this.extractMutationRows<Record<string, unknown>>(raw);
     if (rows[0]) return rows[0];
     const owned = await this.dataSource.query<Array<{ replied: boolean }>>(
       `SELECT seller_reply IS NOT NULL AS replied FROM catalog.product_reviews WHERE id = $1 AND seller_id = $2`,
@@ -201,5 +205,28 @@ export class ProductReviewService {
         distribution.map((row) => [row.rating, Number(row.count)]),
       ),
     };
+  }
+
+  private extractMutationRows<T>(result: unknown): T[] {
+    if (!Array.isArray(result)) return [];
+    if (
+      result.length === 2 &&
+      Array.isArray(result[0]) &&
+      (typeof result[1] === 'number' || result[1] === null)
+    ) {
+      return result[0] as T[];
+    }
+    return result as T[];
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const candidate = error as {
+      code?: unknown;
+      driverError?: { code?: unknown };
+    };
+    return (
+      candidate.code === '23505' || candidate.driverError?.code === '23505'
+    );
   }
 }

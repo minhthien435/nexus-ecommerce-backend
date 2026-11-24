@@ -10,16 +10,14 @@ import {
 
 describe('product review DTOs', () => {
   it('accepts a valid review and rejects malformed review fields', async () => {
-    expect(
-      await validate(
-        plainToInstance(CreateProductReviewDto, {
-          orderItemId: '11111111-1111-4111-8111-111111111111',
-          rating: 5,
-          comment: 'Great',
-          imageUrls: ['https://example.com/a.jpg'],
-        }),
-      ),
-    ).toHaveLength(0);
+    const valid = plainToInstance(CreateProductReviewDto, {
+      orderItemId: '11111111-1111-4111-8111-111111111111',
+      rating: 5,
+      comment: '  Great  ',
+      imageUrls: ['https://example.com/a.jpg'],
+    });
+    expect(valid.comment).toBe('Great');
+    expect(await validate(valid)).toHaveLength(0);
     expect(
       await validate(
         plainToInstance(CreateProductReviewDto, {
@@ -30,6 +28,20 @@ describe('product review DTOs', () => {
         }),
       ),
     ).not.toHaveLength(0);
+  });
+
+  it.each([
+    'ftp://example.com/a.jpg',
+    'javascript:alert(1)',
+    'example.com/a.jpg',
+    `https://example.com/${'x'.repeat(2049)}`,
+  ])('rejects invalid review image URL %s', async (imageUrl) => {
+    const dto = plainToInstance(CreateProductReviewDto, {
+      orderItemId: '11111111-1111-4111-8111-111111111111',
+      rating: 5,
+      imageUrls: [imageUrl],
+    });
+    expect(await validate(dto)).not.toHaveLength(0);
   });
 
   it('rejects invalid paging and rating filters', async () => {
