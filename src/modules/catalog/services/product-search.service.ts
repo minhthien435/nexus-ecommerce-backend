@@ -22,6 +22,8 @@ type ProductListRow = {
   min_price: string | null;
   currency: string | null;
   primary_image_url: string | null;
+  rating_avg: string | number;
+  review_count: number;
   cat_id: string | null;
   cat_name: string | null;
   cat_slug: string | null;
@@ -50,6 +52,8 @@ export type ProductListItem = {
   primaryImageUrl: string | null;
   createdAt: Date | string;
   category: ProductCategory | null;
+  ratingAvg: number;
+  reviewCount: number;
 };
 
 export type ProductSearchPage = {
@@ -105,6 +109,8 @@ export type ProductDetail = {
   brand: string | null;
   isAuctionEligible: boolean;
   attributes: Record<string, unknown> | null;
+  ratingAvg: number;
+  reviewCount: number;
   createdAt: Date | string;
   updatedAt: Date | string;
   category: ProductCategory | null;
@@ -203,6 +209,8 @@ export class ProductSearchService {
         shop_reputation_score: number | null;
         shop_rating_avg: string | number | null;
         shop_review_count: number | null;
+        rating_avg: string | number;
+        review_count: number;
         category_id: string;
         name: string;
         slug: string;
@@ -227,6 +235,7 @@ export class ProductSearchService {
               shop.reputation_score AS shop_reputation_score,
               shop.rating_avg AS shop_rating_avg,
               shop.review_count AS shop_review_count,
+              p.rating_avg, p.review_count,
               p.category_id, p.name, p.slug,
               p.description, p.brand, p.is_auction_eligible, p.attributes,
               p.created_at, p.updated_at,
@@ -343,6 +352,8 @@ export class ProductSearchService {
       brand: product.brand,
       isAuctionEligible: product.is_auction_eligible,
       attributes: product.attributes,
+      ratingAvg: Number(product.rating_avg ?? 0),
+      reviewCount: Number(product.review_count ?? 0),
       createdAt: product.created_at,
       updatedAt: product.updated_at,
       category: this.toCategory(product),
@@ -518,7 +529,7 @@ export class ProductSearchService {
     const rows = await this.dataSource.query<ProductListRow[]>(
       `${categoryCte}
        SELECT p.id, p.category_id, p.name, p.slug, p.brand,
-               p.is_auction_eligible, p.created_at, price.default_sku_id,
+               p.is_auction_eligible, p.created_at, p.rating_avg, p.review_count, price.default_sku_id,
                price.min_price::text, price.currency, image.url AS primary_image_url,
                c.id AS cat_id, c.name AS cat_name, c.slug AS cat_slug
          FROM catalog.products p
@@ -571,6 +582,8 @@ export class ProductSearchService {
         primaryImageUrl: row.primary_image_url,
         createdAt: row.created_at,
         category: this.toCategory(row),
+        ratingAvg: Number(row.rating_avg ?? 0),
+        reviewCount: Number(row.review_count ?? 0),
       })),
       meta: {
         page: query.page,
