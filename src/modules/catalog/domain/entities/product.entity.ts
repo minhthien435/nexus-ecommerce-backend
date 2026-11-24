@@ -54,6 +54,18 @@ export class ProductEntity {
   @Column({ type: 'jsonb', nullable: true })
   attributes: Record<string, unknown> | null;
 
+  @Column({
+    name: 'rating_avg',
+    type: 'numeric',
+    precision: 3,
+    scale: 2,
+    default: 0,
+  })
+  ratingAvg: string;
+
+  @Column({ name: 'review_count', type: 'integer', default: 0 })
+  reviewCount: number;
+
   @Column({ name: 'search_vector', type: 'tsvector', nullable: true })
   searchVector: string | null;
 

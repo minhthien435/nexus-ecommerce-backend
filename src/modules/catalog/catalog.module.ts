@@ -32,6 +32,9 @@ import { AuctionEntity } from '../auction/entities/auction.entity.js';
 import { WarehouseEntity } from '../fulfillment/domain/entities/warehouse.entity.js';
 import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-item.entity.js';
 import { FlashDealModule } from './flash-deal.module.js';
+import { ProductReviewEntity } from './domain/entities/product-review.entity.js';
+import { ProductReviewController } from './controllers/product-review.controller.js';
+import { ProductReviewService } from './services/product-review.service.js';
 
 @Module({
   imports: [
@@ -45,6 +48,7 @@ import { FlashDealModule } from './flash-deal.module.js';
       AuctionEntity,
       WarehouseEntity,
       InventoryItemEntity,
+      ProductReviewEntity,
     ]),
     FlashDealModule,
     IdentityModule,
@@ -57,6 +61,7 @@ import { FlashDealModule } from './flash-deal.module.js';
     ProductSkuController,
     SellerProductController,
     PublicShopController,
+    ProductReviewController,
   ],
   providers: [
     CatalogCacheService,
@@ -67,6 +72,7 @@ import { FlashDealModule } from './flash-deal.module.js';
     SellerProductService,
     PublicShopService,
     SellerBulkImportService,
+    ProductReviewService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,

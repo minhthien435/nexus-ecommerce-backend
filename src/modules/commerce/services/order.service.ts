@@ -993,6 +993,7 @@ export class OrderService {
     await Promise.all([
       this.enrichOrdersWithImages([order]),
       this.attachShopInfo([order]),
+      this.attachReviewIds(order),
     ]);
     if (order.checkoutSession) {
       order.paymentMethod = order.checkoutSession.paymentMethod;
@@ -1026,6 +1027,21 @@ export class OrderService {
           }
         : null,
     };
+  }
+
+  private async attachReviewIds(order: OrderEntity): Promise<void> {
+    const items = order.items ?? [];
+    if (items.length === 0 || typeof this.dataSource?.query !== 'function')
+      return;
+    const rows = await this.dataSource.query<
+      Array<{ orderItemId: string; reviewId: string }>
+    >(
+      `SELECT order_item_id AS "orderItemId", id AS "reviewId"
+         FROM catalog.product_reviews WHERE order_item_id = ANY($1::uuid[])`,
+      [items.map((item) => item.id)],
+    );
+    const byItem = new Map(rows.map((row) => [row.orderItemId, row.reviewId]));
+    for (const item of items) item.reviewId = byItem.get(item.id) ?? null;
   }
 
   private async reconcileExpiredPayosOrders(
