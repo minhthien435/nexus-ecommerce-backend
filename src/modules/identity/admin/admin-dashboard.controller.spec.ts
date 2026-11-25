@@ -30,7 +30,7 @@ describe('AdminDashboardController (TypeORM)', () => {
     };
     mockProductRepo = {
       count: vi.fn(),
-      find: vi.fn(),
+      createQueryBuilder: vi.fn(),
     };
     mockSkuRepo = {
       count: vi.fn(),
@@ -92,15 +92,37 @@ describe('AdminDashboardController (TypeORM)', () => {
       .mockResolvedValueOnce(50) // total
       .mockResolvedValueOnce(45) // active
       .mockResolvedValueOnce(5); // inactive
-    mockProductRepo.find.mockResolvedValueOnce([
-      {
-        id: 'p-1',
-        name: 'Product One',
-        status: 'ACTIVE',
-        brand: 'NexusBrand',
-        createdAt: new Date('2026-10-27T00:00:00Z'),
-      },
-    ]);
+    const recentProductsQb = {
+      leftJoin: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      addSelect: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      getRawMany: vi.fn().mockResolvedValueOnce([
+        {
+          id: 'p-1',
+          name: 'Product One',
+          slug: 'product-one',
+          status: 'ACTIVE',
+          brand: 'NexusBrand',
+          imageUrl: 'https://cdn.example.com/p-1.jpg',
+          shopName: 'Nexus Store',
+          createdAt: new Date('2026-10-27T00:00:00Z'),
+        },
+        {
+          id: 'p-2',
+          name: 'Product Two',
+          slug: null,
+          status: 'DRAFT',
+          brand: null,
+          imageUrl: null,
+          shopName: null,
+          createdAt: new Date('2026-10-26T00:00:00Z'),
+        },
+      ]),
+    };
+    mockProductRepo.createQueryBuilder.mockReturnValue(recentProductsQb);
 
     // 3. SkuRepo mock
     mockSkuRepo.count.mockResolvedValueOnce(120);
@@ -231,7 +253,28 @@ describe('AdminDashboardController (TypeORM)', () => {
       { id: 'cat-1', name: 'Electronics', count: 30 },
     ]);
     expect(stats.recentUsers[0].roles).toEqual(['BUYER']);
-    expect(stats.recentProducts[0].name).toBe('Product One');
+    expect(stats.recentProducts).toEqual([
+      {
+        id: 'p-1',
+        name: 'Product One',
+        slug: 'product-one',
+        status: 'ACTIVE',
+        brand: 'NexusBrand',
+        imageUrl: 'https://cdn.example.com/p-1.jpg',
+        shopName: 'Nexus Store',
+        createdAt: new Date('2026-10-27T00:00:00Z'),
+      },
+      {
+        id: 'p-2',
+        name: 'Product Two',
+        slug: null,
+        status: 'DRAFT',
+        brand: null,
+        imageUrl: null,
+        shopName: null,
+        createdAt: new Date('2026-10-26T00:00:00Z'),
+      },
+    ]);
     expect(stats.recentOrders[0].orderNumber).toBe('ORD-123456-ABCD');
     expect(stats.systemHealth.status).toBe('HEALTHY');
   });
@@ -240,7 +283,6 @@ describe('AdminDashboardController (TypeORM)', () => {
     mockUserRepo.count.mockResolvedValue(0);
     mockUserRepo.find.mockResolvedValue([]);
     mockProductRepo.count.mockResolvedValue(0);
-    mockProductRepo.find.mockResolvedValue([]);
     mockSkuRepo.count.mockResolvedValue(0);
     mockCategoryRepo.count.mockResolvedValue(0);
     mockInventoryRepo.count.mockResolvedValue(0);
@@ -265,6 +307,7 @@ describe('AdminDashboardController (TypeORM)', () => {
       getRawMany: vi.fn().mockResolvedValue([]),
     };
 
+    mockProductRepo.createQueryBuilder.mockReturnValue(emptyQb);
     mockCategoryRepo.createQueryBuilder.mockReturnValue(emptyQb);
     mockInventoryRepo.createQueryBuilder.mockReturnValue(emptyQb);
     mockOrderRepo.createQueryBuilder.mockReturnValue(emptyQb);

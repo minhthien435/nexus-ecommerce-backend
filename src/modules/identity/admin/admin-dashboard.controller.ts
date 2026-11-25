@@ -4,6 +4,7 @@ import { AccessTokenGuard } from '../auth/guards/access-token.guard.js';
 import { Roles } from '../rbac/decorators/roles.decorator.js';
 import { RolesGuard } from '../rbac/guards/roles.guard.js';
 import { UserEntity } from '../domain/user.entity.js';
+import { ShopEntity } from '../domain/shop.entity.js';
 import { RoleEntity } from '../rbac/entities/role.entity.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
 import {
@@ -202,19 +203,40 @@ export class AdminDashboardController {
         take: 5,
       }),
 
-      // Recent products
-      productRepo.find({
-        where: { deletedAt: IsNull() },
-        select: {
-          id: true,
-          name: true,
-          status: true,
-          brand: true,
-          createdAt: true,
-        },
-        order: { createdAt: 'DESC' },
-        take: 5,
-      }),
+      // Recent products with primary image and shop name
+      productRepo
+        .createQueryBuilder('product')
+        .leftJoin(
+          ShopEntity,
+          'shop',
+          '(shop.id = product.shopId OR (product.shopId IS NULL AND shop.sellerId = product.sellerId)) AND shop.deletedAt IS NULL',
+        )
+        .select([
+          'product.id AS id',
+          'product.name AS name',
+          'product.slug AS slug',
+          'product.status AS status',
+          'product.brand AS brand',
+          'product.createdAt AS "createdAt"',
+        ])
+        .addSelect('shop.name', 'shopName')
+        .addSelect(
+          '(SELECT pi.url FROM catalog.product_images pi WHERE pi.product_id = product.id ORDER BY pi.is_primary DESC, pi.sort_order ASC, pi.id ASC LIMIT 1)',
+          'imageUrl',
+        )
+        .where('product.deletedAt IS NULL')
+        .orderBy('product.createdAt', 'DESC')
+        .limit(5)
+        .getRawMany<{
+          id: string;
+          name: string;
+          slug: string | null;
+          status: string;
+          brand: string | null;
+          createdAt: Date | string;
+          imageUrl: string | null;
+          shopName: string | null;
+        }>(),
 
       // Recent orders with buyer details
       orderRepo
@@ -318,8 +340,11 @@ export class AdminDashboardController {
       recentProducts: recentProductsList.map((p) => ({
         id: p.id,
         name: p.name,
+        slug: p.slug ?? null,
         status: p.status,
-        brand: p.brand,
+        brand: p.brand ?? null,
+        imageUrl: p.imageUrl ?? null,
+        shopName: p.shopName ?? null,
         createdAt: p.createdAt,
       })),
       recentOrders: recentOrdersRaw.map((o) => ({
