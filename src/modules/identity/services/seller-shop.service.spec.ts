@@ -109,15 +109,22 @@ function setup(options?: {
     update: vi.fn().mockResolvedValue({ affected: 2 }),
     query: vi.fn().mockResolvedValue([{ code: 'BUYER' }, { code: 'SELLER' }]),
   };
+  const rewardRepo = {
+    findAndCount: vi.fn().mockResolvedValue([[], 0]),
+  };
   const dataSource = {
     transaction: vi.fn(async (work) => work(manager)),
-    getRepository: vi.fn().mockReturnValue(shopRepo),
+    getRepository: vi.fn((entity: { name?: string }) => {
+      if (entity?.name === 'ShopReputationRewardEntity') return rewardRepo;
+      return shopRepo;
+    }),
   };
   return {
     service: new SellerShopService(dataSource as never, reputation as never),
     dataSource,
     manager,
     shopRepo,
+    rewardRepo,
     membershipQb,
     savedShop,
   };
@@ -341,6 +348,119 @@ describe('SellerShopService', () => {
     });
     expect(test.shopRepo.findOne).toHaveBeenCalledWith({
       where: { sellerId: userId, deletedAt: expect.anything() },
+    });
+  });
+
+  describe('getReputationHistory', () => {
+    it('returns paginated reputation history with threshold 70 and isAuctionEligible = true when score >= 70', async () => {
+      const test = setup();
+      test.savedShop.reputationScore = 75;
+      const historyRows = [
+        {
+          id: 'reward-1',
+          sourceType: 'DISPUTE_PENALTY',
+          referenceId: 'dispute-1',
+          orderId: 'order-1',
+          oldScore: 85,
+          newScore: 75,
+          delta: -10,
+          reason: 'Accepted refund penalty',
+          createdAt: new Date('2026-11-20T10:00:00.000Z'),
+        },
+        {
+          id: 'reward-2',
+          sourceType: 'ORDER_COMPLETION',
+          referenceId: 'order-2',
+          orderId: 'order-2',
+          oldScore: 80,
+          newScore: 85,
+          delta: 5,
+          reason: null,
+          createdAt: new Date('2026-11-19T10:00:00.000Z'),
+        },
+      ];
+      test.rewardRepo.findAndCount.mockResolvedValueOnce([historyRows, 2]);
+
+      const result = await test.service.getReputationHistory(userId, {
+        page: 1,
+        limit: 10,
+      });
+
+      expect(result).toEqual({
+        currentReputationScore: 75,
+        auctionEligibilityThreshold: 70,
+        isAuctionEligible: true,
+        history: historyRows,
+        meta: {
+          page: 1,
+          limit: 10,
+          totalItems: 2,
+          totalPages: 1,
+        },
+      });
+
+      expect(test.shopRepo.findOne).toHaveBeenCalledWith({
+        where: { sellerId: userId, deletedAt: expect.anything() },
+      });
+      expect(test.rewardRepo.findAndCount).toHaveBeenCalledWith({
+        where: { shopId },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip: 0,
+        take: 10,
+      });
+    });
+
+    it('returns isAuctionEligible = false when score is below 70', async () => {
+      const test = setup();
+      test.savedShop.reputationScore = 65;
+      test.rewardRepo.findAndCount.mockResolvedValueOnce([[], 0]);
+
+      const result = await test.service.getReputationHistory(userId);
+
+      expect(result.currentReputationScore).toBe(65);
+      expect(result.auctionEligibilityThreshold).toBe(70);
+      expect(result.isAuctionEligible).toBe(false);
+      expect(result.history).toEqual([]);
+      expect(result.meta).toEqual({
+        page: 1,
+        limit: 20,
+        totalItems: 0,
+        totalPages: 1,
+      });
+    });
+
+    it('throws NotFoundException when the seller owns no shop', async () => {
+      const test = setup();
+      test.shopRepo.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        test.service.getReputationHistory(userId, { page: 1, limit: 10 }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(test.rewardRepo.findAndCount).not.toHaveBeenCalled();
+    });
+
+    it('paginates correctly when total items exceed limit', async () => {
+      const test = setup();
+      test.savedShop.reputationScore = 80;
+      test.rewardRepo.findAndCount.mockResolvedValueOnce([[], 45]);
+
+      const result = await test.service.getReputationHistory(userId, {
+        page: 3,
+        limit: 15,
+      });
+
+      expect(result.meta).toEqual({
+        page: 3,
+        limit: 15,
+        totalItems: 45,
+        totalPages: 3,
+      });
+      expect(test.rewardRepo.findAndCount).toHaveBeenCalledWith({
+        where: { shopId },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip: 30,
+        take: 15,
+      });
     });
   });
 });

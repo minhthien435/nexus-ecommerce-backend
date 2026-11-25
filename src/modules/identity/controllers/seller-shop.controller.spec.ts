@@ -14,6 +14,13 @@ describe('SellerShopController', () => {
       getMyShop: vi.fn().mockResolvedValue({ id: 'shop' }),
       updateMyShop: vi.fn().mockResolvedValue({ id: 'shop' }),
       closeMyShop: vi.fn().mockResolvedValue({ id: 'shop', status: 'CLOSED' }),
+      getReputationHistory: vi.fn().mockResolvedValue({
+        currentReputationScore: 75,
+        auctionEligibilityThreshold: 70,
+        isAuctionEligible: true,
+        history: [],
+        meta: { page: 1, limit: 20, totalItems: 0, totalPages: 1 },
+      }),
     };
     const controller = new SellerShopController(shops as never);
     const registration = {
@@ -27,6 +34,7 @@ describe('SellerShopController', () => {
     await controller.getMine(userId);
     await controller.updateMine(userId, { headline: 'Hello' });
     await controller.closeMine(userId);
+    await controller.getReputationHistory(userId, { page: 1, limit: 10 });
 
     expect(shops.registerShop).toHaveBeenCalledWith(userId, registration);
     expect(shops.getMyShop).toHaveBeenCalledWith(userId);
@@ -34,6 +42,10 @@ describe('SellerShopController', () => {
       headline: 'Hello',
     });
     expect(shops.closeMyShop).toHaveBeenCalledWith(userId);
+    expect(shops.getReputationHistory).toHaveBeenCalledWith(userId, {
+      page: 1,
+      limit: 10,
+    });
   });
 
   it('requires authentication for registration and live SELLER RBAC for read/update', () => {
@@ -53,13 +65,24 @@ describe('SellerShopController', () => {
       GUARDS_METADATA,
       SellerShopController.prototype.closeMine,
     );
+    const historyGuards = Reflect.getMetadata(
+      GUARDS_METADATA,
+      SellerShopController.prototype.getReputationHistory,
+    );
 
     expect(registerGuards).toEqual([AccessTokenGuard]);
     expect(readGuards).toEqual([AccessTokenGuard, RolesGuard]);
     expect(updateGuards).toEqual([AccessTokenGuard, RolesGuard]);
     expect(closeGuards).toEqual([AccessTokenGuard, RolesGuard]);
+    expect(historyGuards).toEqual([AccessTokenGuard, RolesGuard]);
     expect(
       Reflect.getMetadata(ROLES_KEY, SellerShopController.prototype.getMine),
+    ).toEqual(['SELLER']);
+    expect(
+      Reflect.getMetadata(
+        ROLES_KEY,
+        SellerShopController.prototype.getReputationHistory,
+      ),
     ).toEqual(['SELLER']);
     expect(
       Reflect.getMetadata(ROLES_KEY, SellerShopController.prototype.updateMine),

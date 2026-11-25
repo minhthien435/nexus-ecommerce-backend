@@ -16,6 +16,9 @@ import {
   RegisterSellerShopDto,
   UpdateSellerShopDto,
 } from '../dtos/seller-shop.dto.js';
+import { QueryReputationHistoryDto } from '../dtos/query-reputation-history.dto.js';
+import { ShopReputationRewardEntity } from '../domain/shop-reputation-reward.entity.js';
+import { MIN_SELLER_REPUTATION } from '../../auction/auction-lifecycle.constants.js';
 import { RoleEntity } from '../rbac/entities/role.entity.js';
 import { UserRoleEntity } from '../rbac/entities/user-role.entity.js';
 import { IdentityReputationApi } from '../identity-reputation.api.js';
@@ -44,6 +47,31 @@ export type SellerShopView = {
 };
 
 export type RegisteredSellerShop = SellerShopView & { roles: string[] };
+
+export type SellerReputationHistoryItem = {
+  id: string;
+  sourceType: string;
+  referenceId: string;
+  orderId: string | null;
+  oldScore: number;
+  newScore: number;
+  delta: number;
+  reason: string | null;
+  createdAt: Date;
+};
+
+export type SellerReputationHistoryResult = {
+  currentReputationScore: number;
+  auctionEligibilityThreshold: number;
+  isAuctionEligible: boolean;
+  history: SellerReputationHistoryItem[];
+  meta: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+  };
+};
 
 @Injectable()
 export class SellerShopService {
@@ -159,6 +187,57 @@ export class SellerShopService {
     });
     if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
     return this.toView(shop);
+  }
+
+  async getReputationHistory(
+    userId: string,
+    query?: QueryReputationHistoryDto,
+  ): Promise<SellerReputationHistoryResult> {
+    const shop = await this.dataSource.getRepository(ShopEntity).findOne({
+      where: { sellerId: userId, deletedAt: IsNull() },
+    });
+    if (!shop) throw new NotFoundException('Không tìm thấy cửa hàng');
+
+    const page = Math.max(1, query?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query?.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const currentReputationScore = Number(shop.reputationScore);
+    const auctionEligibilityThreshold = MIN_SELLER_REPUTATION;
+    const isAuctionEligible =
+      currentReputationScore >= auctionEligibilityThreshold;
+
+    const [records, totalItems] = await this.dataSource
+      .getRepository(ShopReputationRewardEntity)
+      .findAndCount({
+        where: { shopId: shop.id },
+        order: { createdAt: 'DESC', id: 'DESC' },
+        skip,
+        take: limit,
+      });
+
+    return {
+      currentReputationScore,
+      auctionEligibilityThreshold,
+      isAuctionEligible,
+      history: records.map((record) => ({
+        id: record.id,
+        sourceType: record.sourceType,
+        referenceId: record.referenceId,
+        orderId: record.orderId ?? null,
+        oldScore: record.oldScore,
+        newScore: record.newScore,
+        delta: record.delta,
+        reason: record.reason ?? null,
+        createdAt: record.createdAt,
+      })),
+      meta: {
+        page,
+        limit,
+        totalItems,
+        totalPages: Math.max(1, Math.ceil(totalItems / limit)),
+      },
+    };
   }
 
   async updateMyShop(
