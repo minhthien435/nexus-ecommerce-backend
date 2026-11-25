@@ -9,6 +9,7 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, Repository } from 'typeorm';
 import { IdentitySupportLookupApi } from '../../identity/identity-support-lookup.api.js';
+import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
 import { OrderEntity } from '../domain/entities/order.entity.js';
 import {
   OrderDisputeEntity,
@@ -117,6 +118,8 @@ export class OrderDisputeService {
     private readonly orderRefundService: OrderRefundService,
     @Optional()
     private readonly notifications?: NotificationDispatchApi,
+    @Optional()
+    private readonly reputationApi?: IdentityReputationApi,
   ) {}
 
   /**
@@ -517,6 +520,17 @@ export class OrderDisputeService {
             note,
             manager,
           );
+
+          // Trừ điểm uy tín người bán khi khiếu nại hoàn tiền được chấp thuận (tối đa -10 điểm, không để điểm âm)
+          if (this.reputationApi) {
+            await this.reputationApi.penalizeDisputeRefund(
+              dispute.id,
+              order.sellerId,
+              order.id,
+              note,
+              manager,
+            );
+          }
 
           // Cập nhật trạng thái khiếu nại thành ACCEPTED_REFUND
           dispute.status = 'ACCEPTED_REFUND';

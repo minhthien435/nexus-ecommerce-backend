@@ -224,4 +224,251 @@ describe('IdentityReputationService', () => {
       });
     });
   });
+
+  describe('penalizeDisputeRefund', () => {
+    it('penalizes -10 points when shop reputation score is 85 (85 -> 75)', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 85 }]) // lock shop
+        .mockResolvedValueOnce([{ id: 'penalty-claim-1' }]) // insert ledger
+        .mockResolvedValueOnce([]); // update shop
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-1',
+        'seller-1',
+        'order-1',
+        'Customer refund accepted',
+      );
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 85,
+        newScore: 75,
+        delta: -10,
+        alreadyPenalized: false,
+      });
+
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining(
+          'SELECT id, reputation_score FROM identity.shops',
+        ),
+        ['seller-1'],
+      );
+
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('INSERT INTO identity.shop_reputation_rewards'),
+        [
+          'shop-1',
+          'dispute-1',
+          'order-1',
+          85,
+          75,
+          -10,
+          'Customer refund accepted',
+        ],
+      );
+
+      expect(managerMock.query).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining(
+          'UPDATE identity.shops SET reputation_score = $1',
+        ),
+        [75, 'shop-1'],
+      );
+    });
+
+    it('penalizes -10 points when score is 10 (10 -> 0)', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 10 }])
+        .mockResolvedValueOnce([{ id: 'penalty-claim-2' }])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-2',
+        'seller-1',
+        'order-2',
+      );
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 10,
+        newScore: 0,
+        delta: -10,
+        alreadyPenalized: false,
+      });
+      expect(managerMock.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'UPDATE identity.shops SET reputation_score = $1',
+        ),
+        [0, 'shop-1'],
+      );
+    });
+
+    it('penalizes only -6 points when score is 6 (6 -> 0, does not go negative)', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 6 }])
+        .mockResolvedValueOnce([{ id: 'penalty-claim-3' }])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-3',
+        'seller-1',
+        'order-3',
+      );
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 6,
+        newScore: 0,
+        delta: -6,
+        alreadyPenalized: false,
+      });
+      expect(managerMock.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO identity.shop_reputation_rewards'),
+        expect.arrayContaining(['shop-1', 'dispute-3', 'order-3', 6, 0, -6]),
+      );
+    });
+
+    it('does not deduct and does not insert ledger when score is already 0', async () => {
+      managerMock.query.mockResolvedValueOnce([
+        { id: 'shop-1', reputation_score: 0 },
+      ]);
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-4',
+        'seller-1',
+        'order-4',
+      );
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 0,
+        newScore: 0,
+        delta: 0,
+        alreadyPenalized: false,
+      });
+
+      // Assert no insert and no update were called
+      expect(managerMock.query).toHaveBeenCalledTimes(1);
+      expect(managerMock.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO identity.shop_reputation_rewards'),
+        expect.anything(),
+      );
+      expect(managerMock.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE identity.shops'),
+        expect.anything(),
+      );
+    });
+
+    it('is idempotent on duplicate dispute retry (claim empty) and does not update score again', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 75 }])
+        .mockResolvedValueOnce([]); // ON CONFLICT DO NOTHING returns 0 rows
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-dup',
+        'seller-1',
+        'order-1',
+      );
+
+      expect(result).toEqual({
+        shopId: 'shop-1',
+        oldScore: 75,
+        newScore: 75,
+        delta: 0,
+        alreadyPenalized: true,
+      });
+
+      expect(managerMock.query).toHaveBeenCalledTimes(2);
+      expect(managerMock.query).not.toHaveBeenCalledWith(
+        expect.stringContaining(
+          'UPDATE identity.shops SET reputation_score = $1',
+        ),
+        expect.anything(),
+      );
+    });
+
+    it('penalizes two different disputes for the same shop sequentially and correctly', async () => {
+      // Dispute 1: 85 -> 75
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 85 }])
+        .mockResolvedValueOnce([{ id: 'claim-d1' }])
+        .mockResolvedValueOnce([])
+        // Dispute 2: 75 -> 65
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 75 }])
+        .mockResolvedValueOnce([{ id: 'claim-d2' }])
+        .mockResolvedValueOnce([]);
+
+      const res1 = await service.penalizeDisputeRefund(
+        'dispute-seq-1',
+        'seller-1',
+        'order-1',
+      );
+      const res2 = await service.penalizeDisputeRefund(
+        'dispute-seq-2',
+        'seller-1',
+        'order-2',
+      );
+
+      expect(res1).toEqual({
+        shopId: 'shop-1',
+        oldScore: 85,
+        newScore: 75,
+        delta: -10,
+        alreadyPenalized: false,
+      });
+
+      expect(res2).toEqual({
+        shopId: 'shop-1',
+        oldScore: 75,
+        newScore: 65,
+        delta: -10,
+        alreadyPenalized: false,
+      });
+    });
+
+    it('truncates reason longer than 255 characters to 255 characters', async () => {
+      const longReason = 'A'.repeat(300);
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 50 }])
+        .mockResolvedValueOnce([{ id: 'penalty-claim-long' }])
+        .mockResolvedValueOnce([]);
+
+      await service.penalizeDisputeRefund(
+        'dispute-long',
+        'seller-1',
+        'order-long',
+        longReason,
+      );
+
+      expect(managerMock.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO identity.shop_reputation_rewards'),
+        expect.arrayContaining(['A'.repeat(255)]),
+      );
+    });
+
+    it('returns null if seller shop does not exist', async () => {
+      managerMock.query.mockResolvedValueOnce([]); // no shop found
+
+      const result = await service.penalizeDisputeRefund(
+        'dispute-missing',
+        'seller-nonexistent',
+        'order-1',
+      );
+
+      expect(result).toBeNull();
+      expect(managerMock.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates database error when ledger insert fails', async () => {
+      managerMock.query
+        .mockResolvedValueOnce([{ id: 'shop-1', reputation_score: 50 }])
+        .mockRejectedValueOnce(new Error('DB deadlock / constraint violation'));
+
+      await expect(
+        service.penalizeDisputeRefund('dispute-err', 'seller-1', 'order-err'),
+      ).rejects.toThrow('DB deadlock / constraint violation');
+    });
+  });
 });

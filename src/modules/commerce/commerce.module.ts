@@ -41,6 +41,8 @@ import { OrderExpiryOutboxService } from './services/order-expiry-outbox.service
 import { OrderExpiryTransitionApi } from './order-expiry-transition.api.js';
 import { OrderExpiryProcessor } from './processors/order-expiry.processor.js';
 import { SupportOrderController } from './controllers/support-order.controller.js';
+import { SellerDashboardController } from './controllers/seller-dashboard.controller.js';
+import { SellerDashboardService } from './services/seller-dashboard.service.js';
 import { SupportOrderService } from './services/support-order.service.js';
 import { OrderRefundService } from './services/order-refund.service.js';
 import { OrderRefundRequestApi } from './order-refund-request.api.js';
@@ -92,6 +94,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     SupportOrderCancelController,
     OrderDisputeController,
     SupportDisputeController,
+    SellerDashboardController,
   ],
   providers: [
     FlashDealQuotaService,
@@ -110,6 +113,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     OrderRefundService,
     OrderCancelService,
     OrderDisputeService,
+    SellerDashboardService,
     { provide: CartMergeApi, useExisting: CartWriteService },
     {
       provide: OrderExpirySchedulerApi,
@@ -137,6 +141,7 @@ import { NotificationModule } from '../notification/notification.module.js';
     PayosClientService,
     OrderRefundRequestApi,
     OrderDisputeService,
+    SellerDashboardService,
     OrderCompletionSchedulerService,
     AuctionOrderHandoffApi,
   ],

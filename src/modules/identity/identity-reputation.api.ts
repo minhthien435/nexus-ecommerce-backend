@@ -24,6 +24,14 @@ export interface ShopReputationRewardResult {
   alreadyRewarded: boolean;
 }
 
+export interface ShopReputationPenaltyResult {
+  shopId: string;
+  oldScore: number;
+  newScore: number;
+  delta: number;
+  alreadyPenalized: boolean;
+}
+
 export abstract class IdentityReputationApi {
   abstract rewardShopProfileCompletion(
     shopId: string,
@@ -51,4 +59,12 @@ export abstract class IdentityReputationApi {
     auctionId: string,
     manager?: EntityManager,
   ): Promise<ReputationPenaltyResult>;
+
+  abstract penalizeDisputeRefund(
+    disputeId: string,
+    sellerId: string,
+    orderId: string,
+    reason?: string | null,
+    manager?: EntityManager,
+  ): Promise<ShopReputationPenaltyResult | null>;
 }
