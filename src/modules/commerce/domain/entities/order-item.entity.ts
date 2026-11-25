@@ -64,4 +64,6 @@ export class OrderItemEntity {
   imageUrl?: string | null;
 
   primaryImageUrl?: string | null;
+
+  reviewId?: string | null;
 }

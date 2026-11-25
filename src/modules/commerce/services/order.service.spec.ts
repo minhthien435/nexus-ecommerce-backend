@@ -962,9 +962,13 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
 
     (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
       .fn()
-      .mockResolvedValue([
-        { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
-      ]);
+      .mockImplementation((sql: string) =>
+        sql.includes('product_reviews')
+          ? Promise.resolve([{ orderItemId: 'item-1', reviewId: 'review-1' }])
+          : Promise.resolve([
+              { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
+            ]),
+      );
 
     const result = await s.service.getBuyerOrders(userId, {
       page: 1,
@@ -1012,14 +1016,16 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     });
     (s.dataSource as unknown as { query: typeof vi.fn }).query = vi
       .fn()
-      .mockResolvedValue([
+      .mockResolvedValueOnce([
         { productId: 'prod-1', url: 'https://img.nexus.com/p1.png' },
-      ]);
+      ])
+      .mockResolvedValueOnce([{ orderItemId: 'item-1', reviewId: 'review-1' }]);
 
     const orderNumber = 'ORD-20261108-000001';
     const order = await s.service.getOrderById(userId, orderNumber);
     expect(order.id).toBe('order-1');
     expect(order.items![0].imageUrl).toBe('https://img.nexus.com/p1.png');
+    expect(order.items![0].reviewId).toBe('review-1');
 
     expect(order.history).toEqual([]);
     expect(s.orderRepo.findOne).toHaveBeenCalledWith({

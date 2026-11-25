@@ -11,6 +11,11 @@ import {
   AuctionReadToolsService,
   type AiAuctionToolName,
 } from './auction-read-tools.service.js';
+import {
+  AI_FLASH_DEAL_TOOLS,
+  FlashDealReadToolsService,
+  type AiFlashDealToolName,
+} from './flash-deal-read-tools.service.js';
 import { SearchProductsTool, type AiProduct } from './search-products.tool.js';
 import { TrackMyOrderTool } from './track-my-order.tool.js';
 import { UiActionHandler } from './ui-action.handler.js';
@@ -43,6 +48,9 @@ export class ToolExecutorService {
     @Optional()
     @Inject(AuctionReadToolsService)
     private readonly auctionTools?: AuctionReadToolsService,
+    @Optional()
+    @Inject(FlashDealReadToolsService)
+    private readonly flashDealTools?: FlashDealReadToolsService,
   ) {}
   /** Allocate a new turn on every request. Never seed products from history/client/model. */
   async execute(
@@ -81,6 +89,15 @@ export class ToolExecutorService {
         turn.verifiedUserId,
       );
       turn.auctions = response.auctions.slice(0, 5);
+      return response.result;
+    }
+    if (AI_FLASH_DEAL_TOOLS.includes(name as AiFlashDealToolName)) {
+      if (!this.flashDealTools) throw aiUnavailable();
+      const response = await this.flashDealTools.execute(
+        name as AiFlashDealToolName,
+        args,
+      );
+      turn.products = response.products.slice(0, 5);
       return response.result;
     }
     throw new BadRequestException('Unsupported AI tool');

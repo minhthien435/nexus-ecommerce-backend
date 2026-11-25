@@ -1,5 +1,10 @@
 import { Transform } from 'class-transformer';
 import {
+  PREFERRED_LANGUAGES,
+  type PreferredLanguage,
+} from '../../domain/preferred-language.js';
+import {
+  IsIn,
   IsString,
   IsUrl,
   Matches,
@@ -9,6 +14,10 @@ import {
 } from 'class-validator';
 
 export class UpdateProfileDto {
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsIn(PREFERRED_LANGUAGES)
+  preferredLanguage?: PreferredLanguage;
+
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()

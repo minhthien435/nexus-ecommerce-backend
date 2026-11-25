@@ -3,6 +3,7 @@ import type { FunctionDeclaration } from '@google/genai';
 import { strictObject } from '../dtos/ai-chat.dto.js';
 import {
   TrendingProductsQuery,
+  type AiActiveFlashDealInfo,
   type AiProductProjection,
 } from '../queries/trending-products.query.js';
 import { AiCacheService } from '../services/ai-cache.service.js';
@@ -70,7 +71,12 @@ export const AI_READ_DECLARATIONS: FunctionDeclaration[] = [
 ];
 
 type ToolName = (typeof KHOA_TOOLS)[number];
-type Cached = { result: unknown; products: AiProduct[]; slugs: string[] };
+type Cached = {
+  result: unknown;
+  products: AiProduct[];
+  slugs: string[];
+  hasFlashDeal?: boolean;
+};
 
 @Injectable()
 export class AiReadToolsService extends AiReadTools {
@@ -94,21 +100,23 @@ export class AiReadToolsService extends AiReadTools {
     } catch {
       // Availability never depends on Redis or an alternate cache provider.
     }
-    if (isCached(cached)) {
+    if (isCached(cached) && !cached.hasFlashDeal) {
       const visible = new Set(
         await this.productsQuery.visibleSlugs(cached.slugs),
       );
       if (cached.slugs.every((slug) => visible.has(slug)))
         return { result: cached.result, products: cached.products };
     }
-    const response = await this.run(name, args);
-    try {
-      await this.cache.set(key, {
-        ...response,
-        slugs: response.products.map((product) => product.slug),
-      });
-    } catch {
-      // Fail open.
+    const { hasFlashDeal, ...response } = await this.run(name, args);
+    if (!hasFlashDeal) {
+      try {
+        await this.cache.set(key, {
+          ...response,
+          slugs: response.products.map((product) => product.slug),
+        });
+      } catch {
+        // Fail open.
+      }
     }
     return response;
   }
@@ -116,7 +124,11 @@ export class AiReadToolsService extends AiReadTools {
   private async run(
     name: ToolName,
     args: Record<string, unknown>,
-  ): Promise<{ result: unknown; products: AiProduct[] }> {
+  ): Promise<{
+    result: unknown;
+    products: AiProduct[];
+    hasFlashDeal: boolean;
+  }> {
     if (name === 'get_trending_products') {
       const rows = await this.productsQuery.trending(
         args.categorySlug as string | undefined,
@@ -125,6 +137,7 @@ export class AiReadToolsService extends AiReadTools {
       return {
         result: { windowDays: 30, products: rows.map(publicFacts) },
         products: rows.map(evidence),
+        hasFlashDeal: rows.some((row) => Boolean(row.activeFlashDeal)),
       };
     }
     const slugs =
@@ -132,6 +145,7 @@ export class AiReadToolsService extends AiReadTools {
         ? (args.slugs as string[])
         : [args.slug as string];
     const rows = await this.productsQuery.bySlugs(slugs);
+    const hasFlashDeal = rows.some((row) => Boolean(row.activeFlashDeal));
     const found = new Map(rows.map((row) => [row.slug, row]));
     if (name === 'compare_products') {
       const items = slugs.map((slug) =>
@@ -139,12 +153,39 @@ export class AiReadToolsService extends AiReadTools {
           ? { status: 'available', ...publicFacts(found.get(slug)!) }
           : { slug, status: 'not_found' },
       );
-      return { result: { products: items }, products: rows.map(evidence) };
+      return {
+        result: { products: items },
+        products: rows.map(evidence),
+        hasFlashDeal,
+      };
     }
     const row = rows[0];
     if (!row)
-      return { result: { slug: slugs[0], status: 'not_found' }, products: [] };
+      return {
+        result: { slug: slugs[0], status: 'not_found' },
+        products: [],
+        hasFlashDeal: false,
+      };
     if (name === 'get_price_insight') {
+      const flashDeal = formatFlashDeal(row.activeFlashDeal);
+      if (flashDeal) {
+        return {
+          result: {
+            slug: row.slug,
+            basis: 'active_flash_deal',
+            currency: row.currency,
+            minPrice: row.minPrice,
+            maxPrice: row.maxPrice,
+            effectiveMinPrice: flashDeal.flashPrice,
+            activeVariantCount: row.activeVariantCount,
+            originalPrice: flashDeal.regularPrice,
+            discountPercent: flashDeal.discountPercent,
+            flashDeal,
+          },
+          products: [evidence(row)],
+          hasFlashDeal: true,
+        };
+      }
       const discounted =
         row.originalPrice !== null &&
         Number(row.originalPrice) > Number(row.minPrice);
@@ -164,11 +205,13 @@ export class AiReadToolsService extends AiReadTools {
             : null,
         },
         products: [evidence(row)],
+        hasFlashDeal: false,
       };
     }
     return {
       result: { status: 'available', ...publicFacts(row) },
       products: [evidence(row)],
+      hasFlashDeal,
     };
   }
 }
@@ -210,7 +253,28 @@ function requireSlug(value: unknown): asserts value is string {
     throw new BadRequestException('Invalid product slug');
 }
 
+function formatFlashDeal(deal: AiActiveFlashDealInfo | null | undefined) {
+  if (!deal) return null;
+  const endMs = new Date(deal.endsAt).getTime();
+  const remainingSeconds = Number.isFinite(endMs)
+    ? Math.max(0, Math.floor((endMs - Date.now()) / 1000))
+    : 0;
+  return {
+    campaignTitle: deal.campaignTitle,
+    flashPrice: deal.flashPrice,
+    regularPrice: deal.regularPrice,
+    discountPercent: Number(deal.discountPercent ?? 0),
+    remainingQty: Number(deal.remainingQty ?? 0),
+    maxPerBuyer: Number(deal.maxPerBuyer ?? 1),
+    endsAt: Number.isFinite(endMs)
+      ? new Date(endMs).toISOString()
+      : String(deal.endsAt),
+    remainingSeconds,
+  };
+}
+
 function publicFacts(row: AiProductProjection) {
+  const flashDeal = formatFlashDeal(row.activeFlashDeal);
   return {
     slug: row.slug,
     name: row.name,
@@ -223,10 +287,26 @@ function publicFacts(row: AiProductProjection) {
     currency: row.currency,
     activeVariantCount: row.activeVariantCount,
     unitsSold: row.unitsSold,
+    ...(flashDeal ? { flashDeal } : {}),
   };
 }
 
 function evidence(row: AiProductProjection): AiProduct {
+  const flashDeal = formatFlashDeal(row.activeFlashDeal);
+  if (flashDeal) {
+    return {
+      slug: row.slug,
+      name: row.name,
+      minPrice: flashDeal.flashPrice,
+      originalPrice:
+        Number(flashDeal.regularPrice) > Number(flashDeal.flashPrice)
+          ? flashDeal.regularPrice
+          : row.originalPrice,
+      unitsSold: row.unitsSold,
+      shop: row.shop,
+      imageUrl: row.imageUrl,
+    };
+  }
   return {
     slug: row.slug,
     name: row.name,

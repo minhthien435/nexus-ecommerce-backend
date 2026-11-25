@@ -55,4 +55,22 @@ describe('buildAiAssistantSystemPrompt', () => {
     expect(prompt).toContain('60 giây cuối');
     expect(prompt).toContain('reservePrice');
   });
+
+  it('includes Flash Deal grounding instructions and respects explicit UI language context', () => {
+    const enPrompt = buildAiAssistantSystemPrompt({
+      currentPath: '/flash-deals',
+      language: 'en',
+      hasFlashDealTools: true,
+    });
+
+    expect(enPrompt).toContain('get_flash_deals');
+    expect(enPrompt).toContain('remainingQty');
+    expect(enPrompt).toContain('maxPerBuyer');
+    expect(enPrompt).toContain('TIẾNG ANH (`en`)');
+
+    const viPrompt = buildAiAssistantSystemPrompt({
+      language: 'vi',
+    });
+    expect(viPrompt).toContain('TIẾNG VIỆT (`vi`)');
+  });
 });

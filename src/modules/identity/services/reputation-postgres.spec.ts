@@ -13,13 +13,14 @@ import {
   it,
   vi,
 } from 'vitest';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import { OrderStateMachineService } from '../../commerce/services/order-state-machine.service.js';
 import { OrderEntity } from '../../commerce/domain/entities/order.entity.js';
 import { OrderStatusHistoryEntity } from '../../commerce/domain/entities/order-status-history.entity.js';
 import { CheckoutSessionEntity } from '../../commerce/domain/entities/checkout-session.entity.js';
 import { OrderItemEntity } from '../../commerce/domain/entities/order-item.entity.js';
 import { DurableReputationRewards1794873600000 } from '../../../database/migrations/1794873600000-DurableReputationRewards.js';
+import { AddPreferredLanguage1795507200000 } from '../../../database/migrations/1795507200000-AddPreferredLanguage.js';
 import { ProfileUserEntity } from '../users/entities/profile-user.entity.js';
 import { ProfileService } from '../users/profile/profile.service.js';
 import { IdentityReputationService } from './identity-reputation.service.js';
@@ -59,6 +60,8 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   let db: DataSource;
   let reputation: IdentityReputationService;
   let profiles: ProfileService;
+  const languageMigration = new AddPreferredLanguage1795507200000();
+  let profileRunner: QueryRunner | undefined;
   let backfill: { claims: number; history: number; score: number };
 
   beforeAll(async () => {
@@ -77,7 +80,7 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     });
     await db.initialize();
     if (migrated) {
-      // Validate provenance before removing data; never apply migration.up in this mode.
+      // Validate the original migration history before adding the profile test fixture.
       const history = await db.query<Array<{ name: string }>>(
         'SELECT name FROM public.migrations ORDER BY id',
       );
@@ -179,6 +182,16 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
           .count,
       ),
     };
+    // Exercise today's ProfileService against both historical reputation schemas.
+    // The profile-only column is removed after the suite; migration history stays pinned.
+    const runner = db.createQueryRunner();
+    try {
+      await languageMigration.up(runner);
+      profileRunner = runner;
+    } catch (error) {
+      await runner.release();
+      throw error;
+    }
     reputation = new IdentityReputationService(db);
     profiles = new ProfileService(
       db.getRepository(ProfileUserEntity),
@@ -194,7 +207,12 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
     );
   });
   afterAll(async () => {
-    if (db?.isInitialized) await db.destroy();
+    try {
+      if (profileRunner) await languageMigration.down(profileRunner);
+    } finally {
+      await profileRunner?.release();
+      if (db?.isInitialized) await db.destroy();
+    }
   });
 
   async function user(
@@ -324,6 +342,12 @@ describe.skipIf(!url)('durable reputation (isolated PostgreSQL)', () => {
   });
   it('rewards a persisted partial PATCH and keeps claim consumed after deletion/refill', async () => {
     const id = await user();
+    expect(
+      await profiles.updateProfile(id, { preferredLanguage: 'vi' }),
+    ).toMatchObject({
+      preferredLanguage: 'vi',
+      profileCompletionRewarded: false,
+    });
     expect(
       (await profiles.updateProfile(id, { phone: '0912345678' }))
         .profileCompletionRewarded,

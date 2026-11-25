@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { PreferredLanguage } from '../../domain/preferred-language.js';
 
 @Entity({ name: 'users', schema: 'identity' })
 export class ProfileUserEntity {
@@ -20,6 +21,14 @@ export class ProfileUserEntity {
 
   @Column({ type: 'varchar', length: 150, name: 'full_name' })
   fullName: string;
+
+  @Column({
+    type: 'varchar',
+    length: 5,
+    name: 'preferred_language',
+    nullable: true,
+  })
+  preferredLanguage: PreferredLanguage | null;
 
   @Column({ type: 'varchar', length: 2048, nullable: true, name: 'avatar_url' })
   avatarUrl: string | null;

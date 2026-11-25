@@ -43,6 +43,12 @@ import {
   AuctionReadToolsService,
   type AiAuctionToolName,
 } from '../tools/auction-read-tools.service.js';
+import {
+  AI_FLASH_DEAL_TOOLS,
+  FLASH_DEAL_READ_DECLARATIONS,
+  FlashDealReadToolsService,
+  type AiFlashDealToolName,
+} from '../tools/flash-deal-read-tools.service.js';
 import { AI_READ_DECLARATIONS } from '../tools/ai-read-tools.service.js';
 import { TRACK_MY_ORDER_DECLARATION } from '../tools/track-my-order.tool.js';
 import {
@@ -283,6 +289,9 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
     @Optional()
     @Inject(AuctionReadToolsService)
     private readonly auctionTools?: AuctionReadToolsService,
+    @Optional()
+    @Inject(FlashDealReadToolsService)
+    private readonly flashDealTools?: FlashDealReadToolsService,
   ) {
     super();
   }
@@ -310,6 +319,9 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
         }
         declarations.push(decl);
       }
+    }
+    if (this.flashDealTools) {
+      declarations.push(...FLASH_DEAL_READ_DECLARATIONS);
     }
     return declarations
       .filter((decl) => Boolean(decl.name))
@@ -343,6 +355,22 @@ export class ToolExecutorAdapter extends AiToolExecutorApi {
         ...(response.observedShopSlugs?.length
           ? { observedShopSlugs: response.observedShopSlugs }
           : {}),
+      };
+    }
+
+    if (
+      this.flashDealTools &&
+      AI_FLASH_DEAL_TOOLS.includes(call.name as AiFlashDealToolName)
+    ) {
+      const response = await this.flashDealTools.execute(
+        call.name as AiFlashDealToolName,
+        call.args ?? {},
+      );
+      const products = this.mapProducts(response.products.slice(0, 5));
+      return {
+        toolResult: response.result,
+        products,
+        observedShopSlugs: response.observedShopSlugs,
       };
     }
 
@@ -473,6 +501,7 @@ export class MinhAiOrchestrator extends AiOrchestrator {
       ...(input.context?.currentPath
         ? { currentPath: input.context.currentPath }
         : {}),
+      ...(input.context?.language ? { language: input.context.language } : {}),
       ...(isAuthenticated && req?.user?.id ? { userId: req.user.id } : {}),
     };
 

@@ -184,7 +184,7 @@ export class PublicShopService {
                 price.sku_id AS "skuId", price.sku_code AS "skuCode", price.price,
                 price.original_price AS "originalPrice", price.currency,
                 price.available_quantity AS "availableQuantity",
-                sold.sold_count AS "soldCount" ${common}
+                sold.sold_count AS "soldCount", p.rating_avg AS "ratingAvg", p.review_count AS "reviewCount" ${common}
          ORDER BY ${order} LIMIT $7 OFFSET $8`,
         [...params, query.limit, (query.page - 1) * query.limit],
       ),
@@ -201,6 +201,8 @@ export class PublicShopService {
           row.originalPrice === null ? null : Number(row.originalPrice),
         availableQuantity: Number(row.availableQuantity ?? 0),
         soldCount: Number(row.soldCount),
+        ratingAvg: Number(row.ratingAvg ?? 0),
+        reviewCount: Number(row.reviewCount ?? 0),
       })),
       meta: {
         page: query.page,

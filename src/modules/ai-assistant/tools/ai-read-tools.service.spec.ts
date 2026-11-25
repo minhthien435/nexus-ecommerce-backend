@@ -127,6 +127,62 @@ describe('AI read tools', () => {
     ).toMatchObject({ originalPrice: null, discountPercent: null });
   });
 
+  it('surfaces activeFlashDeal on get_product_detail & get_price_insight and bypasses cache writes', async () => {
+    const endsAt = new Date(Date.now() + 3_600_000).toISOString();
+    const flashRow: AiProductProjection = {
+      ...shoe,
+      minPrice: '200000.00',
+      maxPrice: '250000.00',
+      originalPrice: '250000.00',
+      activeFlashDeal: {
+        campaignTitle: 'Flash Sale 12H',
+        flashPrice: '120000.00',
+        regularPrice: '250000.00',
+        discountPercent: 52,
+        remainingQty: 6,
+        maxPerBuyer: 2,
+        endsAt,
+      },
+    };
+    const { tool, cache } = setup([flashRow]);
+
+    const detail = await tool.execute('get_product_detail', {
+      slug: 'red-shoe',
+    });
+    expect(detail.result).toMatchObject({
+      status: 'available',
+      slug: 'red-shoe',
+      flashDeal: expect.objectContaining({
+        campaignTitle: 'Flash Sale 12H',
+        flashPrice: '120000.00',
+        regularPrice: '250000.00',
+        discountPercent: 52,
+        remainingQty: 6,
+        maxPerBuyer: 2,
+      }),
+    });
+    expect(detail.products[0]).toMatchObject({
+      minPrice: '120000.00',
+      originalPrice: '250000.00',
+    });
+
+    const insight = await tool.execute('get_price_insight', {
+      slug: 'red-shoe',
+    });
+    expect(insight.result).toMatchObject({
+      basis: 'active_flash_deal',
+      minPrice: '200000.00',
+      effectiveMinPrice: '120000.00',
+      originalPrice: '250000.00',
+      discountPercent: 52,
+      flashDeal: expect.objectContaining({
+        campaignTitle: 'Flash Sale 12H',
+        remainingQty: 6,
+      }),
+    });
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['get_product_detail', {}],
     ['get_product_detail', { slug: 'Bad Slug' }],
@@ -196,5 +252,32 @@ describe('AI read tools', () => {
     await expect(executor.execute('unknown_read', {}, turn)).rejects.toThrow(
       'Unsupported AI tool',
     );
+  });
+
+  it('dispatches get_flash_deals through FlashDealReadToolsService and caps evidence at five', async () => {
+    const flashExecute = vi.fn().mockResolvedValue({
+      result: { state: 'ACTIVE', items: [] },
+      products: Array.from({ length: 6 }, (_, i) => ({
+        ...shoe,
+        slug: `deal-${i}`,
+      })),
+      observedShopSlugs: ['shop'],
+    });
+    const executor = new ToolExecutorService(
+      {} as SearchProductsTool,
+      {} as TrackMyOrderTool,
+      {} as UiActionHandler,
+      undefined,
+      undefined,
+      { execute: flashExecute } as never,
+    );
+    const turn = { userMessage: '', products: [] };
+    await expect(
+      executor.execute('get_flash_deals', { state: 'ACTIVE' }, turn),
+    ).resolves.toEqual({ state: 'ACTIVE', items: [] });
+    expect(flashExecute).toHaveBeenCalledWith('get_flash_deals', {
+      state: 'ACTIVE',
+    });
+    expect(turn.products).toHaveLength(5);
   });
 });

@@ -141,14 +141,19 @@ export class AiAgentService {
     const hasAuctionTools = toolDeclarations.some(
       (decl) => decl.name === 'search_auctions',
     );
+    const hasFlashDealTools = toolDeclarations.some(
+      (decl) => decl.name === 'get_flash_deals',
+    );
     const systemPrompt = buildAiAssistantSystemPrompt({
       currentPath: context.currentPath,
       currentUrl: context.currentUrl,
       currentProductSlug: context.currentProductSlug,
       currentAuctionIdOrCode: context.currentAuctionIdOrCode,
+      language: context.language,
       isAuthenticated: input.isAuthenticated,
       hasReadTools,
       hasAuctionTools,
+      hasFlashDealTools,
     });
 
     const observedProducts: AiProductCard[] = [];
@@ -346,7 +351,11 @@ export class AiAgentService {
       );
 
       if (!finalReply) {
-        finalReply = this.synthesizeMaxRoundReply(finalProducts, finalAuctions);
+        finalReply = this.synthesizeMaxRoundReply(
+          finalProducts,
+          finalAuctions,
+          context.language,
+        );
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -371,7 +380,11 @@ export class AiAgentService {
           selectedAuctionIds,
           suppressAuctions,
         );
-        finalReply = this.synthesizeMaxRoundReply(finalProducts, finalAuctions);
+        finalReply = this.synthesizeMaxRoundReply(
+          finalProducts,
+          finalAuctions,
+          context.language,
+        );
       } else {
         this.logger.warn(`AI agent failed: ${reason}`);
 
@@ -603,10 +616,16 @@ export class AiAgentService {
       }
     }
 
+    const language =
+      raw?.language === 'vi' || raw?.language === 'en'
+        ? raw.language
+        : undefined;
+
     return {
       ...(currentPath ? { currentPath, currentUrl: currentPath } : {}),
       ...(currentProductSlug ? { currentProductSlug } : {}),
       ...(currentAuctionIdOrCode ? { currentAuctionIdOrCode } : {}),
+      ...(language ? { language } : {}),
       ...(isAuthenticated && raw?.userId ? { userId: raw.userId } : {}),
     };
   }
@@ -687,7 +706,17 @@ export class AiAgentService {
   private synthesizeMaxRoundReply(
     products: AiProductCard[],
     auctions: AiAuctionCard[],
+    language?: 'vi' | 'en',
   ): string {
+    if (language === 'en') {
+      if (products.length > 0) {
+        return `I found ${products.length} matching product(s) on Nexus. Please check the product cards below for full details!`;
+      }
+      if (auctions.length > 0) {
+        return `I found ${auctions.length} matching auction(s) on Nexus. Please check the auction cards below for details!`;
+      }
+      return "I couldn't find any products matching your request yet. Could you describe it in more detail or try another keyword?";
+    }
     if (products.length > 0) {
       return `Mình đã tìm thấy ${products.length} sản phẩm phù hợp trên Nexus. Bạn xem thông tin chi tiết ở các thẻ sản phẩm bên dưới nhé!`;
     }
@@ -756,6 +785,27 @@ export class AiAgentService {
     auctions: AiAuctionCard[],
     context?: AiChatContext,
   ): string[] {
+    if (context?.language === 'en') {
+      if (auctions.length > 0 || context?.currentAuctionIdOrCode) {
+        return [
+          'How much time is left on this auction?',
+          'How do bid steps and 60s anti-sniping work?',
+          'Which auctions am I currently participating in?',
+        ];
+      }
+      if (products.length > 0) {
+        return [
+          'Is this product in stock or on Flash Deal?',
+          'Show more trending products',
+          'Compare prices of these products',
+        ];
+      }
+      return [
+        'What Flash Deals are live right now?',
+        'Which auctions are live now?',
+        'Show trending products',
+      ];
+    }
     if (auctions.length > 0 || context?.currentAuctionIdOrCode) {
       return [
         'Phiên này còn bao lâu?',

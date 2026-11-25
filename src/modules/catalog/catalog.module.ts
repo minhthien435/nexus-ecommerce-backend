@@ -26,12 +26,17 @@ import { SellerProductService } from './services/seller-product.service.js';
 import { ExternalReferenceEntity } from '../integrations/entities/external-reference.entity.js';
 import { PublicShopController } from './controllers/public-shop.controller.js';
 import { PublicShopService } from './services/public-shop.service.js';
+import { ShopEngagementController } from './controllers/shop-engagement.controller.js';
+import { ShopEngagementService } from './services/shop-engagement.service.js';
 import { SellerBulkImportService } from './services/seller-bulk-import.service.js';
 import { ShopEntity } from '../identity/domain/shop.entity.js';
 import { AuctionEntity } from '../auction/entities/auction.entity.js';
 import { WarehouseEntity } from '../fulfillment/domain/entities/warehouse.entity.js';
 import { InventoryItemEntity } from '../fulfillment/domain/entities/inventory-item.entity.js';
 import { FlashDealModule } from './flash-deal.module.js';
+import { ProductReviewEntity } from './domain/entities/product-review.entity.js';
+import { ProductReviewController } from './controllers/product-review.controller.js';
+import { ProductReviewService } from './services/product-review.service.js';
 
 @Module({
   imports: [
@@ -45,6 +50,7 @@ import { FlashDealModule } from './flash-deal.module.js';
       AuctionEntity,
       WarehouseEntity,
       InventoryItemEntity,
+      ProductReviewEntity,
     ]),
     FlashDealModule,
     IdentityModule,
@@ -57,6 +63,8 @@ import { FlashDealModule } from './flash-deal.module.js';
     ProductSkuController,
     SellerProductController,
     PublicShopController,
+    ProductReviewController,
+    ShopEngagementController,
   ],
   providers: [
     CatalogCacheService,
@@ -67,6 +75,8 @@ import { FlashDealModule } from './flash-deal.module.js';
     SellerProductService,
     PublicShopService,
     SellerBulkImportService,
+    ProductReviewService,
+    ShopEngagementService,
     { provide: CatalogCartApi, useClass: CatalogCartService },
     {
       provide: InventoryAvailabilityPort,
