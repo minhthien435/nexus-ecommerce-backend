@@ -21,18 +21,13 @@ export class AddDisputePenaltyToShopReputationRewards1795600000000 implements Mi
         ADD CONSTRAINT "shop_reputation_rewards_source_type_check"
           CHECK (source_type IN ('ORDER_COMPLETION', 'SHOP_PROFILE_COMPLETION', 'DISPUTE_PENALTY')),
         ADD CONSTRAINT "shop_reputation_rewards_delta_check"
-          CHECK (delta BETWEEN -10 AND 10 AND delta <> 0),
+          CHECK (delta BETWEEN -10 AND 10),
         ADD CONSTRAINT "CK_shop_reward_reference"
           CHECK (
-            (source_type = 'ORDER_COMPLETION' AND order_id IS NOT NULL AND reference_id = order_id AND delta BETWEEN 1 AND 5)
-            OR (source_type = 'SHOP_PROFILE_COMPLETION' AND order_id IS NULL AND reference_id = shop_id AND delta BETWEEN 1 AND 10)
+            (source_type = 'ORDER_COMPLETION' AND order_id IS NOT NULL AND reference_id = order_id AND delta BETWEEN 0 AND 5)
+            OR (source_type = 'SHOP_PROFILE_COMPLETION' AND order_id IS NULL AND reference_id = shop_id AND delta BETWEEN 0 AND 10)
             OR (source_type = 'DISPUTE_PENALTY' AND order_id IS NOT NULL AND reference_id IS NOT NULL AND delta BETWEEN -10 AND -1)
           )
-    `);
-
-    await queryRunner.query(`
-      CREATE INDEX IF NOT EXISTS "IDX_shop_reputation_rewards_shop_created"
-        ON identity.shop_reputation_rewards (shop_id, created_at DESC)
     `);
   }
 
@@ -46,10 +41,6 @@ export class AddDisputePenaltyToShopReputationRewards1795600000000 implements Mi
         'Cannot rollback AddDisputePenaltyToShopReputationRewards: DISPUTE_PENALTY records exist in identity.shop_reputation_rewards.',
       );
     }
-
-    await queryRunner.query(`
-      DROP INDEX IF EXISTS identity."IDX_shop_reputation_rewards_shop_created"
-    `);
 
     await queryRunner.query(`
       ALTER TABLE identity.shop_reputation_rewards

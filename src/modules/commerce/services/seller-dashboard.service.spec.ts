@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DataSource } from 'typeorm';
 import {
   SellerDashboardService,
-  SUCCESSFUL_ORDER_STATUSES,
+  GROSS_REVENUE_ORDER_STATUSES,
 } from './seller-dashboard.service.js';
 
 describe('SellerDashboardService', () => {
@@ -102,10 +102,41 @@ describe('SellerDashboardService', () => {
         revenue: 1800000,
       });
 
-      // Verify queries called with sellerId, date param, and SUCCESSFUL_ORDER_STATUSES
+      // Verify queries called with sellerId, date param aligned to 00:00:00+07:00, and GROSS_REVENUE_ORDER_STATUSES
       expect(queryMock).toHaveBeenCalledTimes(7);
       expect(queryMock.mock.calls[0][1][0]).toBe(sellerId);
-      expect(queryMock.mock.calls[1][1][2]).toBe(SUCCESSFUL_ORDER_STATUSES);
+      const passedStartDate = queryMock.mock.calls[0][1][1] as Date;
+      expect(passedStartDate.toISOString()).toBe(
+        new Date(`${result.period.startDate}T00:00:00+07:00`).toISOString(),
+      );
+      expect(queryMock.mock.calls[1][1][2]).toBe(GROSS_REVENUE_ORDER_STATUSES);
+    });
+
+    it('calculates net revenue accurately without double-deducting refunded orders', async () => {
+      // Scenario: 1 COMPLETED order (1,000,000) and 1 REFUNDED order (1,000,000)
+      // Gross revenue from GROSS_REVENUE_ORDER_STATUSES = 2,000,000
+      // Refunded amount from COMPLETED refunds = 1,000,000
+      // Net revenue = 1,000,000
+      queryMock
+        .mockResolvedValueOnce([
+          { status: 'COMPLETED', count: 1 },
+          { status: 'REFUNDED', count: 1 },
+        ])
+        .mockResolvedValueOnce([{ gross_revenue: '2000000.00' }])
+        .mockResolvedValueOnce([{ refunded_amount: '1000000.00' }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ flashDealSoldUnits: 0 }])
+        .mockResolvedValueOnce([{ successfulAuctionSessions: 0 }]);
+
+      const result = await service.getStats(sellerId, { days: 7 });
+
+      expect(result.summary.grossRevenue).toBe(2000000);
+      expect(result.summary.refundedAmount).toBe(1000000);
+      expect(result.summary.netRevenue).toBe(1000000);
+      expect(result.summary.totalOrders).toBe(2);
+      expect(result.summary.successfulOrders).toBe(1);
+      expect(result.summary.refundedOrders).toBe(1);
     });
 
     it('returns 30-day stats when days=30 is specified', async () => {

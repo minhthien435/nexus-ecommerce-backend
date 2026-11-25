@@ -11,6 +11,16 @@ export const SUCCESSFUL_ORDER_STATUSES = [
   'COMPLETED',
 ] as const;
 
+export const GROSS_REVENUE_ORDER_STATUSES = [
+  'PAID',
+  'PROCESSING',
+  'SHIPPED',
+  'DELIVERED',
+  'COMPLETED',
+  'REFUND_REQUESTED',
+  'REFUNDED',
+] as const;
+
 export interface DailyRevenuePoint {
   date: string;
   revenue: number;
@@ -61,7 +71,6 @@ export class SellerDashboardService {
   ): Promise<SellerDashboardStats> {
     const days = query?.days === 30 ? 30 : 7;
     const now = new Date();
-    const startDateObj = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
     // Generate consecutive dates in Asia/Ho_Chi_Minh (UTC+7)
     const dateKeys: string[] = [];
@@ -75,6 +84,7 @@ export class SellerDashboardService {
 
     const startDateStr = dateKeys[0];
     const endDateStr = dateKeys[dateKeys.length - 1];
+    const startDateObj = new Date(`${startDateStr}T00:00:00+07:00`);
 
     // Execute queries in parallel
     const [
@@ -103,7 +113,7 @@ export class SellerDashboardService {
           WHERE seller_id = $1
             AND status = ANY($3::varchar[])
             AND created_at >= $2`,
-        [sellerId, startDateObj, SUCCESSFUL_ORDER_STATUSES],
+        [sellerId, startDateObj, GROSS_REVENUE_ORDER_STATUSES],
       ),
 
       // 3. Refunded amount
@@ -150,8 +160,8 @@ export class SellerDashboardService {
       >(
         `SELECT oi.sku_id AS "skuId",
                 oi.product_id AS "productId",
-                oi.product_name_snapshot AS "productName",
-                oi.sku_attributes_snapshot AS "skuAttributes",
+                MAX(oi.product_name_snapshot) AS "productName",
+                MAX(oi.sku_attributes_snapshot::text)::jsonb AS "skuAttributes",
                 COALESCE(SUM(oi.quantity), 0)::int AS "unitsSold",
                 COALESCE(SUM(oi.line_total), 0)::numeric AS "revenue"
            FROM commerce.order_items oi
@@ -159,7 +169,7 @@ export class SellerDashboardService {
           WHERE o.seller_id = $1
             AND o.status = ANY($3::varchar[])
             AND o.created_at >= $2
-          GROUP BY oi.sku_id, oi.product_id, oi.product_name_snapshot, oi.sku_attributes_snapshot
+          GROUP BY oi.sku_id, oi.product_id
           ORDER BY "unitsSold" DESC, "revenue" DESC
           LIMIT 5`,
         [sellerId, startDateObj, SUCCESSFUL_ORDER_STATUSES],
@@ -188,7 +198,7 @@ export class SellerDashboardService {
           WHERE a.seller_id = $1
             AND a.status = 'SETTLED'
             AND s.status IN ('PAID', 'COMPLETED')
-            AND a.created_at >= $2`,
+            AND s.settled_at >= $2`,
         [sellerId, startDateObj],
       ),
     ]);
