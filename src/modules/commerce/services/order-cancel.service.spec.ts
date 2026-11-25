@@ -60,7 +60,10 @@ function setup(
     transition: vi.fn().mockResolvedValue(undefined),
     finalizeExpiry: vi.fn().mockResolvedValue(undefined),
   };
-  const inventory = { release: vi.fn().mockResolvedValue(undefined) };
+  const inventory = {
+    release: vi.fn().mockResolvedValue(undefined),
+    restoreStock: vi.fn().mockResolvedValue(undefined),
+  };
   const refunds = {
     requestFullRefund: vi.fn().mockResolvedValue({
       refundId: 'refund-1',
@@ -104,8 +107,8 @@ describe('OrderCancelService', () => {
     expect(context.inventory.release).toHaveBeenCalledWith(
       [{ skuId, warehouseId, quantity: 2 }],
       context.manager,
-      { actorId, operation: 'ORDER_CANCELLATION', operationId: 'key-1' },
     );
+    expect(context.inventory.restoreStock).not.toHaveBeenCalled();
     expect(context.refunds.requestFullRefund).not.toHaveBeenCalled();
   });
 
@@ -118,6 +121,11 @@ describe('OrderCancelService', () => {
       ).resolves.toMatchObject({
         refund: { id: 'refund-1', status: 'REQUESTED' },
       });
+      expect(context.inventory.restoreStock).toHaveBeenCalledWith(
+        [{ skuId, warehouseId, quantity: 2 }],
+        context.manager,
+        expect.objectContaining({ orderId }),
+      );
       expect(context.refunds.requestFullRefund).toHaveBeenCalledWith(
         orderId,
         actorId,

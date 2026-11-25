@@ -4,7 +4,7 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { parse } from 'csv-parse';
 import { DataSource, EntityManager, In, IsNull } from 'typeorm';
@@ -232,9 +232,10 @@ export class SellerBulkImportService {
               }),
             ),
           );
+          const inventoryItemId = randomUUID();
           await manager.save(
             manager.create(InventoryItemEntity, {
-              id: randomUUID(),
+              id: inventoryItemId,
               skuId: sku.id,
               warehouseId: warehouses[0].id,
               totalQuantity: row.stock,
@@ -243,6 +244,34 @@ export class SellerBulkImportService {
               version: 1,
             }),
           );
+          if (row.stock > 0 && typeof manager.query === 'function') {
+            const fingerprint = createHash('sha256')
+              .update(
+                `BULK_IMPORT_INIT:${actorId}:${warehouses[0].id}:${sku.id}:${row.stock}`,
+              )
+              .digest('hex');
+            const idempotencyKey = `import:${sku.id}:${fingerprint.slice(0, 32)}`;
+            await manager.query(
+              `INSERT INTO fulfillment.seller_inventory_adjustments
+                 (inventory_item_id, sku_id, warehouse_id, actor_id, type,
+                  quantity_delta, quantity_before, quantity_after, reserved_after,
+                  unavailable_after, available_after, idempotency_key, request_fingerprint,
+                  reference_type, reference_id, note)
+               VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'BULK_IMPORT_INIT',
+                       $5::int, 0, $5::int, 0, 0, $5::int, $6, $7,
+                       'BULK_IMPORT', NULL, 'Initial stock from bulk import')
+               ON CONFLICT ("actor_id", "idempotency_key") DO NOTHING`,
+              [
+                inventoryItemId,
+                sku.id,
+                warehouses[0].id,
+                actorId,
+                row.stock,
+                idempotencyKey,
+                fingerprint,
+              ],
+            );
+          }
         }
       });
     } catch (error) {

@@ -12,7 +12,11 @@ const sellerAId = '11111111-1111-4111-8111-111111111111';
 const sellerBId = '22222222-2222-4222-8222-222222222222';
 const orderAId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function setup(options?: { ghnClientService?: unknown }) {
+function setup(options?: {
+  ghnClientService?: unknown;
+  hasPaidPayment?: number;
+  paymentMethod?: string;
+}) {
   const expiryCandidatesQb = {
     innerJoin: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
@@ -50,7 +54,27 @@ function setup(options?: { ghnClientService?: unknown }) {
         return callback({
           getRepository: (_entity: unknown) => {
             return {
-              findOne: orderRepo.findOne,
+              findOne: vi.fn(async (query) => {
+                if (query?.where?.id && query?.select?.paymentMethod) {
+                  return {
+                    id: query.where.id,
+                    paymentMethod: options?.paymentMethod ?? 'COD',
+                  };
+                }
+                const res = await orderRepo.findOne(query);
+                if (
+                  res &&
+                  res.paymentMethod === undefined &&
+                  res.checkoutSession === undefined &&
+                  res.checkoutSessionId === undefined
+                ) {
+                  return {
+                    ...res,
+                    paymentMethod: options?.paymentMethod ?? 'COD',
+                  };
+                }
+                return res;
+              }),
               find: vi.fn().mockResolvedValue([
                 {
                   skuId: 'sku-1',
@@ -59,6 +83,7 @@ function setup(options?: { ghnClientService?: unknown }) {
                   weightGramsSnapshot: 200,
                 },
               ]),
+              count: vi.fn().mockResolvedValue(options?.hasPaidPayment ?? 0),
               save: orderRepo.save,
             };
           },
@@ -66,6 +91,13 @@ function setup(options?: { ghnClientService?: unknown }) {
       },
     ),
     query: vi.fn().mockResolvedValue([]),
+  };
+
+  const inventoryReservation = {
+    reserve: vi.fn(),
+    release: vi.fn(),
+    deduct: vi.fn().mockResolvedValue(undefined),
+    restoreStock: vi.fn().mockResolvedValue(undefined),
   };
 
   const service = new OrderService(
@@ -80,7 +112,7 @@ function setup(options?: { ghnClientService?: unknown }) {
     catalogApi as never,
     {} as never,
     orderStateMachine as never,
-    {} as never,
+    inventoryReservation as never,
     {} as never,
     undefined,
     options?.ghnClientService as never,
@@ -92,6 +124,7 @@ function setup(options?: { ghnClientService?: unknown }) {
     expiryCandidatesQb,
     orderHistoryRepo,
     orderStateMachine,
+    inventoryReservation,
     dataSource,
   };
 }
@@ -361,6 +394,7 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         id: orderAId,
         sellerId: sellerAId,
         status: 'PROCESSING' as OrderStatus,
+        paymentMethod: 'COD',
       };
 
       orderRepo.findOne.mockResolvedValue(processingOrder);
@@ -389,6 +423,109 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
         carrierName: 'Viettel Post',
         updatedAt: expect.any(Date),
       });
+
+      // Finding B: COD orders (no successful payment) deduct total_qty & release reserved_qty upon shipment
+      const codSetup = setup({ hasPaidPayment: 0 });
+      codSetup.orderRepo.findOne.mockResolvedValue(processingOrder);
+      await codSetup.service.shipSellerOrder(sellerAId, orderAId, {
+        carrierName: 'Viettel Post',
+        trackingCode: 'VTP-VN-888999',
+      });
+      expect(codSetup.inventoryReservation.deduct).toHaveBeenCalledWith(
+        [{ skuId: 'sku-1', quantity: 2, warehouseId: undefined }],
+        expect.anything(),
+        expect.objectContaining({
+          orderId: orderAId,
+          actorId: sellerAId,
+        }),
+      );
+
+      // Paid orders (hasPaidPayment > 0) do NOT deduct again on shipment
+      const paidSetup = setup({ hasPaidPayment: 1 });
+      paidSetup.orderRepo.findOne.mockResolvedValue({
+        ...processingOrder,
+        paymentMethod: 'PAYOS',
+      });
+      await paidSetup.service.shipSellerOrder(sellerAId, orderAId, {
+        carrierName: 'Viettel Post',
+        trackingCode: 'VTP-VN-888999',
+      });
+      expect(paidSetup.inventoryReservation.deduct).not.toHaveBeenCalled();
+
+      // PayOS orders without successful payment must reject safely and NOT deduct stock
+      const payosUnpaidSetup = setup({ hasPaidPayment: 0 });
+      payosUnpaidSetup.orderRepo.findOne.mockResolvedValue({
+        ...processingOrder,
+        paymentMethod: 'PAYOS',
+      });
+      await expect(
+        payosUnpaidSetup.service.shipSellerOrder(sellerAId, orderAId, {
+          carrierName: 'Viettel Post',
+          trackingCode: 'VTP-VN-888999',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'ORDER_PAYMENT_UNCONFIRMED' },
+      });
+      expect(
+        payosUnpaidSetup.inventoryReservation.deduct,
+      ).not.toHaveBeenCalled();
+
+      // Stripe orders without successful payment must reject safely and NOT deduct stock
+      const stripeUnpaidSetup = setup({ hasPaidPayment: 0 });
+      stripeUnpaidSetup.orderRepo.findOne.mockResolvedValue({
+        ...processingOrder,
+        paymentMethod: 'STRIPE',
+      });
+      await expect(
+        stripeUnpaidSetup.service.shipSellerOrder(sellerAId, orderAId, {
+          carrierName: 'Viettel Post',
+          trackingCode: 'VTP-VN-888999',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'ORDER_PAYMENT_UNCONFIRMED' },
+      });
+      expect(
+        stripeUnpaidSetup.inventoryReservation.deduct,
+      ).not.toHaveBeenCalled();
+
+      // NULL or unknown payment method without successful payment must reject safely
+      const nullMethodSetup = setup({ hasPaidPayment: 0 });
+      nullMethodSetup.orderRepo.findOne.mockResolvedValue({
+        ...processingOrder,
+        paymentMethod: null,
+      });
+      await expect(
+        nullMethodSetup.service.shipSellerOrder(sellerAId, orderAId, {
+          carrierName: 'Viettel Post',
+          trackingCode: 'VTP-VN-888999',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'ORDER_PAYMENT_UNCONFIRMED' },
+      });
+      expect(
+        nullMethodSetup.inventoryReservation.deduct,
+      ).not.toHaveBeenCalled();
+
+      const unknownMethodSetup = setup({ hasPaidPayment: 0 });
+      unknownMethodSetup.orderRepo.findOne.mockResolvedValue({
+        ...processingOrder,
+        paymentMethod: 'CRYPTO_UNKNOWN',
+      });
+      await expect(
+        unknownMethodSetup.service.shipSellerOrder(sellerAId, orderAId, {
+          carrierName: 'Viettel Post',
+          trackingCode: 'VTP-VN-888999',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'ORDER_PAYMENT_UNCONFIRMED' },
+      });
+      expect(
+        unknownMethodSetup.inventoryReservation.deduct,
+      ).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -553,6 +690,7 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
           id: orderAId,
           sellerId: sellerAId,
           status: 'PROCESSING',
+          paymentMethod: 'COD',
           shippingAddressSnapshot: {
             recipientName: 'Nguyen Van A',
             recipientPhone: '0987654321',
@@ -614,6 +752,50 @@ describe('OrderService - Seller Orders Unit & Security Tests (NEX-FAST-04)', () 
           printUrl: 'https://print.ghn.vn/order/GHN-AUTO-999',
           updatedAt: expect.any(Date),
         });
+      });
+
+      it('rejects shipSellerOrderWithGhn safely when online order (PayOS) has not been paid', async () => {
+        const ghnClient = {
+          createNewAddressOrder: vi.fn().mockResolvedValue({
+            order_code: 'GHN-AUTO-999',
+          }),
+        };
+        const { service, orderRepo, inventoryReservation } = setup({
+          ghnClientService: ghnClient,
+          hasPaidPayment: 0,
+        });
+
+        orderRepo.findOne.mockResolvedValue({
+          id: orderAId,
+          sellerId: sellerAId,
+          status: 'PROCESSING',
+          paymentMethod: 'PAYOS',
+          shippingAddressSnapshot: {
+            recipientName: 'Nguyen Van A',
+            recipientPhone: '0987654321',
+            addressLine: '123 Nguyen Hue',
+            addressScheme: 'ghn_v3',
+            wardName: 'Ward',
+            provinceName: 'Hà Nội',
+          },
+          items: [
+            {
+              productNameSnapshot: 'Ao khoac Gio',
+              skuId: 'sku-1',
+              quantity: 2,
+              unitPrice: '150000.00',
+            },
+          ],
+        });
+
+        await expect(
+          service.shipSellerOrderWithGhn(sellerAId, orderAId),
+        ).rejects.toMatchObject({
+          status: 409,
+          response: { errorCode: 'ORDER_PAYMENT_UNCONFIRMED' },
+        });
+
+        expect(inventoryReservation.deduct).not.toHaveBeenCalled();
       });
     });
 

@@ -142,6 +142,8 @@ function setup(
         warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       })),
     ),
+    deduct: vi.fn().mockResolvedValue(undefined),
+    restoreStock: vi.fn().mockResolvedValue(undefined),
   };
 
   const expiryOutbox = {

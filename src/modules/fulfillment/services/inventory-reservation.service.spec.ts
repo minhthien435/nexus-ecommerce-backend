@@ -152,24 +152,14 @@ describe('InventoryReservationService', () => {
     await s.service.release(
       [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
       s.manager as never,
-      {
-        actorId: '66666666-6666-4666-8666-666666666666',
-        operation: 'ORDER_CANCELLATION',
-        operationId: 'cancel-key-1',
-      },
     );
-    expect(s.manager.query).toHaveBeenCalledTimes(2);
-    expect(s.manager.query.mock.calls[1][0]).toContain(
-      "'ORDER_CANCELLATION_RELEASE'",
+    expect(s.manager.query).toHaveBeenCalledTimes(1);
+    expect(s.manager.query.mock.calls[0][0]).toContain(
+      'UPDATE fulfillment.inventory_items',
     );
-    expect(s.manager.query.mock.calls[1][1][3]).toBe(
-      '66666666-6666-4666-8666-666666666666',
+    expect(s.manager.query.mock.calls[0][0]).toContain(
+      'reserved_qty = inventory.reserved_qty - requested.quantity',
     );
-    const idempotencyKey = s.manager.query.mock.calls[1][1][9] as string;
-    const requestFingerprint = s.manager.query.mock.calls[1][1][10] as string;
-    expect(idempotencyKey).toBe(`cancel:${requestFingerprint}`);
-    expect(idempotencyKey.length).toBeLessThanOrEqual(100);
-    expect(requestFingerprint).toHaveLength(64);
   });
 
   it('rejects a missing release row', async () => {
@@ -230,7 +220,275 @@ describe('InventoryReservationService', () => {
     await expect(
       s.service.release([], s.manager as never),
     ).resolves.toBeUndefined();
+    await expect(
+      s.service.deduct([], s.manager as never, { orderId: 'ord-1' }),
+    ).resolves.toBeUndefined();
     expect(s.manager.getRepository).not.toHaveBeenCalled();
     expect(s.manager.query).not.toHaveBeenCalled();
+  });
+
+  describe('deduct', () => {
+    it('deducts total and reserved quantity and records ORDER_DEDUCT adjustment for system actor', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check SELECT id (not existing)
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-1',
+            warehouse_id: firstWarehouse,
+            sku_id: firstSku,
+            quantity_before: 10,
+            quantity_after: 8,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 8,
+          },
+        ]) // update
+        .mockResolvedValueOnce([]); // insert ledger
+
+      await s.service.deduct(
+        [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+        s.manager as never,
+        {
+          orderId: '55555555-5555-4555-8555-555555555555',
+          actorId: null,
+          note: 'Paid order deduction',
+        },
+      );
+
+      expect(s.manager.query).toHaveBeenCalledTimes(4);
+      expect(s.manager.query.mock.calls[0][0]).toContain(
+        'pg_advisory_xact_lock',
+      );
+      expect(s.manager.query.mock.calls[1][0]).toContain(
+        'WHERE idempotency_key = $1',
+      );
+
+      const updateCall = s.manager.query.mock.calls[2];
+      expect(updateCall[0]).toContain(
+        'total_qty = inventory.total_qty - $3::int',
+      );
+      expect(updateCall[0]).toContain(
+        'reserved_qty = GREATEST(0, inventory.reserved_qty - $3::int)',
+      );
+      expect(updateCall[1]).toEqual([firstWarehouse, firstSku, 2]);
+
+      const insertCall = s.manager.query.mock.calls[3];
+      expect(insertCall[0]).toContain("'ORDER_DEDUCT'");
+      expect(insertCall[1][3]).toBeNull(); // actor_id is null
+      expect(insertCall[1][4]).toBe(-2); // delta is negative
+      expect(insertCall[1][12]).toBe('55555555-5555-4555-8555-555555555555');
+      expect(insertCall[1][13]).toBe('Paid order deduction');
+    });
+
+    it('supports seller-initiated events (actor_id IS NOT NULL) in deduct', async () => {
+      const s = setup();
+      const sellerId = '44444444-4444-4444-8444-444444444444';
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check SELECT id (not existing)
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-1',
+            warehouse_id: firstWarehouse,
+            sku_id: firstSku,
+            quantity_before: 10,
+            quantity_after: 8,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 8,
+          },
+        ]) // update
+        .mockResolvedValueOnce([]); // insert ledger
+
+      await s.service.deduct(
+        [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+        s.manager as never,
+        {
+          orderId: '55555555-5555-4555-8555-555555555555',
+          actorId: sellerId,
+          note: 'COD order shipment deduction',
+        },
+      );
+
+      expect(s.manager.query).toHaveBeenCalledTimes(4);
+      const insertCall = s.manager.query.mock.calls[3];
+      expect(insertCall[1][3]).toBe(sellerId); // actor_id is sellerId
+      expect(insertCall[1][4]).toBe(-2);
+    });
+
+    it('safely skips deduction if idempotency_key was already processed (duplicate deduct)', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([{ id: 'existing-ledger-id' }]); // pre-check finds existing
+
+      await s.service.deduct(
+        [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+        s.manager as never,
+        {
+          orderId: '55555555-5555-4555-8555-555555555555',
+          actorId: null,
+        },
+      );
+
+      // Lock and pre-check called, but UPDATE and INSERT are skipped
+      expect(s.manager.query).toHaveBeenCalledTimes(2);
+      expect(s.manager.query.mock.calls[0][0]).toContain(
+        'pg_advisory_xact_lock',
+      );
+      expect(s.manager.query.mock.calls[1][0]).toContain(
+        'WHERE idempotency_key = $1',
+      );
+    });
+
+    it('rejects deduction when total quantity is insufficient', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check
+        .mockResolvedValueOnce([]); // update returns 0 rows
+
+      await expect(
+        s.service.deduct(
+          [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 10 }],
+          s.manager as never,
+          { orderId: '55555555-5555-4555-8555-555555555555' },
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'INSUFFICIENT_STOCK' },
+      });
+    });
+  });
+
+  describe('restoreStock', () => {
+    it('restores total quantity and records ORDER_CANCELLATION_RELEASE ledger entry', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-1',
+            warehouse_id: firstWarehouse,
+            sku_id: firstSku,
+            quantity_before: 8,
+            quantity_after: 10,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 10,
+          },
+        ]) // update total_qty
+        .mockResolvedValueOnce([]); // insert ledger
+
+      await s.service.restoreStock(
+        [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+        s.manager as never,
+        {
+          orderId: '66666666-6666-4666-8666-666666666666',
+          actorId: '77777777-7777-4777-8777-777777777777',
+          note: 'Cancelled paid order',
+        },
+      );
+
+      expect(s.manager.query).toHaveBeenCalledTimes(4);
+      expect(s.manager.query.mock.calls[0][0]).toContain(
+        'pg_advisory_xact_lock',
+      );
+      expect(s.manager.query.mock.calls[1][0]).toContain(
+        'WHERE idempotency_key = $1',
+      );
+
+      const updateCall = s.manager.query.mock.calls[2];
+      expect(updateCall[0]).toContain(
+        'total_qty = inventory.total_qty + $3::int',
+      );
+      expect(updateCall[1]).toEqual([firstWarehouse, firstSku, 2]);
+
+      const insertCall = s.manager.query.mock.calls[3];
+      expect(insertCall[0]).toContain("'ORDER_CANCELLATION_RELEASE'");
+      expect(insertCall[1][4]).toBe(2); // positive quantity delta
+      expect(insertCall[1][5]).toBe(8); // before
+      expect(insertCall[1][6]).toBe(10); // after
+      expect(insertCall[1][12]).toBe('66666666-6666-4666-8666-666666666666');
+    });
+
+    it('skips restoreStock without changing stock if idempotency_key was already processed (duplicate/retry)', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([{ id: 'existing-restore-ledger-id' }]); // pre-check finds existing
+
+      await s.service.restoreStock(
+        [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+        s.manager as never,
+        {
+          orderId: '66666666-6666-4666-8666-666666666666',
+          actorId: null,
+        },
+      );
+
+      // Lock and pre-check called, but UPDATE and INSERT are skipped
+      expect(s.manager.query).toHaveBeenCalledTimes(2);
+      expect(s.manager.query.mock.calls[0][0]).toContain(
+        'pg_advisory_xact_lock',
+      );
+      expect(s.manager.query.mock.calls[1][0]).toContain(
+        'WHERE idempotency_key = $1',
+      );
+    });
+
+    it('rejects restoreStock when total quantity would overflow integer max', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check
+        .mockResolvedValueOnce([]); // update returns 0 rows
+
+      await expect(
+        s.service.restoreStock(
+          [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 10 }],
+          s.manager as never,
+          { orderId: '66666666-6666-4666-8666-666666666666' },
+        ),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'INVENTORY_QUANTITY_OVERFLOW' },
+      });
+    });
+
+    it('propagates database error when ledger insert fails (rolling back update)', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // advisory lock
+        .mockResolvedValueOnce([]) // pre-check
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-1',
+            warehouse_id: firstWarehouse,
+            sku_id: firstSku,
+            quantity_before: 8,
+            quantity_after: 10,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 10,
+          },
+        ]) // update
+        .mockRejectedValueOnce(
+          new Error(
+            'Unique constraint violation: UQ_seller_inventory_adjustments_system_idempotency',
+          ),
+        ); // ledger insert fails
+
+      await expect(
+        s.service.restoreStock(
+          [{ warehouseId: firstWarehouse, skuId: firstSku, quantity: 2 }],
+          s.manager as never,
+          { orderId: '66666666-6666-4666-8666-666666666666' },
+        ),
+      ).rejects.toThrow('Unique constraint violation');
+    });
   });
 });

@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { CatalogCartApi } from '../../catalog/catalog-cart.api.js';
 import { UserAddressEntity } from '../../identity/users/entities/user-address.entity.js';
 import { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
@@ -1439,6 +1439,13 @@ export class OrderService {
           reason: reasonDetails,
         });
 
+        await this.deductCodOrderStockOnShipment(
+          manager,
+          order,
+          sellerId,
+          `COD order shipped: ${carrierName} - ${trackingCode}`,
+        );
+
         shipped.trackingCode = trackingCode;
         shipped.carrierName = carrierName;
         const saved = await manager.getRepository(OrderEntity).save(shipped);
@@ -1471,6 +1478,7 @@ export class OrderService {
       async (manager) => {
         const order = await manager.getRepository(OrderEntity).findOne({
           where: { id: orderId, sellerId: sellerId.toLowerCase() },
+          relations: { checkoutSession: true },
           lock: { mode: 'pessimistic_write' },
         });
         if (!order) {
@@ -1563,6 +1571,13 @@ export class OrderService {
           actorId: sellerId,
           reason: reasonDetails,
         });
+
+        await this.deductCodOrderStockOnShipment(
+          manager,
+          order,
+          sellerId,
+          `COD order shipped via GHN: ${ghnResult.order_code}`,
+        );
 
         shipped.trackingCode = ghnResult.order_code;
         shipped.carrierName = 'GHN';
@@ -1805,6 +1820,73 @@ export class OrderService {
         `Order ${orderId} status committed but notification dispatch failed`,
         error instanceof Error ? error.stack : undefined,
       );
+    }
+  }
+
+  private async deductCodOrderStockOnShipment(
+    manager: EntityManager,
+    order: OrderEntity,
+    sellerId: string,
+    note: string,
+  ): Promise<void> {
+    const orderId = order.id;
+    let paymentMethod =
+      order.paymentMethod ?? order.checkoutSession?.paymentMethod ?? null;
+
+    if (!paymentMethod && order.checkoutSessionId) {
+      const sessionRepo = manager.getRepository(CheckoutSessionEntity);
+      if (typeof sessionRepo?.findOne === 'function') {
+        const session = await sessionRepo.findOne({
+          select: { id: true, paymentMethod: true },
+          where: { id: order.checkoutSessionId },
+        });
+        paymentMethod = session?.paymentMethod ?? null;
+      }
+    }
+
+    const paymentRepo = manager.getRepository(PaymentEntity);
+    const hasPaidPayment =
+      typeof paymentRepo?.count === 'function'
+        ? await paymentRepo.count({ where: { orderId, status: 'SUCCEEDED' } })
+        : 0;
+
+    const normalizedMethod = paymentMethod ? paymentMethod.toUpperCase() : null;
+
+    if (normalizedMethod === 'COD') {
+      if (hasPaidPayment === 0) {
+        const itemRepo = manager.getRepository(OrderItemEntity);
+        const items: OrderItemEntity[] =
+          typeof itemRepo?.find === 'function'
+            ? await itemRepo.find({
+                select: { skuId: true, quantity: true, warehouseId: true },
+                where: { orderId },
+                order: { id: 'ASC' },
+              })
+            : [];
+        if (
+          items.length > 0 &&
+          typeof this.inventoryReservation?.deduct === 'function'
+        ) {
+          await this.inventoryReservation.deduct(
+            items.map((i: OrderItemEntity) => ({
+              skuId: i.skuId,
+              quantity: i.quantity,
+              warehouseId: i.warehouseId ?? undefined,
+            })),
+            manager,
+            {
+              orderId,
+              actorId: sellerId,
+              note,
+            },
+          );
+        }
+      }
+    } else if (hasPaidPayment === 0) {
+      throw new ConflictException({
+        errorCode: 'ORDER_PAYMENT_UNCONFIRMED',
+        message: `Cannot ship order with payment method ${normalizedMethod ?? 'UNKNOWN'} without confirmed payment`,
+      });
     }
   }
 }

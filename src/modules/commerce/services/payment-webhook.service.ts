@@ -15,6 +15,7 @@ import { OrderStatusHistoryEntity } from '../domain/entities/order-status-histor
 import { PaymentCallbackEntity } from '../domain/entities/payment-callback.entity.js';
 import { PaymentEntity } from '../domain/entities/payment.entity.js';
 import { CartItemEntity } from '../domain/entities/cart-item.entity.js';
+import { OrderItemEntity } from '../domain/entities/order-item.entity.js';
 import {
   ORDER_EXPIRY_QUEUE,
   type OrderExpiryJobPayload,
@@ -22,6 +23,7 @@ import {
 import { PayosClientService } from './payos-client.service.js';
 import { NotificationDispatchApi } from '../../notification/notification-dispatch.api.js';
 import { IdentityReputationApi } from '../../identity/identity-reputation.api.js';
+import { InventoryReservationApi } from '../../fulfillment/inventory-reservation.api.js';
 import { FlashDealQuotaService } from './flash-deal-quota.service.js';
 
 export interface WebhookProcessingResult {
@@ -44,6 +46,8 @@ export class PaymentWebhookService {
     private readonly notifications?: NotificationDispatchApi,
     @Optional()
     private readonly reputationApi?: IdentityReputationApi,
+    @Optional()
+    private readonly inventoryReservation?: InventoryReservationApi,
   ) {}
 
   async handlePayosWebhook(body: Webhook): Promise<WebhookProcessingResult> {
@@ -176,6 +180,26 @@ export class PaymentWebhookService {
             order.status = 'PAID';
             await manager.save(order);
             await this.flashDeals.commitByOrderId(manager, order.id);
+
+            if (this.inventoryReservation) {
+              const orderItems = await manager
+                .getRepository(OrderItemEntity)
+                .find({
+                  select: { skuId: true, quantity: true, warehouseId: true },
+                  where: { orderId: order.id },
+                });
+              if (orderItems.length > 0) {
+                await this.inventoryReservation.deduct(
+                  orderItems.map((item) => ({
+                    skuId: item.skuId,
+                    quantity: item.quantity,
+                    warehouseId: item.warehouseId ?? undefined,
+                  })),
+                  manager,
+                  { orderId: order.id, actorId: null },
+                );
+              }
+            }
 
             await manager.delete(CartItemEntity, {
               reservedOrderId: order.id,

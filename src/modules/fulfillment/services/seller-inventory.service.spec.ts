@@ -291,4 +291,281 @@ describe('SellerInventoryService', () => {
     ).rejects.toThrow('ledger failed');
     expect(s.dataSource.transaction).toHaveBeenCalledOnce();
   });
+
+  describe('decrease', () => {
+    it('atomically decreases available inventory and records MANUAL_DECREASE', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock
+        .mockResolvedValueOnce([{ id: skuId }]) // ownership
+        .mockResolvedValueOnce([]) // existing idempotency
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: itemId,
+            sku_id: skuId,
+            warehouse_id: warehouseId,
+            quantity_before: 10,
+            total_quantity: 7,
+            reserved_quantity: 2,
+            unavailable_quantity: 0,
+            available_quantity: 5,
+          },
+        ]) // update inventory
+        .mockResolvedValueOnce([
+          { created_at: new Date('2026-11-24T00:00:00Z') },
+        ]); // insert ledger
+
+      const res = await s.service.decrease(actorId, {
+        skuId,
+        quantity: 3,
+        idempotencyKey: 'dec-1',
+        note: 'Damaged item removed',
+      });
+
+      expect(res).toEqual({
+        skuId,
+        warehouseId,
+        type: 'MANUAL_DECREASE',
+        quantityDelta: -3,
+        totalQuantity: 7,
+        reservedQuantity: 2,
+        unavailableQuantity: 0,
+        availableQuantity: 5,
+        note: 'Damaged item removed',
+        idempotencyKey: 'dec-1',
+        createdAt: new Date('2026-11-24T00:00:00Z'),
+      });
+      const updateCall = s.manager.query.mock.calls[3];
+      expect(updateCall[0]).toContain('available_qty >= $3::int');
+      expect(updateCall[1]).toEqual([skuId, warehouseId, 3]);
+
+      const insertCall = s.manager.query.mock.calls[4];
+      expect(insertCall[0]).toContain("'MANUAL_DECREASE'");
+      expect(insertCall[1][4]).toBe(-3);
+      expect(insertCall[1][12]).toBe('Damaged item removed');
+    });
+
+    it('rejects decrease when available stock is insufficient', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock
+        .mockResolvedValueOnce([{ id: skuId }]) // ownership
+        .mockResolvedValueOnce([]) // existing idempotency
+        .mockResolvedValueOnce([]); // update returns empty (insufficient stock)
+
+      await expect(
+        s.service.decrease(actorId, {
+          skuId,
+          quantity: 20,
+          idempotencyKey: 'dec-2',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'INSUFFICIENT_STOCK' },
+      });
+    });
+
+    it('returns existing response for idempotent decrease retry', async () => {
+      const s = setup();
+      const fingerprint = createHash('sha256')
+        .update(`${skuId}:3:Damaged`)
+        .digest('hex');
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock
+        .mockResolvedValueOnce([{ id: skuId }]) // ownership
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: itemId,
+            sku_id: skuId,
+            warehouse_id: warehouseId,
+            quantity_delta: -3,
+            quantity_before: 10,
+            total_quantity: 7,
+            reserved_quantity: 1,
+            unavailable_quantity: 0,
+            available_quantity: 6,
+            idempotency_key: 'dec-3',
+            request_fingerprint: fingerprint,
+            created_at: new Date('2026-11-24T00:00:00Z'),
+            note: 'Damaged',
+          },
+        ]);
+
+      const res = await s.service.decrease(actorId, {
+        skuId,
+        quantity: 3,
+        idempotencyKey: 'dec-3',
+        note: 'Damaged',
+      });
+
+      expect(res).toMatchObject({
+        skuId,
+        warehouseId,
+        type: 'MANUAL_DECREASE',
+        quantityDelta: -3,
+        totalQuantity: 7,
+        note: 'Damaged',
+      });
+      // Ensure no update was called
+      expect(s.manager.query).toHaveBeenCalledTimes(3);
+    });
+
+    it('rejects reuse of idempotency key with different payload for decrease', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock
+        .mockResolvedValueOnce([{ id: skuId }]) // ownership
+        .mockResolvedValueOnce([
+          {
+            request_fingerprint: 'different_hash',
+          },
+        ]);
+
+      await expect(
+        s.service.decrease(actorId, {
+          skuId,
+          quantity: 5,
+          idempotencyKey: 'dec-4',
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { errorCode: 'IDEMPOTENCY_KEY_REUSED' },
+      });
+    });
+
+    it('rejects decrease on SKU not owned by seller', async () => {
+      const s = setup();
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock
+        .mockResolvedValueOnce([]); // not owned
+
+      await expect(
+        s.service.decrease(actorId, {
+          skuId,
+          quantity: 1,
+          idempotencyKey: 'dec-5',
+        }),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: { errorCode: 'SELLER_SKU_NOT_FOUND' },
+      });
+    });
+  });
+
+  describe('history', () => {
+    it('returns paginated stock history for seller with actorName fallback to System', async () => {
+      const s = setup();
+      s.dataSource.query
+        .mockResolvedValueOnce([{ total: 1 }]) // count
+        .mockResolvedValueOnce([
+          {
+            id: 'adj-1',
+            skuId,
+            skuCode: 'SKU-001',
+            productName: 'T-Shirt',
+            warehouseId,
+            actorId: null,
+            actorName: 'System',
+            type: 'ORDER_DEDUCT',
+            quantityDelta: -2,
+            quantityBefore: 10,
+            quantityAfter: 8,
+            reservedAfter: 0,
+            unavailableAfter: 0,
+            availableAfter: 8,
+            referenceType: 'ORDER',
+            referenceId: 'order-1',
+            note: 'Order payment stock deduction',
+            idempotencyKey: 'deduct:order-1:sku-1',
+            createdAt: new Date('2026-11-24T01:00:00Z'),
+          },
+        ]); // items
+
+      const res = await s.service.history(actorId, { page: 1, limit: 10 });
+      expect(res).toEqual({
+        items: [
+          {
+            id: 'adj-1',
+            skuId,
+            skuCode: 'SKU-001',
+            productName: 'T-Shirt',
+            warehouseId,
+            actorId: null,
+            actorName: 'System',
+            type: 'ORDER_DEDUCT',
+            quantityDelta: -2,
+            quantityBefore: 10,
+            quantityAfter: 8,
+            reservedAfter: 0,
+            unavailableAfter: 0,
+            availableAfter: 8,
+            referenceType: 'ORDER',
+            referenceId: 'order-1',
+            note: 'Order payment stock deduction',
+            idempotencyKey: 'deduct:order-1:sku-1',
+            createdAt: new Date('2026-11-24T01:00:00Z'),
+          },
+        ],
+        total: 1,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+      });
+
+      const countSql = s.dataSource.query.mock.calls[0][0];
+      expect(countSql).toContain('product.seller_id = $1::uuid');
+      const dataSql = s.dataSource.query.mock.calls[1][0];
+      expect(dataSql).toContain('LEFT JOIN identity.users');
+      expect(dataSql).toContain("COALESCE(u.full_name, 'System')");
+    });
+
+    it('enforces ownership check when querying with a specific skuId for non-admin', async () => {
+      const s = setup();
+      s.dataSource.query
+        .mockResolvedValueOnce([{ id: skuId }]) // ownership check passes
+        .mockResolvedValueOnce([{ total: 0 }]) // count
+        .mockResolvedValueOnce([]); // items
+
+      await s.service.history(actorId, { page: 1, limit: 20, skuId });
+      expect(s.dataSource.query.mock.calls[0][0]).toContain(
+        'product.seller_id = $2::uuid',
+      );
+    });
+
+    it('rejects history query for non-owned skuId', async () => {
+      const s = setup();
+      s.dataSource.query.mockResolvedValueOnce([]); // ownership check fails
+
+      await expect(
+        s.service.history(actorId, { page: 1, limit: 20, skuId }),
+      ).rejects.toMatchObject({
+        status: 404,
+        response: { errorCode: 'SELLER_SKU_NOT_FOUND' },
+      });
+    });
+
+    it('allows admin to query history without seller ownership restrictions', async () => {
+      const s = setup();
+      s.identity.getUserRoles.mockResolvedValue(['ADMIN']);
+      s.dataSource.query
+        .mockResolvedValueOnce([{ total: 5 }]) // count
+        .mockResolvedValueOnce([]); // items
+
+      await s.service.history(actorId, { page: 1, limit: 20 });
+      const countSql = s.dataSource.query.mock.calls[0][0];
+      expect(countSql).not.toContain('product.seller_id =');
+    });
+
+    it('includes soft-deleted products in history audit while maintaining seller isolation', async () => {
+      const s = setup();
+      s.dataSource.query
+        .mockResolvedValueOnce([{ total: 3 }]) // count
+        .mockResolvedValueOnce([]); // items
+
+      await s.service.history(actorId, { page: 1, limit: 20 });
+      const countSql = s.dataSource.query.mock.calls[0][0];
+      expect(countSql).toContain('product.seller_id = $1::uuid');
+      expect(countSql).not.toContain('product.deleted_at IS NULL');
+    });
+  });
 });
