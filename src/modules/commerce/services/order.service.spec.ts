@@ -269,6 +269,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       id: 'order-1',
       sellerId: seller1,
       status: 'PROCESSING',
+      paymentMethod: 'COD',
       shippingAddressSnapshot: {
         addressScheme: 'ghn_v3',
         recipientName: 'Buyer',
@@ -313,6 +314,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       id: 'order-1',
       sellerId: seller1,
       status: 'PROCESSING',
+      paymentMethod: 'COD',
       shippingAddressSnapshot: {
         addressScheme: 'ghn_v3',
         recipientName: 'Buyer',

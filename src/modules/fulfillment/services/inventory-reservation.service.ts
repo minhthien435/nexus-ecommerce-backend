@@ -118,11 +118,23 @@ SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
   ): Promise<void> {
     if (!Array.isArray(items) || items.length === 0) return;
     const defaultWh = await this.defaultWarehouseId(manager);
-    for (const item of items) {
-      const warehouseId = item.warehouseId ?? defaultWh;
+    const validItems = items.filter(
+      (item) =>
+        Number.isSafeInteger(Number(item?.quantity)) &&
+        Number(item?.quantity) > 0,
+    );
+    if (validItems.length === 0) return;
+    const normalized = this.normalizeReceipts(
+      validItems.map((item) => ({
+        skuId: item.skuId,
+        quantity: Number(item.quantity),
+        warehouseId: item.warehouseId ?? defaultWh,
+      })),
+    );
+    for (const item of normalized) {
+      const warehouseId = item.warehouseId;
       const skuId = item.skuId.toLowerCase();
-      const quantity = Number(item.quantity);
-      if (quantity <= 0) continue;
+      const quantity = item.quantity;
 
       const key = `cancel-restore:${context.orderId}:${skuId}`;
       const actorId = context.actorId ?? null;
@@ -226,11 +238,23 @@ SELECT * FROM updated ORDER BY warehouse_id, sku_id`,
   ): Promise<void> {
     if (!Array.isArray(items) || items.length === 0) return;
     const defaultWh = await this.defaultWarehouseId(manager);
-    for (const item of items) {
-      const warehouseId = item.warehouseId ?? defaultWh;
+    const validItems = items.filter(
+      (item) =>
+        Number.isSafeInteger(Number(item?.quantity)) &&
+        Number(item?.quantity) > 0,
+    );
+    if (validItems.length === 0) return;
+    const normalized = this.normalizeReceipts(
+      validItems.map((item) => ({
+        skuId: item.skuId,
+        quantity: Number(item.quantity),
+        warehouseId: item.warehouseId ?? defaultWh,
+      })),
+    );
+    for (const item of normalized) {
+      const warehouseId = item.warehouseId;
       const skuId = item.skuId.toLowerCase();
-      const quantity = Number(item.quantity);
-      if (quantity <= 0) continue;
+      const quantity = item.quantity;
 
       const key = `deduct:${context.orderId}:${skuId}`;
       const actorId = context.actorId ?? null;

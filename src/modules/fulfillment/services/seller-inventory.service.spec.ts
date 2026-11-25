@@ -300,17 +300,20 @@ describe('SellerInventoryService', () => {
         .mockResolvedValueOnce([{ id: skuId }]) // ownership
         .mockResolvedValueOnce([]) // existing idempotency
         .mockResolvedValueOnce([
-          {
-            inventory_item_id: itemId,
-            sku_id: skuId,
-            warehouse_id: warehouseId,
-            quantity_before: 10,
-            total_quantity: 7,
-            reserved_quantity: 2,
-            unavailable_quantity: 0,
-            available_quantity: 5,
-          },
-        ]) // update inventory
+          [
+            {
+              inventory_item_id: itemId,
+              sku_id: skuId,
+              warehouse_id: warehouseId,
+              quantity_before: 10,
+              total_quantity: 7,
+              reserved_quantity: 2,
+              unavailable_quantity: 0,
+              available_quantity: 5,
+            },
+          ],
+          1,
+        ]) // update inventory (TypeORM UPDATE ... RETURNING returns [rows, rowCount])
         .mockResolvedValueOnce([
           { created_at: new Date('2026-11-24T00:00:00Z') },
         ]); // insert ledger
@@ -351,7 +354,7 @@ describe('SellerInventoryService', () => {
         .mockResolvedValueOnce([]) // lock
         .mockResolvedValueOnce([{ id: skuId }]) // ownership
         .mockResolvedValueOnce([]) // existing idempotency
-        .mockResolvedValueOnce([]); // update returns empty (insufficient stock)
+        .mockResolvedValueOnce([[], 0]); // update returns empty tuple (insufficient stock in TypeORM)
 
       await expect(
         s.service.decrease(actorId, {

@@ -1577,6 +1577,13 @@ export class OrderService {
           clientOrderCode: order.id,
         };
 
+        await this.deductCodOrderStockOnShipment(
+          manager,
+          order,
+          sellerId,
+          `COD order shipped via GHN`,
+        );
+
         const ghnResult =
           await this.ghnClientService!.createNewAddressOrder(ghnPayload);
 
@@ -1587,13 +1594,6 @@ export class OrderService {
           actorId: sellerId,
           reason: reasonDetails,
         });
-
-        await this.deductCodOrderStockOnShipment(
-          manager,
-          order,
-          sellerId,
-          `COD order shipped via GHN: ${ghnResult.order_code}`,
-        );
 
         shipped.trackingCode = ghnResult.order_code;
         shipped.carrierName = 'GHN';

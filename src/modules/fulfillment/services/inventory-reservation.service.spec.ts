@@ -490,5 +490,62 @@ describe('InventoryReservationService', () => {
         ),
       ).rejects.toThrow('Unique constraint violation');
     });
+
+    it('aggregates duplicate items and processes in sorted (warehouseId, skuId) order', async () => {
+      const s = setup();
+      const skuA = '11111111-1111-4111-8111-111111111111';
+      const skuB = '22222222-2222-4222-8222-222222222222';
+
+      s.manager.query
+        .mockResolvedValueOnce([]) // lock A
+        .mockResolvedValueOnce([]) // precheck A
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-a',
+            warehouse_id: firstWarehouse,
+            sku_id: skuA,
+            quantity_before: 5,
+            quantity_after: 8,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 8,
+          },
+        ]) // update A (quantity = 2 + 1 = 3)
+        .mockResolvedValueOnce([]) // insert ledger A
+        .mockResolvedValueOnce([]) // lock B
+        .mockResolvedValueOnce([]) // precheck B
+        .mockResolvedValueOnce([
+          {
+            inventory_item_id: 'inv-item-b',
+            warehouse_id: firstWarehouse,
+            sku_id: skuB,
+            quantity_before: 10,
+            quantity_after: 15,
+            reserved_after: 0,
+            unavailable_after: 0,
+            available_after: 15,
+          },
+        ]) // update B (quantity = 5)
+        .mockResolvedValueOnce([]); // insert ledger B
+
+      // Input has skuB first, and skuA split into two items (2 and 1)
+      await s.service.restoreStock(
+        [
+          { warehouseId: firstWarehouse, skuId: skuB, quantity: 5 },
+          { warehouseId: firstWarehouse, skuId: skuA, quantity: 2 },
+          { warehouseId: firstWarehouse, skuId: skuA, quantity: 1 },
+        ],
+        s.manager as never,
+        { orderId: '66666666-6666-4666-8666-666666666666' },
+      );
+
+      // Total 2 aggregated items processed in sorted order: skuA (qty 3), then skuB (qty 5)
+      expect(s.manager.query).toHaveBeenCalledTimes(8);
+      const updateA = s.manager.query.mock.calls[2];
+      expect(updateA[1]).toEqual([firstWarehouse, skuA, 3]);
+
+      const updateB = s.manager.query.mock.calls[6];
+      expect(updateB[1]).toEqual([firstWarehouse, skuB, 5]);
+    });
   });
 });

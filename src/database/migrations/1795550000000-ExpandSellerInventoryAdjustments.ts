@@ -1,7 +1,7 @@
 import type { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class ExpandSellerInventoryAdjustments1795500000000 implements MigrationInterface {
-  name = 'ExpandSellerInventoryAdjustments1795500000000';
+export class ExpandSellerInventoryAdjustments1795550000000 implements MigrationInterface {
+  name = 'ExpandSellerInventoryAdjustments1795550000000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
@@ -50,7 +50,17 @@ export class ExpandSellerInventoryAdjustments1795500000000 implements MigrationI
       ALTER TABLE "fulfillment"."seller_inventory_adjustments"
         DROP CONSTRAINT IF EXISTS "CHK_seller_inventory_adjustments_type",
         ADD CONSTRAINT "CHK_seller_inventory_adjustments_type"
-          CHECK ("type" IN ('RESTOCK'));
+          CHECK ("type" IN ('RESTOCK', 'ORDER_CANCELLATION_RELEASE'));
+
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM "fulfillment"."seller_inventory_adjustments" WHERE "actor_id" IS NULL) THEN
+          RAISE EXCEPTION 'Cannot rollback: seller_inventory_adjustments contains records with null actor_id';
+        END IF;
+      END $$;
+
+      ALTER TABLE "fulfillment"."seller_inventory_adjustments"
+        ALTER COLUMN "actor_id" SET NOT NULL;
     `);
   }
 }

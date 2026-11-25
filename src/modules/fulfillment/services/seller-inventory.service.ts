@@ -169,11 +169,11 @@ export class SellerInventoryService {
                 reserved_after AS reserved_quantity,
                 unavailable_after AS unavailable_quantity,
                 available_after AS available_quantity,
-                idempotency_key, request_fingerprint, created_at
+                idempotency_key, request_fingerprint, created_at, note
          FROM fulfillment.seller_inventory_adjustments
          WHERE actor_id = $1::uuid AND idempotency_key = $2`,
         [actorId, idempotencyKey],
-      )) as LedgerRow[];
+      )) as (LedgerRow & { note?: string | null })[];
       if (existing[0]) {
         if (existing[0].request_fingerprint !== fingerprint) {
           throw new ConflictException({
@@ -181,7 +181,10 @@ export class SellerInventoryService {
             message: 'Idempotency key was already used with another payload',
           });
         }
-        return this.ledgerResponse(existing[0]);
+        return {
+          ...this.ledgerResponse(existing[0]),
+          ...(existing[0].note ? { note: existing[0].note } : {}),
+        };
       }
       const warehouseId = await this.defaultWarehouseId(manager);
       const updated = (await manager.query(
@@ -246,7 +249,7 @@ export class SellerInventoryService {
         availableQuantity: Number(stock.available_quantity),
         idempotencyKey,
         createdAt: ledger[0].created_at,
-        ...(dto.note !== undefined ? { note: dto.note } : {}),
+        ...(note ? { note } : {}),
       };
     });
   }
@@ -307,7 +310,7 @@ export class SellerInventoryService {
       }
 
       const warehouseId = await this.defaultWarehouseId(manager);
-      const updated = (await manager.query(
+      const raw = (await manager.query(
         `UPDATE fulfillment.inventory_items
          SET total_qty = total_qty - $3::int,
              version = version + 1,
@@ -321,7 +324,10 @@ export class SellerInventoryService {
                    unavailable_qty::int AS unavailable_quantity,
                    available_qty::int AS available_quantity`,
         [skuId, warehouseId, dto.quantity],
-      )) as Array<StockRow & { quantity_before: number }>;
+      )) as unknown;
+      const updated = (
+        Array.isArray(raw) && Array.isArray(raw[0]) ? raw[0] : (raw ?? [])
+      ) as Array<StockRow & { quantity_before: number }>;
 
       if (!updated[0]) {
         throw new ConflictException({
