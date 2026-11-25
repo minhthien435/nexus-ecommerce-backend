@@ -184,6 +184,16 @@ describe('OrderDisputeService', () => {
       findOne: vi.fn().mockResolvedValue(params.order ?? null),
     };
 
+    const mockReputationApi = {
+      penalizeDisputeRefund: vi.fn().mockResolvedValue({
+        shopId: 'shop-1',
+        oldScore: 85,
+        newScore: 75,
+        delta: -10,
+        alreadyPenalized: false,
+      }),
+    };
+
     service = new OrderDisputeService(
       mockDataSource as DataSource,
       mockDisputeRepo as Repository<OrderDisputeEntity>,
@@ -192,9 +202,11 @@ describe('OrderDisputeService', () => {
       mockIdentityLookup as IdentitySupportLookupApi,
       mockOrderStateMachine as OrderStateMachineService,
       mockOrderRefundService as OrderRefundService,
+      undefined,
+      mockReputationApi as any,
     );
 
-    return { disputeQueryBuilder, mockOrderRepo };
+    return { disputeQueryBuilder, mockOrderRepo, mockReputationApi };
   }
 
   describe('createDispute (Buyer)', () => {
@@ -542,6 +554,68 @@ describe('OrderDisputeService', () => {
         dto.staffDecisionNote.trim(),
         mockEntityManager,
       );
+    });
+
+    it('giải quyết thành công với quyết định ACCEPTED_REFUND: gọi penalizeDisputeRefund với đúng thông tin shop và lý do', async () => {
+      const { mockReputationApi } = setupService({
+        disputeToResolve: { ...mockPendingDispute },
+        order: { ...mockOrder, status: 'DELIVERED', sellerId },
+        payment: { ...mockPayment },
+      });
+
+      const dto: ResolveOrderDisputeDto = {
+        decision: 'ACCEPTED_REFUND',
+        staffDecisionNote: 'Chấp thuận hoàn tiền và trừ điểm uy tín người bán.',
+      };
+
+      const result = await service.resolveDispute(disputeId, staffActorId, dto);
+
+      expect(result).toBeDefined();
+      expect(result.status).toBe('ACCEPTED_REFUND');
+      expect(mockReputationApi.penalizeDisputeRefund).toHaveBeenCalledTimes(1);
+      expect(mockReputationApi.penalizeDisputeRefund).toHaveBeenCalledWith(
+        disputeId,
+        sellerId,
+        orderId,
+        dto.staffDecisionNote.trim(),
+        mockEntityManager,
+      );
+    });
+
+    it('giải quyết REJECTED_PAY_SELLER không gọi penalizeDisputeRefund', async () => {
+      const { mockReputationApi } = setupService({
+        disputeToResolve: { ...mockPendingDispute },
+        order: { ...mockOrder, status: 'DELIVERED' },
+      });
+
+      const dto: ResolveOrderDisputeDto = {
+        decision: 'REJECTED_PAY_SELLER',
+        staffDecisionNote: 'Bác bỏ khiếu nại.',
+      };
+
+      await service.resolveDispute(disputeId, staffActorId, dto);
+      expect(mockReputationApi.penalizeDisputeRefund).not.toHaveBeenCalled();
+    });
+
+    it('ném lỗi và làm transaction rollback nếu penalizeDisputeRefund thất bại', async () => {
+      const { mockReputationApi } = setupService({
+        disputeToResolve: { ...mockPendingDispute },
+        order: { ...mockOrder, status: 'DELIVERED' },
+        payment: { ...mockPayment },
+      });
+
+      mockReputationApi.penalizeDisputeRefund.mockRejectedValueOnce(
+        new Error('Database lock acquisition timeout during penalty'),
+      );
+
+      const dto: ResolveOrderDisputeDto = {
+        decision: 'ACCEPTED_REFUND',
+        staffDecisionNote: 'Chấp thuận hoàn tiền.',
+      };
+
+      await expect(
+        service.resolveDispute(disputeId, staffActorId, dto),
+      ).rejects.toThrow('Database lock acquisition timeout during penalty');
     });
 
     it('giải quyết thành công với quyết định REJECTED_PAY_SELLER: chuyển order sang COMPLETED và không tạo refund', async () => {

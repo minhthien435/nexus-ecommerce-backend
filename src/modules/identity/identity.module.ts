@@ -37,6 +37,7 @@ import { RecaptchaService } from './auth/services/recaptcha.service.js';
 import { GoogleIdTokenService } from './auth/services/google-id-token.service.js';
 import { EmailModule } from '../../common/email/email.module.js';
 import { ShopEntity } from './domain/shop.entity.js';
+import { ShopReputationRewardEntity } from './domain/shop-reputation-reward.entity.js';
 import { SellerShopController } from './controllers/seller-shop.controller.js';
 import { SellerShopService } from './services/seller-shop.service.js';
 import { AdminShopController } from './admin/admin-shop.controller.js';
@@ -65,6 +66,7 @@ import { NotificationModule } from '../notification/notification.module.js';
       AuditLogEntity,
       IdentityOutboxEntity,
       ShopEntity,
+      ShopReputationRewardEntity,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

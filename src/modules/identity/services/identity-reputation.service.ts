@@ -9,6 +9,7 @@ import {
   IdentityReputationApi,
   type ReputationPenaltyResult,
   type ReputationRewardResult,
+  type ShopReputationPenaltyResult,
   type ShopReputationRewardResult,
 } from '../identity-reputation.api.js';
 import {
@@ -534,5 +535,95 @@ export class IdentityReputationService extends IdentityReputationApi {
       };
     }
     return { score: 50, trustLevel: 'STANDARD' };
+  }
+
+  async penalizeDisputeRefund(
+    disputeId: string,
+    sellerId: string,
+    orderId: string,
+    reason?: string | null,
+    externalManager?: EntityManager,
+  ): Promise<ShopReputationPenaltyResult | null> {
+    const run = async (
+      manager: EntityManager,
+    ): Promise<ShopReputationPenaltyResult | null> => {
+      // 1. Pessimistic write lock on shop row by seller_id
+      const shops = (await manager.query(
+        `SELECT id, reputation_score FROM identity.shops
+        WHERE seller_id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [sellerId],
+      )) as Array<{ id: string; reputation_score: number | string }>;
+
+      const shop = shops[0];
+      if (!shop) return null;
+
+      const currentScore = Number(shop.reputation_score);
+
+      // 2. If score is already 0, do not deduct further and do not insert delta = 0
+      if (currentScore <= 0) {
+        return {
+          shopId: shop.id,
+          oldScore: 0,
+          newScore: 0,
+          delta: 0,
+          alreadyPenalized: false,
+        };
+      }
+
+      // 3. Compute actual delta (maximum -10 points, floor at 0)
+      const actualDelta = -Math.min(10, currentScore);
+      const newScore = currentScore + actualDelta;
+      const cleanReason =
+        reason && reason.trim()
+          ? reason.trim().slice(0, 255)
+          : 'Trừ điểm khiếu nại hoàn tiền (Accepted Refund)';
+
+      // 4. Insert penalty history into ledger with ON CONFLICT DO NOTHING
+      const claim = (await manager.query(
+        `INSERT INTO identity.shop_reputation_rewards
+        (shop_id, source_type, reference_id, order_id, old_score, new_score, delta, reason)
+        VALUES ($1, 'DISPUTE_PENALTY', $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (source_type, reference_id) DO NOTHING
+        RETURNING id`,
+        [
+          shop.id,
+          disputeId,
+          orderId,
+          currentScore,
+          newScore,
+          actualDelta,
+          cleanReason,
+        ],
+      )) as Array<{ id: string }>;
+
+      // If duplicate (already penalized for this dispute), do not update shop score again
+      if (!claim.length) {
+        return {
+          shopId: shop.id,
+          oldScore: currentScore,
+          newScore: currentScore,
+          delta: 0,
+          alreadyPenalized: true,
+        };
+      }
+
+      // 5. Update shop reputation score
+      await manager.query(
+        `UPDATE identity.shops SET reputation_score = $1, updated_at = clock_timestamp() WHERE id = $2`,
+        [newScore, shop.id],
+      );
+
+      return {
+        shopId: shop.id,
+        oldScore: currentScore,
+        newScore,
+        delta: actualDelta,
+        alreadyPenalized: false,
+      };
+    };
+
+    return externalManager
+      ? run(externalManager)
+      : this.dataSource.transaction(run);
   }
 }
