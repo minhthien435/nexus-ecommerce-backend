@@ -76,20 +76,27 @@ export class OrderCancelService {
         actorId,
         reason,
       });
-      await this.inventory.release(receipts, manager, {
-        actorId,
-        operation: 'ORDER_CANCELLATION',
-        operationId: idempotencyKey,
-      });
-      await this.stateMachine.finalizeExpiry(orderId, manager);
-      let refundRequestId: string | null = null;
-      let refundStatus: string | null = null;
+
       const hasSuccessfulPayment =
         previousStatus === 'PAID' ||
         (previousStatus === 'PROCESSING' &&
           (await manager.getRepository(PaymentEntity).count({
             where: { orderId, status: 'SUCCEEDED' },
           })) > 0);
+
+      if (hasSuccessfulPayment) {
+        await this.inventory.restoreStock(receipts, manager, {
+          orderId,
+          actorId,
+          note: `Order cancelled from ${previousStatus} - stock restored`,
+        });
+      } else {
+        await this.inventory.release(receipts, manager);
+      }
+
+      await this.stateMachine.finalizeExpiry(orderId, manager);
+      let refundRequestId: string | null = null;
+      let refundStatus: string | null = null;
       if (hasSuccessfulPayment) {
         try {
           const refund = await this.refunds.requestFullRefund(

@@ -142,6 +142,8 @@ function setup(
         warehouseId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       })),
     ),
+    deduct: vi.fn().mockResolvedValue(undefined),
+    restoreStock: vi.fn().mockResolvedValue(undefined),
   };
 
   const expiryOutbox = {
@@ -267,6 +269,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       id: 'order-1',
       sellerId: seller1,
       status: 'PROCESSING',
+      paymentMethod: 'COD',
       shippingAddressSnapshot: {
         addressScheme: 'ghn_v3',
         recipientName: 'Buyer',
@@ -311,6 +314,7 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
       id: 'order-1',
       sellerId: seller1,
       status: 'PROCESSING',
+      paymentMethod: 'COD',
       shippingAddressSnapshot: {
         addressScheme: 'ghn_v3',
         recipientName: 'Buyer',

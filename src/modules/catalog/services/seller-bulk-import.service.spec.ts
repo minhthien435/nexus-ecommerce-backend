@@ -68,6 +68,7 @@ function harness(
     [ProductSkuEntity, { createQueryBuilder: vi.fn(() => skuQb) }],
   ]);
   const manager = {
+    query: vi.fn().mockResolvedValue([]),
     exists: vi.fn().mockResolvedValue(false),
     create: vi.fn((entity, data) => ({ ...data, __entity: entity })),
     save: vi.fn(async (value) => {
