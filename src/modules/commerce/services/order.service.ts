@@ -1494,7 +1494,6 @@ export class OrderService {
       async (manager) => {
         const order = await manager.getRepository(OrderEntity).findOne({
           where: { id: orderId, sellerId: sellerId.toLowerCase() },
-          relations: { checkoutSession: true },
           lock: { mode: 'pessimistic_write' },
         });
         if (!order) {
