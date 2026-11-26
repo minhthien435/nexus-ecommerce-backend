@@ -293,12 +293,12 @@ describe('OrderService - Checkout Flow (NEX-301.1)', () => {
     await expect(
       s.service.shipSellerOrderWithGhn(seller1, 'order-1'),
     ).rejects.toThrow('GHN unavailable');
-    expect(s.orderRepo.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'order-1', sellerId: seller1 },
-        lock: { mode: 'pessimistic_write' },
-      }),
-    );
+    // PostgreSQL forbids FOR UPDATE on the nullable side of an outer join, so
+    // relations must not be combined with pessimistic_write on this lock query.
+    expect(s.orderRepo.findOne).toHaveBeenCalledWith({
+      where: { id: 'order-1', sellerId: seller1 },
+      lock: { mode: 'pessimistic_write' },
+    });
     expect(ghn.createNewAddressOrder).toHaveBeenCalledWith(
       expect.objectContaining({ clientOrderCode: 'order-1', weightGrams: 500 }),
     );
