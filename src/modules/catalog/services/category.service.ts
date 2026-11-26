@@ -51,6 +51,12 @@ export class CategoryService {
     this.treeCache = null;
   }
 
+  private normalizeNameVi(value?: string | null): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
   /**
    * Lấy toàn bộ cây danh mục đa cấp (tối đa 3 cấp) lồng nhau
    */
@@ -86,6 +92,7 @@ export class CategoryService {
       nodeMap.set(cat.id, {
         id: cat.id,
         name: cat.name,
+        nameVi: cat.nameVi ?? null,
         slug: cat.slug,
         level: cat.level,
         sortOrder: cat.sortOrder,
@@ -188,6 +195,7 @@ export class CategoryService {
 
     const category = this.categoryRepo.create({
       name: dto.name.trim(),
+      nameVi: this.normalizeNameVi(dto.nameVi),
       slug: uniqueSlug,
       parentId: dto.parentId ?? null,
       level,
@@ -251,6 +259,10 @@ export class CategoryService {
 
     if (dto.name !== undefined) {
       category.name = dto.name.trim();
+    }
+
+    if (dto.nameVi !== undefined) {
+      category.nameVi = this.normalizeNameVi(dto.nameVi);
     }
 
     if (dto.slug !== undefined) {

@@ -21,6 +21,9 @@ export class CategoryEntity {
   @Column({ type: 'varchar' })
   name: string;
 
+  @Column({ name: 'name_vi', type: 'varchar', length: 255, nullable: true })
+  nameVi: string | null;
+
   @Column({ type: 'varchar' })
   slug: string;
 
