@@ -49,7 +49,8 @@ describe('CategoryService', () => {
       const mockCategories: Partial<CategoryEntity>[] = [
         {
           id: 'cat-1',
-          name: 'Thời trang',
+          name: 'Fashion',
+          nameVi: 'Thời trang',
           slug: 'thoi-trang',
           level: 1,
           sortOrder: 1,
@@ -59,6 +60,7 @@ describe('CategoryService', () => {
         {
           id: 'cat-2',
           name: 'Áo nam',
+          nameVi: null,
           slug: 'ao-nam',
           level: 2,
           sortOrder: 1,
@@ -76,7 +78,8 @@ describe('CategoryService', () => {
         },
         {
           id: 'cat-4',
-          name: 'Điện tử',
+          name: 'Electronics',
+          nameVi: 'Điện tử',
           slug: 'dien-tu',
           level: 1,
           sortOrder: 2,
@@ -98,11 +101,15 @@ describe('CategoryService', () => {
 
       expect(tree).toHaveLength(2);
       expect(tree[0].id).toBe('cat-1');
+      expect(tree[0].nameVi).toBe('Thời trang');
       expect(tree[0].children).toHaveLength(1);
       expect(tree[0].children[0].id).toBe('cat-2');
+      expect(tree[0].children[0].nameVi).toBeNull();
       expect(tree[0].children[0].children).toHaveLength(1);
       expect(tree[0].children[0].children[0].id).toBe('cat-3');
+      expect(tree[0].children[0].children[0].nameVi).toBeNull();
       expect(tree[1].id).toBe('cat-4');
+      expect(tree[1].nameVi).toBe('Điện tử');
 
       // Second call should return cached data without querying queryBuilder again
       const cachedTree = await service.getCategoryTree();
@@ -116,13 +123,26 @@ describe('CategoryService', () => {
       categoryRepo.findOne.mockResolvedValue(null);
 
       const result = await service.createCategory({
-        name: 'Đồng hồ',
+        name: 'Watches',
+        nameVi: '  Đồng hồ  ',
       });
 
       expect(result.level).toBe(1);
       expect(result.parentId).toBeNull();
-      expect(result.slug).toBe('dong-ho');
+      expect(result.slug).toBe('watches');
+      expect(result.nameVi).toBe('Đồng hồ');
       expect(categoryRepo.save).toHaveBeenCalled();
+    });
+
+    it('normalizes blank nameVi to null on create', async () => {
+      categoryRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.createCategory({
+        name: 'Watches',
+        nameVi: '   ',
+      });
+
+      expect(result.nameVi).toBeNull();
     });
 
     it('creates child category with level = parent.level + 1', async () => {
@@ -167,6 +187,36 @@ describe('CategoryService', () => {
   });
 
   describe('updateCategory', () => {
+    it('updates and clears nameVi properly', async () => {
+      categoryRepo.findOne.mockResolvedValueOnce({
+        id: 'cat-1',
+        name: 'Electronics',
+        nameVi: null,
+        slug: 'electronics',
+        level: 1,
+        parentId: null,
+      } as CategoryEntity);
+
+      const updated = await service.updateCategory('cat-1', {
+        nameVi: '  Điện tử  ',
+      });
+      expect(updated.nameVi).toBe('Điện tử');
+
+      categoryRepo.findOne.mockResolvedValueOnce({
+        id: 'cat-1',
+        name: 'Electronics',
+        nameVi: 'Điện tử',
+        slug: 'electronics',
+        level: 1,
+        parentId: null,
+      } as CategoryEntity);
+
+      const cleared = await service.updateCategory('cat-1', {
+        nameVi: '   ',
+      });
+      expect(cleared.nameVi).toBeNull();
+    });
+
     it('rejects if setting parentId to itself', async () => {
       categoryRepo.findOne.mockResolvedValue({
         id: 'cat-1',

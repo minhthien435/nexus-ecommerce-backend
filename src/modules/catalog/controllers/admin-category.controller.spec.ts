@@ -23,6 +23,7 @@ describe('AdminCategoryController', () => {
       {
         id: 'cat-1',
         name: 'Electronics',
+        nameVi: 'Điện tử',
         slug: 'electronics',
         level: 1,
         sortOrder: 0,
@@ -43,6 +44,7 @@ describe('AdminCategoryController', () => {
   it('delegates create to CategoryService with dto', async () => {
     const dto: CreateCategoryDto = {
       name: 'Smartphones',
+      nameVi: 'Điện thoại thông minh',
       parentId: 'cat-1',
       sortOrder: 1,
       isActive: true,

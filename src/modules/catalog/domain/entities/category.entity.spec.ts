@@ -33,6 +33,10 @@ describe('CategoryEntity', () => {
     const nameCol = metadata.findColumnWithPropertyName('name');
     expect(nameCol?.databaseName).toBe('name');
 
+    const nameViCol = metadata.findColumnWithPropertyName('nameVi');
+    expect(nameViCol?.databaseName).toBe('name_vi');
+    expect(nameViCol?.isNullable).toBe(true);
+
     const slugCol = metadata.findColumnWithPropertyName('slug');
     expect(slugCol?.databaseName).toBe('slug');
 
