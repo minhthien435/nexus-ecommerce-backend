@@ -18,6 +18,7 @@ describe('createBullMqOptions', () => {
         password: 'secret',
         db: 2,
         connectTimeout: 1250,
+        family: 0,
         maxRetriesPerRequest: null,
       },
     });
@@ -37,6 +38,7 @@ describe('createBullMqOptions', () => {
         password: undefined,
         db: 0,
         connectTimeout: 500,
+        family: 0,
         maxRetriesPerRequest: null,
       },
     });

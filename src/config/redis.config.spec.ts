@@ -18,6 +18,7 @@ describe('redis.config', () => {
       password: 'pw',
       db: 3,
       connectTimeout: 750,
+      family: 0,
     });
   });
 
@@ -35,6 +36,24 @@ describe('redis.config', () => {
       password: undefined,
       db: 0,
       connectTimeout: 500,
+      family: 0,
+    });
+  });
+
+  it('parses REDIS_URL when configured for managed Redis providers', () => {
+    const config = new ConfigService({
+      REDIS_URL: 'redis://default:s3cr%40t@redis.railway.internal:6379/1',
+      REDIS_CONNECT_TIMEOUT_MS: '5000',
+    });
+
+    expect(readRedisBaseOptions(config)).toEqual({
+      host: 'redis.railway.internal',
+      port: 6379,
+      username: 'default',
+      password: 's3cr@t',
+      db: 1,
+      connectTimeout: 5000,
+      family: 0,
     });
   });
 });
