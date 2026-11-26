@@ -18,7 +18,7 @@ ENV HUSKY=0
 ENV PORT=3000
 
 COPY package*.json ./
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+RUN npm pkg delete scripts.prepare && npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
