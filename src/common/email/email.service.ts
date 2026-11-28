@@ -6,8 +6,13 @@ import nodemailer, { type Transporter } from 'nodemailer';
 export class EmailService {
   private readonly transporter: Transporter;
   private readonly mailFrom: string;
+  private readonly disabled: boolean;
 
   constructor(private readonly config: ConfigService) {
+    this.disabled =
+      this.config.get<string>('EMAIL_DISABLED')?.trim().toLowerCase() ===
+      'true';
+
     const port = Number(this.config.getOrThrow<string>('SMTP_PORT'));
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error('SMTP_PORT must be a valid TCP port');
@@ -27,11 +32,23 @@ export class EmailService {
       host: this.config.getOrThrow<string>('SMTP_HOST'),
       port,
       secure: secureValue === 'true',
+      connectionTimeout: 3_000,
+      greetingTimeout: 3_000,
+      socketTimeout: 5_000,
       auth: {
         user,
         pass: this.config.getOrThrow<string>('SMTP_PASSWORD'),
       },
     });
+  }
+
+  private async dispatchMail(
+    options: Parameters<Transporter['sendMail']>[0],
+  ): Promise<void> {
+    if (this.disabled) {
+      return;
+    }
+    await this.transporter.sendMail(options);
   }
 
   async sendPasswordResetOtp(
@@ -40,7 +57,7 @@ export class EmailService {
     expiresInMinutes: number,
   ): Promise<void> {
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: recipient,
         subject: 'Mã xác minh đặt lại mật khẩu Nexus',
@@ -77,7 +94,7 @@ export class EmailService {
     const appealGuidance =
       'Nếu bạn cho rằng quyết định này chưa chính xác, vui lòng liên hệ bộ phận hỗ trợ Nexus để gửi yêu cầu khiếu nại.';
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: input.recipient,
         subject: `Trạng thái cửa hàng ${input.shopName} đã thay đổi`,
@@ -120,7 +137,7 @@ export class EmailService {
       ? `****${input.accountLastFour}`
       : 'Chưa cung cấp';
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: input.recipient,
         subject: `Hoàn tiền ${input.refundCode} đã được chuyển`,
@@ -158,7 +175,7 @@ export class EmailService {
     html?: string;
   }): Promise<void> {
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: input.recipient,
         subject: input.subject,
@@ -189,7 +206,7 @@ export class EmailService {
     const formattedPrice = `${Number(input.finalPrice).toLocaleString('vi-VN')} ${input.currency}`;
     const name = input.winnerName ? `Chào ${input.winnerName},` : 'Xin chào,';
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: input.recipient,
         subject: `[Nexus] Chúc mừng! Bạn đã trúng đấu giá phiên ${input.auctionCode}`,
@@ -233,7 +250,7 @@ export class EmailService {
   }): Promise<void> {
     const name = input.winnerName ? `Chào ${input.winnerName},` : 'Xin chào,';
     try {
-      await this.transporter.sendMail({
+      await this.dispatchMail({
         from: this.mailFrom,
         to: input.recipient,
         subject: `[Nexus] Đơn hàng đấu giá ${input.orderNumber} đã bị hủy do quá hạn thanh toán`,

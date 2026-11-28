@@ -42,6 +42,9 @@ describe('EmailService', () => {
       host: 'smtp.gmail.com',
       port: 465,
       secure: true,
+      connectionTimeout: 3_000,
+      greetingTimeout: 3_000,
+      socketTimeout: 5_000,
       auth: {
         user: 'sender@example.com',
         pass: 'app-password',
@@ -216,6 +219,33 @@ describe('EmailService', () => {
         html: expect.stringMatching(/30 điểm uy tín/),
       }),
     );
+  });
+
+  it('skips SMTP delivery immediately when EMAIL_DISABLED is true', async () => {
+    const service = new EmailService(
+      new ConfigService({
+        EMAIL_DISABLED: 'true',
+        SMTP_HOST: 'smtp.gmail.com',
+        SMTP_PORT: '465',
+        SMTP_SECURE: 'true',
+        SMTP_USER: 'sender@example.com',
+        SMTP_PASSWORD: 'app-password',
+        MAIL_FROM: 'Nexus <sender@example.com>',
+      }),
+    );
+
+    await service.sendRefundCompleted({
+      recipient: 'buyer@example.com',
+      refundCode: 'REF-ORD-1',
+      amount: '150000.00',
+      currency: 'VND',
+      buyerBankName: 'Vietcombank',
+      accountLastFour: '6789',
+      bankReferenceCode: 'BANK-REF-1',
+      processedAt: new Date('2026-11-12T02:00:00.000Z'),
+    });
+
+    expect(mailMocks.sendMail).not.toHaveBeenCalled();
   });
 
   it.each([
